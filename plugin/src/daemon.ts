@@ -1,0 +1,123 @@
+// T16f (ADR-0012 decisions 2-3): the minimal OpenRig daemon client for the
+// ASYNC WRITER PATH only - the recall hook never calls it (decision 4). The
+// URL arrives from the caller (Config.daemonUrl); no URL means no lookup.
+// Never throws: every failure becomes a kind, and callers may log only the
+// class. One 1 s budget per call (decision 2's "within 1 s").
+//
+// Real shapes (read-only probes against the installed 0.7.2, 2026-11-01):
+// - GET {url}/api/queue/outbox/list?senderSession=<s>&limit=<n> answers a
+//   PLAIN ARRAY, newest first. Keys used: outboxId, senderSession,
+//   destinationSession, body (the FULL envelope typed into the pane),
+//   tsDispatched (camelCase ISO Z - the ADR text writes ts_dispatched; both
+//   spellings are accepted by matchesOutboxEntry). Queue nudges ride as
+//   outboxId "wake-intent-<qitemId>" with senderSession daemon@kernel.
+// - GET {url}/api/queue/<qitemId> answers the same document
+//   `rig queue show` prints (sourceSession, tags, ...).
+
+/** ADR-0012 decision 2: the one lookup budget. */
+export const DAEMON_TIMEOUT_MS = 1000;
+
+export interface DaemonFailure {
+  ok: false;
+  /** no-url: never issued a request; timeout: aborted at the budget;
+   * network: fetch rejected; http: non-2xx; parse: body not the shape. */
+  kind: "no-url" | "timeout" | "network" | "http" | "parse";
+  status?: number;
+}
+
+export interface OutboxEntry {
+  outboxId: string;
+  senderSession?: string;
+  destinationSession?: string;
+  /** the full typed body, envelope included */
+  body?: string;
+  tsDispatched?: string;
+  /** the ADR's snake_case spelling, tolerated (live 0.7.2 is camelCase) */
+  ts_dispatched?: string;
+}
+
+async function getJson(url: string): Promise<{ ok: true; json: unknown } | DaemonFailure> {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), DAEMON_TIMEOUT_MS);
+  try {
+    const res = await fetch(url, { signal: ctrl.signal });
+    if (!res.ok) return { ok: false, kind: "http", status: res.status };
+    try {
+      return { ok: true, json: await res.json() };
+    } catch {
+      return { ok: false, kind: "parse" };
+    }
+  } catch {
+    return { ok: false, kind: ctrl.signal.aborted ? "timeout" : "network" };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/** The sender's newest `limit` outbox entries; a PLAIN ARRAY on the wire. */
+export async function fetchOutbox(
+  daemonUrl: string | undefined,
+  senderSession: string,
+  limit = 20,
+): Promise<{ ok: true; entries: OutboxEntry[] } | DaemonFailure> {
+  if (daemonUrl === undefined || daemonUrl === "") return { ok: false, kind: "no-url" };
+  const r = await getJson(
+    `${daemonUrl}/api/queue/outbox/list?senderSession=${encodeURIComponent(senderSession)}&limit=${limit}`,
+  );
+  if (!r.ok) return r;
+  if (!Array.isArray(r.json)) return { ok: false, kind: "parse" };
+  const entries = r.json.filter(
+    (e): e is OutboxEntry =>
+      typeof e === "object" && e !== null && typeof (e as OutboxEntry).outboxId === "string",
+  );
+  return { ok: true, entries };
+}
+
+/** One queue item's sourceSession + string tags (decision 3). */
+export async function fetchQueueItem(
+  daemonUrl: string | undefined,
+  qitemId: string,
+): Promise<{ ok: true; sourceSession?: string; tags: string[] } | DaemonFailure> {
+  if (daemonUrl === undefined || daemonUrl === "") return { ok: false, kind: "no-url" };
+  const r = await getJson(`${daemonUrl}/api/queue/${encodeURIComponent(qitemId)}`);
+  if (!r.ok) return r;
+  if (typeof r.json !== "object" || r.json === null) return { ok: false, kind: "parse" };
+  const doc = r.json as { sourceSession?: unknown; tags?: unknown };
+  const tags = Array.isArray(doc.tags) ? doc.tags.filter((t): t is string => typeof t === "string") : [];
+  return {
+    ok: true,
+    ...(typeof doc.sourceSession === "string" && doc.sourceSession !== ""
+      ? { sourceSession: doc.sourceSession }
+      : {}),
+    tags,
+  };
+}
+
+/** Trailing whitespace (spaces, tabs, CR/LF): the outbox stores the typed
+ * body, hook stdin may carry a trailing newline. Leading side stays exact. */
+function trimTrailing(s: string): string {
+  return s.replace(/\s+$/, "");
+}
+
+/**
+ * ADR-0012 decision 2's match, pure: destinationSession is this seat's
+ * session name; the body equals the raw prompt after trimming trailing
+ * whitespace on BOTH; tsDispatched (or the snake_case spelling) is a valid
+ * stamp dispatched within the last 10 minutes. A future stamp never matches
+ * (no clock-skew grace: shadow mode prefers an honest unverified).
+ */
+export function matchesOutboxEntry(
+  entry: OutboxEntry,
+  sessionName: string,
+  prompt: string,
+  nowIso: string,
+): boolean {
+  if (entry.destinationSession !== sessionName) return false;
+  if (typeof entry.body !== "string" || trimTrailing(entry.body) !== trimTrailing(prompt)) return false;
+  const ts = entry.tsDispatched ?? entry.ts_dispatched;
+  if (typeof ts !== "string") return false;
+  const at = Date.parse(ts);
+  const now = Date.parse(nowIso);
+  if (!Number.isFinite(at) || !Number.isFinite(now)) return false;
+  return at <= now && now - at <= 10 * 60_000;
+}

@@ -1,0 +1,7 @@
+From: operator-agent@kernel
+To: dev-build@openrig-honcho
+Sent: 10-28 04:15Z
+---
+Your rig needs a port released, coordinating now.
+---
+↩ Reply: rig send operator-agent@kernel "..."

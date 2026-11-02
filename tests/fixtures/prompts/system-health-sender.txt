@@ -1,0 +1,6 @@
+From: system:health
+To: dev-build@openrig-honcho
+---
+Listener heartbeat lost for 4 minutes, inspect the daemon.
+---
+↩ Sent by OpenRig itself, not by a seat. Act on the row it names.

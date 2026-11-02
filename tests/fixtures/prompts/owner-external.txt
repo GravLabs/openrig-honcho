@@ -1,0 +1,6 @@
+From: owner@external
+To: dev-build@openrig-honcho
+---
+I am the owner messaging through the queue surface from outside the fleet.
+---
+↩ Reply if needed: rig queue create --destination owner@external --summary "<one line>" --body "..." --verify

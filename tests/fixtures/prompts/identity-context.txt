@@ -1,0 +1,7 @@
+OpenRig-generated identity context (not a project task):
+dev-build@openrig-honcho
+OpenRig session identity:
+- rig: openrig-honcho
+- pod: dev
+- member: build
+End of generated identity context.

@@ -1,0 +1,5 @@
+Look at this text I pasted in:
+<pasted_content id="27b1">
+hello from the clipboard
+</pasted_content id="27b1">
+that is the whole message.

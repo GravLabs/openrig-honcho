@@ -1,0 +1,6 @@
+<pasted_content id="a1">
+first paste
+</pasted_content id="a1">
+<pasted_content id="b2">
+second paste
+</pasted_content id="b2">

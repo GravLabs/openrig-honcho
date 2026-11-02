@@ -1,0 +1,9 @@
+<system-reminder>
+A harness reminder was injected before the real prompt text.
+</system-reminder>
+From: design-architect@openrig-honcho
+To: dev-build@openrig-honcho
+---
+Reminder stripped, envelope still attributed to the architect.
+---
+↩ Reply: rig send design-architect@openrig-honcho "..."

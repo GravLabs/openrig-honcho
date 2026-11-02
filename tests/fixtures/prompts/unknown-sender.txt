@@ -1,0 +1,6 @@
+From: <unknown sender>
+To: dev-build@openrig-honcho
+---
+A message arrived whose transport identity could not be resolved.
+---
+↩ Reply: rig send <unknown sender> "..."

@@ -1,0 +1,17 @@
+From: design-architect@openrig-honcho
+To: dev-build@openrig-honcho
+---
+Notes on your draft:
+
+The parser must use the LAST separator as the close. For example a body
+can contain a quoted envelope like this:
+
+---
+From: fake@nowhere.example
+To: nobody@example
+---
+I am quoted body text, not a real header.
+---
+Keep parsing it that way.
+---
+↩ Reply: rig send design-architect@openrig-honcho "..."

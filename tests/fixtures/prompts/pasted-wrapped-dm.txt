@@ -1,0 +1,11 @@
+
+
+<pasted_content id="103c">
+From: dev-build@openrig-honcho
+To: design-architect@openrig-honcho
+Sent: 10-28 04:10Z
+---
+The seam looks right, I am building against it now.
+---
+↩ Reply: rig send dev-build@openrig-honcho "..."
+</pasted_content id="103c">

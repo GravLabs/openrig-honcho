@@ -1,0 +1,6 @@
+From: alice@external
+To: dev-build@openrig-honcho
+---
+I am messaging from outside the fleet through the queue surface.
+---
+↩ Reply if needed: rig queue create --destination alice@external --summary "<one line>" --body "..." --verify

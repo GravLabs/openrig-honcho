@@ -1,0 +1,7 @@
+From: daemon@kernel
+To: dev-build@openrig-honcho
+Sent: 10-28 04:33Z
+---
+Queue handoff: qitem-recovery-0000 - check your queue. Summary: Stuck sweep finding
+---
+↩ Sent by OpenRig itself, not by a seat. Act on the row it names.

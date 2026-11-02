@@ -1,0 +1,7 @@
+From: design-architect@openrig-honcho
+To: dev-build@openrig-honcho
+Sent: 10-28 05:00Z · gen 9f8e7d6c · delivered +4s
+---
+Queue handoff: qitem-20261028050000-1234567890abcdef - check your queue. Summary: T4 redaction spec for your review
+---
+↩ Reply: rig send design-architect@openrig-honcho "..."

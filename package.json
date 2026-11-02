@@ -1,0 +1,16 @@
+{
+  "name": "openrig-honcho",
+  "version": "0.2.2",
+  "description": "Shared per-rig memory for OpenRig seats on a self-hosted Honcho server (Claude Code plugin)",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/GravLabs/openrig-honcho"
+  },
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "bun test",
+    "gate": "bun run scripts/gate.ts"
+  }
+}

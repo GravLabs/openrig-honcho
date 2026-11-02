@@ -1,0 +1,7 @@
+From: dev-review@openrig-honcho
+To: dev-build@openrig-honcho
+Sent: 10-28 04:12Z · gen 1a2b3c4d · delivered +12s
+---
+Attacked your module from six directions, two bugs found.
+---
+↩ Reply: rig send dev-review@openrig-honcho "..."

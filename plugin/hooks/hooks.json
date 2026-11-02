@@ -1,0 +1,50 @@
+{
+  "description": "openrig-honcho memory hooks (ADR-0001)",
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "startup|resume|clear|compact",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bun run \"${CLAUDE_PLUGIN_ROOT}/bin/session-start.ts\"",
+            "timeout": 8
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bun run \"${CLAUDE_PLUGIN_ROOT}/bin/recall.ts\"",
+            "timeout": 5
+          }
+        ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bun run \"${CLAUDE_PLUGIN_ROOT}/bin/user-prompt.ts\"",
+            "timeout": 30,
+            "async": true
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bun run \"${CLAUDE_PLUGIN_ROOT}/bin/stop.ts\"",
+            "timeout": 30,
+            "async": true
+          }
+        ]
+      }
+    ]
+  }
+}

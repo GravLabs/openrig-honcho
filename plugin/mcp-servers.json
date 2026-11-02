@@ -1,0 +1,6 @@
+{
+  "rig_memory": {
+    "command": "bun",
+    "args": ["run", "${CLAUDE_PLUGIN_ROOT}/bin/mcp.ts"]
+  }
+}

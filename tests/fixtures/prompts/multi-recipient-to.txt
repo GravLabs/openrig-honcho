@@ -1,0 +1,6 @@
+From: design-architect@openrig-honcho
+To: dev-build@openrig-honcho, dev-review@openrig-honcho
+---
+Both of you take a look at this interface.
+---
+↩ Reply: rig send design-architect@openrig-honcho "..."

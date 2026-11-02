@@ -1,0 +1,9 @@
+.claude/settings.local.json
+node_modules/
+reference/
+.env
+*.log
+.openrig/
+gate-report.json
+gate-deletes.jsonl
+.serena/

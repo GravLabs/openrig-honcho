@@ -1,0 +1,6 @@
+From: design-architect@openrig-honcho
+To: broadcast to openrig-honcho (3 seats)
+---
+Heads-up: the env contract changed, re-read the ADR.
+---
+↩ Reply: rig send design-architect@openrig-honcho "..."

@@ -1,0 +1,3 @@
+<task-notification id="bg-1">
+Background agent finished its work.
+</task-notification>

@@ -1,0 +1,4 @@
+{
+ "prompt": "\n\n<pasted_content id=\"1037\">\nFrom: dev-build@openrig-honcho\nTo: design-architect@openrig-honcho\nSent: 10-28 14:45Z\n---\nprobe message, reply with the single word ok\n---\n\u21a9 Reply: rig send dev-build@openrig-honcho \"...\"\n</pasted_content id=\"1037\">\n",
+ "hook_event_name": "UserPromptSubmit"
+}
