@@ -1,6 +1,6 @@
 # Changelog
 
-## v0.2.2 (2026-11-01)
+## v0.2.2 (2026-11-02)
 
 - Recall is chosen by relevance. When another seat of the rig writes, recall
   searches the rig's memory with that message's content (distance gate 0.45,

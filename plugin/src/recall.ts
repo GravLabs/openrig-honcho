@@ -72,8 +72,8 @@ export interface RecallPair {
  * The two conclusion pairs to read (ADR-0009 decision 2): this seat about
  * the sender, and the mission scope about the sender. The server names scope
  * peers scope.<scope> (reference/honcho/src/utils/scopes.py SCOPE_PEER_PREFIX
- * = "scope."), and scopeFor maps "general" -> "general", m26 ->
- * mission-m26. (ADR-0011 decision 1's third pair - this seat about itself -
+ * = "scope."), and scopeFor maps "general" -> "general", m7 ->
+ * mission-m7. (ADR-0011 decision 1's third pair - this seat about itself -
  * is fetched by the bin, T16b, and arrives as aboutSelf.)
  */
 export function recallPairs(self: string, sender: string, mission: string): RecallPair[] {
@@ -166,7 +166,7 @@ function shortHash(norm: string): string {
  * an optional "tool|command|..." noun,
  * then ONLY purpose clauses - "in shell mode" or "to <what for>" runs, any
  * number; a comma ends the shape, and a period does too UNLESS it sits
- * inside a number ("0.7.1" is one token, ". Next sentence" is not). KEEP
+ * inside a number ("2.4.1" is one token, ". Next sentence" is not). KEEP
  * unless nothing else applies:
  * because, so that, found, showed, returned, failed, succeeded, which
  * ANYWHERE mean the item reports a result or a reason (the ruling's list);

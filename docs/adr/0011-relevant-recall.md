@@ -14,10 +14,10 @@ to 11-01 15:32Z):
   block of 362 to 1328 characters.
 - No seat referred to or acted on any of the 16 blocks. Most items were what
   the sender had said "just now" or "16 min ago", often in the very message
-  being read. Some were tool trivia ("used the ctx_execute tool to check CI").
+  being read. Some were tool trivia ("used the run_tool tool to check CI").
   Three blocks were about `operator-agent_kernel`, a seat of another rig, and
   were false ("is the leader of operator-agent_kernel's rig"); one repeated a
-  line. The rare useful item (older state, "frozen at 4d158ff, 10 h ago") was
+  line. The rare useful item (older state, "frozen at a1b2c3d, 10 h ago") was
   buried among these.
 - `ask` was called 0 times, before and after. It takes 30-50 s.
 
@@ -36,7 +36,7 @@ by.") return nothing until 0.5, and an off-topic query returns nothing up to
 0.6. `claude-honcho`'s default of 0.6 lets everything through on our embedding
 model (Qwen3-Embedding-0.6B).
 
-The probe also found an expired Azure device code stored verbatim in a
+The probe also found an expired device sign-in code stored verbatim in a
 conclusion: our redaction has no device-code shape.
 
 ## Decisions

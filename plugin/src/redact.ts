@@ -157,7 +157,7 @@ export function redact(text: string): Redacted {
       return "[REDACTED:opaque]";
     });
 
-    // 10. device-code (T16c, ADR-0011 decision 6): the Azure-style sign-in
+    // 10. device-code (T16c, ADR-0011 decision 6): the device-login sign-in
     // code shape next to device-login words. Masks the CODE only - the
     // words around it stay (same keep-the-sentence style as the others).
     // Shape: exactly 8-9 upper-case alphanumerics (the \b on both sides

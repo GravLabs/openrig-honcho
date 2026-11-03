@@ -1,5 +1,5 @@
 // T8e: `bun run gate` - the v0.1 release gate (ADR-0006 "The gate", and what
-// runs before every Gitea push per ADR-0007). Nine steps, in order; the gate
+// runs before every push per ADR-0007). Nine steps, in order; the gate
 // stops at NOTHING (every step runs even after a failure) and exits 1 if any
 // step failed. Each step prints exactly one line:
 //   GATE <step> PASS|FAIL <short detail>

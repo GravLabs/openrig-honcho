@@ -257,12 +257,12 @@ describe("R-E trivia filter: noise drops, facts never drop (keep-attack)", () =>
       "Qwen returned 502 twice on long prompts", // returned; no used/ran/called verb
       "design-architect used the ctx tool and it leaked", // and
       // OBSERVATION (not a ruling violation): the ruled shape puts the
-      // version INSIDE the purpose clause ("... to check CI on 0.7.1"); a
-      // version BETWEEN tool and purpose ("ran rig 0.7.1 to probe") sits
+      // version INSIDE the purpose clause ("... to check CI on 2.4.1"); a
+      // version BETWEEN tool and purpose ("ran rig 2.4.1 to probe") sits
       // outside it and stays. The code comment says the filter is a bounded
       // heuristic by design, so this is reported to the architect as a
       // possible future extension, not as a finding.
-      "On Nov 1, review ran rig 0.7.1 to probe.",
+      "On Nov 1, review ran rig 2.4.1 to probe.",
     ];
     const r = renderNew({ aboutSender: keep.map((c, i) => item(`k${i}`, c)) });
     expect(r.counts.dropped_trivia).toBe(0);
@@ -270,10 +270,10 @@ describe("R-E trivia filter: noise drops, facts never drop (keep-attack)", () =>
   });
   test("pure tool-use noise drops, including dotted versions", () => {
     const drop = [
-      "On 2026-10-31 16:07:32, dev-architect used the ctx_execute tool in shell mode to check CI runs after the 0.7.1 mirror push.",
-      "On 2026-10-31 16:12:27, dev-architect used the ctx_execute tool in shell mode to check CI status on 0.7.1.",
-      "On 2026-10-31 16:12:27, dev-architect used the ctx_execute tool in shell mode to check dev-build current activity on pilot.",
-      "On 2026-10-31 16:07:32, dev-architect used the ctx_execute tool in shell mode to confirm that a CI run had been triggered on the 0.7.1 mirror commit.",
+      "On 2026-10-31 16:07:32, dev-architect used the run_tool tool in shell mode to check CI runs after the 2.4.1 mirror push.",
+      "On 2026-10-31 16:12:27, dev-architect used the run_tool tool in shell mode to check CI status on 2.4.1.",
+      "On 2026-10-31 16:12:27, dev-architect used the run_tool tool in shell mode to check dev-build current activity on pilot.",
+      "On 2026-10-31 16:07:32, dev-architect used the run_tool tool in shell mode to confirm that a CI run had been triggered on the 2.4.1 mirror commit.",
       "used rg in shell mode",
       "build called the rig-queue tool to file the item",
     ];

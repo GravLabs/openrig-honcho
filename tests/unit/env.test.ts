@@ -174,8 +174,8 @@ describe("HONCHO_PROFILE_WORKSPACE", () => {
   });
 
   test("when set, is carried through", () => {
-    expect(full({ HONCHO_PROFILE_WORKSPACE: "owner-profile" }).profileWorkspace).toBe(
-      "owner-profile",
+    expect(full({ HONCHO_PROFILE_WORKSPACE: "my-profile" }).profileWorkspace).toBe(
+      "my-profile",
     );
   });
 

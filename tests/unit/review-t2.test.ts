@@ -236,9 +236,9 @@ describe("T1-fix item 4: no workspace create/delete in the plugin client", () =>
 describe("T2 attack 5: assertScratchName reject list", () => {
   for (const bad of [
     "openrig",
-    "orca",
+    "other-rig",
     "pilot",
-    "owner-profile",
+    "my-profile",
     "honcho-bridge-scratch",
     "xhoncho-bridge-scratch-1",
     "HONCHO-BRIDGE-SCRATCH-1",

@@ -37,7 +37,7 @@ describe("R1 recallSender gating (pure)", () => {
       { observer: "build", observed: "architect" },
       { observer: "scope.general", observed: "architect" },
     ]);
-    expect(recallPairs("build", "architect", "m26")[1].observer).toBe("scope.mission-m26");
+    expect(recallPairs("build", "architect", "m7")[1].observer).toBe("scope.mission-m7");
   });
 });
 

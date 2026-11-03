@@ -12,14 +12,14 @@ The pilot, read-only analysis on 2026-10-30, about 29 h after install
 - **Writing works.** 106 messages were written with 0 failed, spooled or dead,
   and the server holds exactly what the seats' counters say. Hooks ran at
   least once per real prompt. The deriver made 2,429 conclusions with no exact
-  duplicates. They are concrete ("release-0.7.1 candidate was at commit
-  4d158ff", "M26 Phase 2 go is still queued for the owner").
+  duplicates. They are concrete ("the release candidate was frozen at commit
+  a1b2c3d", "the go-ahead for phase 2 is still queued for the owner").
 - **Reading back almost never happens.** Memory reached a seat twice, both by
   the session-start block after a compaction (1.7 KB and 5.2 KB). No seat ever
   called `ask`. The skill makes `ask` optional and slow (30-50 s), and seats
   don't pick it.
 - **Missions stay `general`.** None of the 7 queue items sent to pilot seats
-  since install had a `mission:` tag (they use tags like `m26`), so E11 never
+  since install had a `mission:` tag (they use short tags like `m7`), so E11 never
   fired, and no seat called `mission(id)`.
 - **When work starts.** 38 of the 46 prompts the seats received (83%) were a
   message from another seat (rig header) or a queue nudge. That is the moment a
@@ -101,7 +101,7 @@ the seat having to choose to.
 
 - Fetching on every prompt, or on owner-typed prompts.
 - Calling `/chat` (dialectic, 6-50 s, model-server-backed) from a hook.
-- Guessing missions from pilot-style tags like `m26`. Mapping tag
+- Guessing missions from pilot-style tags like `m7`. Mapping tag
   conventions per rig is a guess; `--mission` is the supported path.
 
 ## How we'll know it worked

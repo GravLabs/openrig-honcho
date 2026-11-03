@@ -217,7 +217,7 @@ describe("unexpectedPluginFiles (T13a 00:59Z amendment: untracked/ignored refuse
 describe("scratchClearCheck (T14f: no scratch may still be listed at release time)", () => {
   test("no scratch listed -> ok, whatever else is on the server", () => {
     expect(scratchClearCheck([])).toEqual({ ok: true });
-    expect(scratchClearCheck(["openrig", "orca", "pilot", "owner-profile"])).toEqual({ ok: true });
+    expect(scratchClearCheck(["openrig", "other-rig", "pilot", "my-profile"])).toEqual({ ok: true });
   });
 
   test("one listed scratch id refuses, naming it", () => {

@@ -77,10 +77,10 @@ describe("recallPairs (ADR-0009 decision 2)", () => {
     ]);
   });
 
-  test("m26: the mission scope peer is scope.mission-m26", () => {
-    expect(recallPairs("build", "dev-x", "m26")).toEqual([
+  test("m7: the mission scope peer is scope.mission-m7", () => {
+    expect(recallPairs("build", "dev-x", "m7")).toEqual([
       { observer: "build", observed: "dev-x" },
-      { observer: "scope.mission-m26", observed: "dev-x" },
+      { observer: "scope.mission-m7", observed: "dev-x" },
     ]);
   });
 });
@@ -459,9 +459,9 @@ describe("renderRecall (ADR-0011 render: sections, floor, dup, trivia, cap)", ()
   test("tool trivia drops; a fact that mentions a tool and says more stays", () => {
     const r = renderNew({
       aboutSender: [
-        item("t1", "design-architect used the ctx_execute tool to check CI", ago(2 * HOUR)),
+        item("t1", "design-architect used the run_tool tool to check CI", ago(2 * HOUR)),
         item("t2", "ran deploy.sh to ship the fix", ago(2 * HOUR)),
-        item("t3", "the ctx_execute tool leaks memory on large inputs", ago(2 * HOUR)),
+        item("t3", "the run_tool tool leaks memory on large inputs", ago(2 * HOUR)),
         item("t4", "ran the build and it failed twice on the same flake", ago(2 * HOUR)),
         item("t5", "used the deploy tool, which broke staging for 20 min", ago(2 * HOUR)),
       ],
@@ -473,13 +473,13 @@ describe("renderRecall (ADR-0011 render: sections, floor, dup, trivia, cap)", ()
   test("the real pilot noise drops, result/reason lines stay (architect ruling 11-01 16:48Z)", () => {
     const r = renderNew({
       aboutSender: [
-        item("p1", "On 2026-10-31 16:07:32, dev-architect used the ctx_execute tool in shell mode to check CI runs after the 0.7.1 mirror push.", ago(2 * HOUR)),
-        item("p2", "On 2026-10-31 16:12:27, dev-architect used the ctx_execute tool in shell mode to check CI status on 0.7.1.", ago(2 * HOUR)),
-        item("p3", "On 2026-10-31 16:12:27, dev-architect used the ctx_execute tool in shell mode to check dev-build current activity on pilot.", ago(2 * HOUR)),
-        item("p4", "On 2026-10-31 16:07:32, dev-architect used the ctx_execute tool in shell mode to confirm that a CI run had been triggered on the 0.7.1 mirror commit.", ago(2 * HOUR)),
-        item("k1", "dev-build ran the az command to create the Key Vault in northeurope because westeurope had no quota.", ago(2 * HOUR)),
+        item("p1", "On 2026-10-31 16:07:32, dev-architect used the run_tool tool in shell mode to check CI runs after the 2.4.1 mirror push.", ago(2 * HOUR)),
+        item("p2", "On 2026-10-31 16:12:27, dev-architect used the run_tool tool in shell mode to check CI status on 2.4.1.", ago(2 * HOUR)),
+        item("p3", "On 2026-10-31 16:12:27, dev-architect used the run_tool tool in shell mode to check dev-build current activity on pilot.", ago(2 * HOUR)),
+        item("p4", "On 2026-10-31 16:07:32, dev-architect used the run_tool tool in shell mode to confirm that a CI run had been triggered on the 2.4.1 mirror commit.", ago(2 * HOUR)),
+        item("k1", "dev-build ran the cloud command to create the storage bucket in region-b because region-a had no quota.", ago(2 * HOUR)),
         item("k2", "dev-review ran the tests and found 2 failures.", ago(2 * HOUR)),
-        // dots inside numbers do NOT end the purpose clause (0.7.1 above),
+        // dots inside numbers do NOT end the purpose clause (2.4.1 above),
         // but a real second sentence does - the tail must not swallow it
         item("k3", "dev-build used the rig tool to check the deploy. The queue was frozen for 4 h.", ago(2 * HOUR)),
       ],

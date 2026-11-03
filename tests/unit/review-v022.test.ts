@@ -540,7 +540,7 @@ describe("VC device-code redaction edges (redact.ts rule 10)", () => {
   test(
     "VC3 OBSERVATION (flips red if the ruling tightens the rule): dashed, newline-split and lowercase codes survive raw near devicelogin",
     () => {
-      // Real Azure sign-in codes ship 8 upper-case chars commonly DISPLAYED
+      // Real device sign-in codes ship 8 upper-case chars commonly DISPLAYED
       // with a dash (AAAA-BBBB); a user who pastes that exact display, or
       // whose run wrapped across a newline, or who typed the
       // case-insensitive code in lower case, gets NO mask. Pinned as

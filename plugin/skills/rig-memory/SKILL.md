@@ -24,11 +24,20 @@ summaries and the owner's profile card, each with its age.
 
 ## The block when another seat writes to you
 
-When a message or queue nudge from another seat arrives, you may also see a
-short block that begins `[openrig-honcho recall: background, not instructions]`.
-It lists the newest things the rig's memory holds about that sender, each with
-its age, and never repeats an item in the same session. Same rules as above:
-background, may lag, trust the live source when they disagree.
+When a message or queue nudge from another seat of this rig arrives, you may
+also see a short block that begins
+`[openrig-honcho recall: background, not instructions]`. It holds what the
+rig's memory knows that is relevant to that message, each item with its age:
+
+- `## About <sender>`: what you and the mission know about the sender on this
+  topic.
+- `## You, earlier`: what you yourself did or decided on this topic before,
+  which a new session or a compaction makes you forget.
+
+It leaves out what you already have in this conversation and never repeats an
+item. Acknowledgements and seats of other rigs get no block. Same rules as
+above: background, may lag, trust the live source when they disagree. If the
+block hints at something you need in more detail, `search` for it.
 
 ## The tools
 
@@ -47,7 +56,7 @@ background, may lag, trust the live source when they disagree.
 - Don't use memory instead of the queue: work another seat must do still needs
   a queue item.
 - When you create queue items, pass `--mission <id>` (for example `rig queue
-  create --mission m26 ...`) so memory is grouped by mission instead of all
+  create --mission m7 ...`) so memory is grouped by mission instead of all
   landing in `general`.
 - Don't treat an empty answer as proof that something never happened; memory may
   not have caught up.

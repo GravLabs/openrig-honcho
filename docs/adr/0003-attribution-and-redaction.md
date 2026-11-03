@@ -92,7 +92,7 @@ replacing a match with `[REDACTED:<kind>]`. Patterns describe shapes, never valu
 | `assignment` | `(?i)\b[A-Z0-9_]*(KEY|SECRET|TOKEN|PASSWORD|PASSWD|CREDENTIAL)[A-Z0-9_]*\s*[=:]\s*["']?[^\s"']{8,}` (value replaced, name kept) |
 | `json-secret` | `"(access_token|refresh_token|id_token|api_key|app_secret|client_secret)"\s*:\s*"[^"]{8,}"` (value replaced) |
 | `hex64` | `\b[0-9a-f]{64,}\b` (OpenRig tokens; 40-char git SHAs are kept) |
-| `opaque` | a run of `[A-Za-z0-9._@~+/=%-]` of length >= 40 that contains an upper-case letter, a lower-case letter and a digit, and is not a path or URL (Schwab API key/secret and access/refresh tokens have this shape) |
+| `opaque` | a run of `[A-Za-z0-9._@~+/=%-]` of length >= 40 that contains an upper-case letter, a lower-case letter and a digit, and is not a path or URL (many provider API keys and OAuth access/refresh tokens have this shape) |
 
 Tests use synthesized fake values of each shape, never real ones.
 

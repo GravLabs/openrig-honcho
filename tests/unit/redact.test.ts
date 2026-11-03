@@ -74,9 +74,9 @@ const fakes: Fake[] = [
     make: () => {
       const secret = rand(40, ALNUM);
       return {
-        input: `SCHWAB_APP_SECRET=${secret}`,
+        input: `BROKER_APP_SECRET=${secret}`,
         secret,
-        alone: "SCHWAB_APP_SECRET=[REDACTED:assignment]",
+        alone: "BROKER_APP_SECRET=[REDACTED:assignment]",
       };
     },
   },
@@ -154,10 +154,10 @@ describe("redact: kept shapes", () => {
 });
 
 describe("redact: assignment and json-secret keep the name, hide the value", () => {
-  test("SCHWAB_APP_SECRET=<fake64>", () => {
+  test("BROKER_APP_SECRET=<fake64>", () => {
     const secret = rand(64, ALNUM);
-    const { text, counts } = redact(`SCHWAB_APP_SECRET=${secret}`);
-    expect(text).toBe("SCHWAB_APP_SECRET=[REDACTED:assignment]");
+    const { text, counts } = redact(`BROKER_APP_SECRET=${secret}`);
+    expect(text).toBe("BROKER_APP_SECRET=[REDACTED:assignment]");
     expect(text).not.toContain(secret);
     expect(counts.assignment).toBe(1);
   });
@@ -181,7 +181,7 @@ describe("redact: assignment and json-secret keep the name, hide the value", () 
 });
 
 describe("redact: encoded-secret shapes (ADR-0003 commit 70ee11e)", () => {
-  test("URL-encoded Schwab-shaped fake token (%40 inside) -> opaque", () => {
+  test("URL-encoded broker-shaped fake token (%40 inside) -> opaque", () => {
     let tok = "";
     do {
       tok = `${rand(20, ALNUM)}%40${rand(30, ALNUM)}.x`;

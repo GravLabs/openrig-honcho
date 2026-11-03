@@ -3,7 +3,9 @@
 Shared memory for an OpenRig rig, as a Claude Code plugin that records who said
 what to whom into a self-hosted [Honcho](https://honcho.dev) server and gives it
 back at session start, when another seat writes, and on demand. This document explains how it works and why;
-each section links the decision record (ADR) that holds the detail. Version 0.2.
+each section links the decision record (ADR) that holds the detail. Version
+0.2.2. For setup and day-to-day use, start with the [README](../README.md); for
+what has been measured in real use, see [EVALUATION.md](EVALUATION.md).
 
 ## 1. Problem and goals
 
@@ -34,7 +36,7 @@ Goals for this plugin:
 |---|---|---|
 | Rig | Workspace (e.g. `pilot`) | Hard memory boundary per rig. |
 | Seat | Peer (`dev-build`) | The seat, not the occupant, so memory survives handover and model swaps. |
-| Owner (the human) | Peer `owner` | In each rig workspace, and in the cross-rig profile workspace. |
+| Owner (the human) | Peer `owner` | In each rig workspace, and in the optional cross-rig profile workspace. |
 | Message sender | Message `peer_id` | From the OpenRig `From:` header, not from which terminal received it. |
 | Seat conversation in a mission | Session `<peer>--<mission>--<n>` | New session when the mission changes or a new conversation starts. |
 | Mission | Scope `mission-<id>` (else `general`) | Scopes group sessions, so recall can stay inside one mission. |
@@ -53,7 +55,7 @@ flowchart LR
     S3["session dev-review--slice-07--1"]
     SC[["scope mission-slice-07"]]
   end
-  P[("workspace owner-profile")]
+  P[("workspace my-profile")]
   A --> S1
   B --> S2
   C --> S3
@@ -70,37 +72,47 @@ Decisions: [ADR-0002](adr/0002-sessions-missions-scopes.md),
 
 ```mermaid
 flowchart TB
-  subgraph Edge["edges: hook and MCP I/O"]
+  subgraph Edge["edges: hook, tool and install I/O"]
     SS["bin/session-start.ts<br/>(sync, 4 s budget)"]
+    RC["bin/recall.ts<br/>(sync, 2.5 s budget)"]
     UP["bin/user-prompt.ts<br/>(async)"]
     ST["bin/stop.ts<br/>(async)"]
     MCP["bin/mcp.ts<br/>rig_memory tools"]
     STAT["bin/status.ts"]
+    INST["bin/install-project.ts"]
   end
   subgraph Core["core: pure, unit-tested without a server"]
     ENV[env.ts] --- ATT[attribute.ts + envelope.ts]
     ATT --- RED[redact.ts] --- SH[shape.ts]
-    MIS[missions.ts] --- INJ[inject.ts]
+    MIS[missions.ts] --- INJ[inject.ts] --- RCL[recall.ts]
   end
   subgraph IO["local state and network"]
     WR[writer.ts / stop.ts / reader.ts]
-    SP[spool.ts + lock.ts + stats.ts + log.ts]
-    HC[honcho.ts: fetch client]
-    NU[nudge.ts: rig queue show]
+    SP[spool.ts + lock.ts + once.ts + stats.ts + log.ts]
+    HC[honcho.ts: Honcho client]
+    DM[daemon.ts: OpenRig daemon client]
+    NU[nudge.ts: rig queue show fallback]
   end
-  SS & UP & ST & MCP & STAT --> Core
-  SS & UP & ST & MCP --> WR
-  WR --> SP & HC & NU
+  SS & RC & UP & ST & MCP & STAT --> Core
+  SS & RC & UP & ST & MCP --> WR
+  WR --> SP & HC & DM & NU
   HC --> H[("Honcho v3 API")]
+  DM --> O[("OpenRig daemon<br/>(outbox, queue)")]
 ```
 
-- **Zero runtime dependencies.** TypeScript run by Bun; Honcho is called with
-  `fetch`, the MCP server is a small hand-written stdio JSON-RPC loop. The plugin
-  folder works as copied by OpenRig's `plugin_dirs`, with no install step.
+- **Zero runtime dependencies.** TypeScript run by Bun; Honcho and the OpenRig
+  daemon are called with `fetch`, the MCP server is a small hand-written stdio
+  JSON-RPC loop. The plugin folder works as copied by OpenRig's `plugin_dirs`,
+  with no build step.
 - **Configured only by the seat's environment**, which OpenRig sets from the rig
-  spec's `env:` on every launch, restore and handover. No config file.
-- **One subprocess**, `rig queue show <id> --json`, run with `execFile` and no
-  shell, to read a queue item's mission tag.
+  spec's `env:` (or the project install writes into the project's settings).
+  No config file.
+- **The OpenRig daemon** is read over its local HTTP API (`$OPENRIG_URL`): the
+  outbox, to check a sender, and a queue item, for a nudge's sender and
+  mission. If that fails, one subprocess, `rig queue show <id> --json` (run with
+  `execFile`, no shell), is the fallback for the queue item.
+- **The once-guard** (`once.ts`) makes each hook act once per event, even if two
+  installs register it.
 
 Decision: [ADR-0001](adr/0001-plugin-and-env-interface.md).
 
@@ -153,15 +165,16 @@ flowchart TD
 
 Details that matter:
 
-- A real `rig send` reaches the hook wrapped as `<pasted_content id="…">`;
-  this was verified with a capture hook in a live session.
+- A `rig send` typed by the daemon reaches the hook word for word (verified
+  with a capture hook on Claude Code 2.1.316). A prompt wrapped as one whole
+  `<pasted_content>` block is unwrapped first, which covers a person pasting a
+  message by hand.
 - Only owner-classified prompts are also written to the profile workspace.
 - Replies are the assistant text of the turn, never tool calls, stamped with the
   transcript timestamp (so a reply can't sort before its prompt), and recorded
   once per turn.
 - Acks ("ok", "T3 ready") and the extra copies of a broadcast are stored with
   reasoning suppressed, so the shared deriver doesn't spend batches on them.
-
 - The writer then checks the sender against OpenRig's own record: the
   daemon's outbox (`$OPENRIG_URL/api/queue/outbox/list`) keeps every delivery
   with the sender it identified and the exact text typed. A match marks the
@@ -261,9 +274,10 @@ sequenceDiagram
   acknowledgement.
 - What is shown is chosen by relevance to the message: each query sends the
   message body and keeps only memories within distance 0.45
-  (`HONCHO_RECALL_MAX_DISTANCE`). On pilot, on-topic memories match from
+  (`HONCHO_RECALL_MAX_DISTANCE`). On a pilot rig, on-topic memories match from
   0.3 to 0.45, acknowledgements only from 0.5. The embeddings run on the shared
-  model host, about 3 small calls per peer message (owner-approved).
+  model host, about 3 small calls per peer message. [EVALUATION.md](EVALUATION.md)
+  has the calibration table and the measured latency.
 - Two sections: `## About <sender>` and `## You, earlier`, the second being
   what this seat did on the topic before, which a new session or a compaction
   loses.
@@ -339,7 +353,7 @@ Decisions: [ADR-0005](adr/0005-effectiveness-scenarios.md) E1,
 
 ```mermaid
 flowchart LR
-  T[prompt / reply / fact / question] --> R[redact: 9 secret shapes] --> C[chunk] --> OUT((Honcho))
+  T[prompt / reply / fact / question] --> R[redact: 10 secret shapes] --> C[chunk] --> OUT((Honcho))
   T -.never.-> LOG[(log: outcome fields only)]
   OWN[owner-typed prompts] --> PROF[(profile workspace)]
   PEER[peer, automation, replies] -.never.-> PROF
@@ -348,9 +362,16 @@ flowchart LR
 - Redaction runs on every outbound text before chunking, from shapes only:
   Anthropic and `strata_` keys, JWTs, bearer and basic auth, PEM keys, `KEY=value`
   assignments, JSON token fields, 64-hex tokens, long opaque tokens (incl.
-  URL-encoded and in URL paths). Known accepted gaps: short encoded secrets, and
-  two different secret kinds glued together with no separator.
-- Exactly two workspaces are ever written: the rig's and the profile.
+  URL-encoded and in URL paths), and device sign-in codes near "device login"
+  wording. Mission ids that look like secrets (including provider prefixes such
+  as AWS access key ids) are refused, never stored. Known accepted gaps: short
+  encoded secrets, and two different secret kinds glued together with no
+  separator.
+- Redaction works on shapes, not meaning: ordinary business content is stored
+  as written.
+- The plugin writes exactly two workspaces: the rig's and the profile. The
+  maintenance script `scripts/copy-peer-memory.ts` writes the rig's workspace
+  only when run with `--apply`.
 - Local files are private (state dir 0700, files 0600).
 - Plastic Labs' cloud (`*.honcho.dev`) is refused.
 - The repo and release are scanned for secret shapes on every gate run.
@@ -362,9 +383,13 @@ Decisions: [ADR-0003](adr/0003-attribution-and-redaction.md),
 
 - **Log**: one JSON line per hook run in `<state>/log/<workspace>.log` with
   outcome, duration, session and an error class (`connect`, `timeout`,
-  `http_<status>`, ...); never content. Rotated at 5 MB, 3 kept. The recall
-  hook logs one event per prompt: `not-peer`, `empty`, `injected` (with the
-  item count and bytes), `timeout` or `error`.
+  `http_<status>`, ...); never content. Rotated at 5 MB, 3 kept. The full list
+  of events per hook is in the [README](../README.md#logs-and-status). Recall
+  logs one event per prompt (`injected`, `empty`, `not-peer`, `not-rig`,
+  `terse`, `timeout`, `error`) with `considered` and the dropped counts. The
+  writer adds `verify` (`verified`, `unverified`, `unchecked`) for a peer
+  message. Any hook logs `duplicate-run` when a second copy of it ran for the
+  same event.
 - **Counters** per seat: written, failed, spooled, replayed, dropped, dead,
   sanitized, redactions by kind.
 - **`status`** (tool and `bin/status.ts [--json]`): exits 1 when unhealthy
@@ -377,7 +402,7 @@ Decision: [ADR-0006](adr/0006-quality-bar.md) O1-O4.
 
 Everything comes from the seat's environment; see the
 [README settings table](../README.md#settings) for the full list and the
-[quick start](../README.md#quick-start) for a rig spec.
+[install section](../README.md#install) for a rig spec.
 Required: `HONCHO_URL`, `HONCHO_WORKSPACE`; `HONCHO_PEER` defaults to the
 OpenRig session name before the `@`. The environment comes either from the rig
 spec (a new rig) or from the project's `.claude/settings.local.json`, written by
@@ -423,7 +448,7 @@ Decision: [ADR-0006](adr/0006-quality-bar.md), [ADR-0007](adr/0007-docs-and-publ
 | [0011](adr/0011-relevant-recall.md) | Recall what is relevant, not what is newest; the `search` tool |
 | [0012](adr/0012-openrig-structured-sources.md) | Check the sender against OpenRig's own records |
 
-Known limits in v0.2:
+Known limits in v0.2.2:
 
 - Claude Code seats only (no Codex).
 - Mission and rig "summaries" are recent session summaries; Honcho 3.4.0 has no
@@ -432,5 +457,7 @@ Known limits in v0.2:
 - The state directory is host-local, so seats of one rig must share a host.
 - Recall knows only what the deriver has already concluded about the sender,
   so a seat's first messages bring little.
+- Whether recall changes what seats do is not yet established; see
+  [EVALUATION.md](EVALUATION.md) for the measures being collected.
 - Still deferred: backfilling existing transcripts, seeding peer cards with
   roles, queue item bodies as memory, a cached mission digest.
