@@ -126,18 +126,52 @@ In a controlled run against real memory, every on-topic message got a block of
 message concerned, and under `## You, earlier` the seat's own earlier decision
 on it.
 
-### v0.2.2 so far: too early to judge
+### v0.2.2 in use: on topic, but mostly not new
 
-| Measure (since the v0.2.2 install) | Value |
-|---|---|
-| Prompts | 22 |
-| Recall blocks shown | 2, 4 items each |
-| Seats of another rig, correctly skipped | 4 |
-| `search` calls | 0 |
-| Seat messages checked against OpenRig's delivery record | 3, all verified |
+First usefulness check of v0.2.2, 2026-11-04, over about 2.5 days on two
+pilot rigs (one with 3 seats, one with 7). Log counts, and a read-only review of
+the seats' transcripts, reported as counts only:
 
-Traffic since the upgrade is too low to say whether seats use what recall shows
-them. Section 5 lists what is measured as traffic grows.
+| Measure | Rig A (3 seats) | Rig B (7 seats) |
+|---|---|---|
+| Prompts | 101 | 42 |
+| Messages from another seat of the rig (recall due) | 46 | 11 |
+| Recall blocks shown | 39 (85%) | 9 (82%) |
+| Items per block, median (max) | 3 (8) | 4 (4) |
+| Memories considered / left out as already in the conversation | 409 / 219 | 39 / 1 |
+| Seats of another rig, correctly skipped | 3 | 1 |
+| Recall time when a block is shown, median / 95th percentile | 752 / 1 428 ms | 361 / 1 050 ms |
+| `search` calls / `ask` calls | 1 / 0 | 0 / 0 |
+| Sender check: verified / unverified | 28 / 8 | 6 / 0 |
+| Hook runs with `ok: false` | 0 | 0 |
+
+What the transcript review found:
+- **On topic.** In 29 of rig A's 39 blocks, the reply that followed used terms
+  from the recalled items that were not in the incoming message. The items
+  matched what the seat worked on next.
+- **Mostly not new.** Checked against everything already in the seat's own
+  transcript, a block added a median of 2 new terms. In no block on either rig
+  did that new information reappear in the seat's reply. A hand review of the
+  six strongest cases agrees: the recalled facts were usually already in the
+  seat's context, for example in the queue item it was working on. In one case
+  the seat's next action mirrored the recalled wording closely.
+- **No lookups.** One `search` call in 2.5 days and no `ask`. The session-start
+  hint has not made seats look things up.
+- **Sender check.** The 8 unverified messages all reached one seat. 7 named
+  that seat itself as sender, probably self-scheduled wakes whose delivered text
+  differs from the outbox record. 1 quoted a header inside its body. None looks
+  like a forged sender, but those cases must be handled before an unverified
+  header is ever recorded differently.
+- **Masking.** Since v0.2.2 no stored message holds an unmasked device sign-in
+  code. 7 are masked. 6 older messages may still hold expired codes.
+- **Latency.** Recall on the busier rig took a median of 752 ms, against 135 ms
+  in the controlled run. It is within the 2.5 s budget, with no timeouts, but
+  it is time the seat waits.
+
+Verdict so far: recall is reliable, on topic and harmless. Its use rate is
+**0 blocks with new information used, of 48**, so it does not yet meet the bar
+in section 5. The next step is to make blocks carry what the seat does *not*
+already have (see section 5).
 
 ## 5. Measures being collected
 
@@ -152,6 +186,11 @@ them. Section 5 lists what is measured as traffic grows.
 | Memory lag | time from a message to the first conclusion derived from it | Sets how fresh recall can be. | server, read-only | proposed |
 | Latency | median and 95th percentile per hook | Recall and session start are on the seat's critical path. | all events | logged |
 | Write health | spooled, dead and failed counts | Nothing should be lost. | `user-prompt`, `stop`, `status` | logged |
+
+**Proposed next change (from the v0.2.2 check):** a novelty filter. Claude
+Code gives every hook the path of the seat's transcript. Recall could drop an
+item whose distinctive terms all already appear there, and show fewer, newer
+items, or none. Measure it with the same new-terms-reused count.
 
 **What would count as "recall helps":** across at least 50 recall blocks on
 two rigs, seats visibly use at least one in five. Lookups (`search` plus `ask`)

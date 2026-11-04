@@ -394,6 +394,8 @@ Fields beside the event:
 - [docs/DESIGN.md](docs/DESIGN.md): how it works and why, with diagrams.
 - [docs/EVALUATION.md](docs/EVALUATION.md): what has been measured and what is
   measured next.
+- [docs/STRATEGY.md](docs/STRATEGY.md): how rig and seat memory should evolve:
+  objectives, tests and the plan.
 - [docs/adr/](docs/adr/): each design decision, with its reasons.
 
 ## Development
