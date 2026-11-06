@@ -14,6 +14,7 @@ import { join } from "node:path";
 import type { Config } from "../../plugin/src/env.ts";
 import { createClient } from "../../plugin/src/honcho.ts";
 import { buildInjection, type ReaderDeps } from "../../plugin/src/reader.ts";
+import { LEDGER_PEER } from "../../plugin/src/ledger.ts";
 import { startFakeHoncho, type FakeHoncho } from "../support/fake-honcho.ts";
 
 const WS = "ws";
@@ -123,23 +124,24 @@ describe("buildInjection (T7b)", () => {
     }
   });
 
-  test("leader decisions: 12 conclusions, one foreign mission -> this mission's newest 10 only", async () => {
+  test("T24 leader decisions: 12 pair entries, one foreign mission -> this mission's newest 10 only", async () => {
     const { fake, config, client, mkDeps } = await mk({ leaderPeer: "lead" });
     try {
       for (const s of ["lead--general--1", "lead--auth--1"]) {
         await client.createSession(s, { peers: {} });
       }
+      // T24 (Amendment 2): entries are valid-header content on the LEDGER PAIR
       for (let i = 1; i <= 11; i++) {
         fake.addConclusion(WS, {
-          content: `DEC${String(i).padStart(2, "0")}`,
+          content: `[decision d-dec000${String(i).padStart(2, "0")} · scope mission] DEC${String(i).padStart(2, "0")}`,
           observer_id: "lead",
-          observed_id: "lead",
+          observed_id: LEDGER_PEER,
           session_id: "lead--general--1" });
       }
       fake.addConclusion(WS, {
-        content: "OTHERMISSION",
+        content: "[decision d-dec01001 · scope mission] OTHERMISSION",
         observer_id: "lead",
-        observed_id: "lead",
+        observed_id: LEDGER_PEER,
         session_id: "lead--auth--1" });
       const clock = { value: Date.now() };
       const out = await buildInjection({ source: "startup", claudeSessionId: "c1" }, config, mkDeps(clock));
@@ -152,14 +154,14 @@ describe("buildInjection (T7b)", () => {
     }
   });
 
-  test("T19a in-force view: superseded and retired hidden, rig approval cross-mission, headers stripped", async () => {
+  test("T24 in-force view: superseded and retired hidden, rig approval cross-mission, headers stripped, PLAIN never shown", async () => {
     const { fake, config, client, mkDeps } = await mk({ leaderPeer: "lead" });
     try {
       for (const s of ["lead--general--1", "lead--auth--1"]) {
         await client.createSession(s, { peers: {} });
       }
       const lead = (session_id: string, content: string): void => {
-        fake.addConclusion(WS, { content, observer_id: "lead", observed_id: "lead", session_id });
+        fake.addConclusion(WS, { content, observer_id: "lead", observed_id: LEDGER_PEER, session_id });
       };
       // A superseded by B (same mission): only B is in force
       lead("lead--general--1", "[decision d-aaaaaaaa · scope mission] RUN-ON-868 (reason: the old way)");
@@ -169,7 +171,7 @@ describe("buildInjection (T7b)", () => {
       // retired entry: hidden
       lead("lead--general--1", "[decision d-dddddddd · scope mission] RETIRED-ITEM");
       lead("lead--general--1", "[retire d-dddddddd] replaced by a policy");
-      // legacy plain conclusion: an in-force mission decision with a derived id
+      // T24 (Amendment 2): a plain conclusion on the pair is NOT an entry
       lead("lead--general--1", "LEGACY-DECISION-TEXT");
       const clock = { value: Date.now() };
       const out = await buildInjection({ source: "startup", claudeSessionId: "c1" }, config, mkDeps(clock));
@@ -177,7 +179,7 @@ describe("buildInjection (T7b)", () => {
       expect(out).toContain("RUN-ON-915");
       expect(out, "superseded entry must be hidden").not.toContain("RUN-ON-868");
       expect(out, "retired entry must be hidden").not.toContain("RETIRED-ITEM");
-      expect(out).toContain("LEGACY-DECISION-TEXT");
+      expect(out, "T24: a plain conclusion is never an entry").not.toContain("LEGACY-DECISION-TEXT");
       expect(out).toContain("APPROVED-PORT-8080"); // rig scope from lead--auth: shown
       // the approval is marked as an approval on its label line
       const lines = out.split("\n");

@@ -301,3 +301,102 @@ describe("queue nudges from the queue item (T16f / ADR-0012 d3)", () => {
     }
   });
 });
+
+// T22b (architect 02:13Z 11-06): a near-miss outbox record (right sender,
+// destination, window; different body) logs the SHAPE of the difference -
+// counts and one character class, never text - and stays unverified.
+import { bodyMismatchShape, deliveryInWindow } from "../../plugin/src/daemon.ts";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+
+const shapeLines = (dir: string): Record<string, unknown>[] => {
+  try {
+    return readFileSync(join(dir, "log", `${WS}.log`), "utf8")
+      .split("\n")
+      .filter((l) => l.includes("outbox-shape"))
+      .map((l) => JSON.parse(l) as Record<string, unknown>);
+  } catch {
+    return [];
+  }
+};
+
+describe("T22b body-mismatch shape (counts + class only)", () => {
+  test("shape on fixed strings: offset, lengths, class from the DELIVERED char", () => {
+    expect(bodyMismatchShape("abc", "axc")).toEqual({ stored_len: 3, delivered_len: 3, offset: 1, char_class: "letter" });
+    expect(bodyMismatchShape("ab", "a1")).toEqual({ stored_len: 2, delivered_len: 2, offset: 1, char_class: "digit" });
+    expect(bodyMismatchShape("a b", "a\nb")).toEqual({ stored_len: 3, delivered_len: 3, offset: 1, char_class: "newline" });
+    expect(bodyMismatchShape("a\nb", "a b")).toEqual({ stored_len: 3, delivered_len: 3, offset: 1, char_class: "space" });
+    expect(bodyMismatchShape("a!", "a?")).toEqual({ stored_len: 2, delivered_len: 2, offset: 1, char_class: "other" });
+    // prefix case: offset is the shorter length; the char there is stored's
+    expect(bodyMismatchShape("abc", "ab")).toEqual({ stored_len: 3, delivered_len: 2, offset: 2, char_class: "letter" });
+    expect(bodyMismatchShape("ab", "abc")).toEqual({ stored_len: 2, delivered_len: 3, offset: 2, char_class: "letter" });
+    expect(bodyMismatchShape("same", "same")).toEqual({ stored_len: 4, delivered_len: 4, offset: -1, char_class: "none" });
+  });
+
+  test("deliveryInWindow: fresh true, 11 min false, future false, garbage false", () => {
+    const base = { destinationSession: SESSION };
+    expect(deliveryInWindow({ ...base, deliveredAt: iso(-60_000) }, FIXED_TS)).toBe(true);
+    expect(deliveryInWindow({ ...base, tsDispatched: iso(-11 * 60_000) }, FIXED_TS)).toBe(false);
+    expect(deliveryInWindow({ ...base, deliveredAt: iso(60_000) }, FIXED_TS)).toBe(false);
+    expect(deliveryInWindow({ ...base, deliveredAt: "yesterday" }, FIXED_TS)).toBe(false);
+  });
+
+  test("near-miss records shape only; verify unchanged; no text in the line", async () => {
+    const prompt = dm("arch", "T22b near-miss probe text");
+    const stored = `wake-wrapper line\n${prompt}`; // the delivery-wrapper hypothesis
+    const t = await mk({
+      outbox: [
+        {
+          outboxId: "obx-nm",
+          senderSession: "arch@ws",
+          destinationSession: SESSION,
+          body: stored,
+          deliveredAt: iso(-60_000),
+        },
+      ] });
+    try {
+      const out = await recordPrompt({ prompt }, t.config, t.deps);
+      expect(out.action !== "skipped" && out.verify).toBe("unverified"); // no upgrade, no change
+      const lines = shapeLines(t.dir);
+      expect(lines.length).toBe(1);
+      expect(lines[0]).toMatchObject({
+        event: "outbox-shape",
+        stored_len: stored.length,
+        delivered_len: prompt.length,
+        offset: 0,
+        char_class: "letter", // delivered[0] = "F" of the envelope
+      });
+      const raw = JSON.stringify(lines[0]);
+      expect(raw).not.toContain("wrapper");
+      expect(raw).not.toContain("probe");
+      expect(raw).not.toContain("From:");
+    } finally {
+      t.cleanup();
+    }
+  });
+
+  test("no near-miss log when the record is OUT of window; exact match logs nothing", async () => {
+    const prompt = dm("arch", "T22b negative probe text");
+    const stale = await mk({
+      outbox: [
+        { outboxId: "nm-stale", senderSession: "arch@ws", destinationSession: SESSION, body: `wrap\n${prompt}`, tsDispatched: iso(-3_600_000) },
+      ] });
+    try {
+      await recordPrompt({ prompt }, stale.config, stale.deps);
+      expect(shapeLines(stale.dir).length).toBe(0);
+    } finally {
+      stale.cleanup();
+    }
+    const exact = await mk({
+      outbox: [
+        { outboxId: "nm-exact", senderSession: "arch@ws", destinationSession: SESSION, body: prompt, tsDispatched: iso(-60_000) },
+      ] });
+    try {
+      const out = await recordPrompt({ prompt }, exact.config, exact.deps);
+      expect(out.action !== "skipped" && out.verify).toBe("verified");
+      expect(shapeLines(exact.dir).length).toBe(0);
+    } finally {
+      exact.cleanup();
+    }
+  });
+});

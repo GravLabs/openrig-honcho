@@ -15,33 +15,37 @@
 // nothing. The API key comes from HONCHO_API_KEY (default "local", same
 // convention as scripts and tests).
 //
-// What counts as a recorded decision (brief, architect 03:20Z facts):
-// remember writes a self-conclusion AND a decision message (metadata.kind
-// "decision", sent by the peer) in the seat's session. The deriver also
-// writes look-alike self-conclusions with no message (818 of 856 on
-// pilot), so only the MESSAGES decide what is a recorded decision;
-// we match each one to its from-peer self-conclusion by exact content
-// (informational - a message whose conclusion is missing, e.g. still
-// spooled, is still copied).
+// What counts as a recorded decision (T27, architect 2026-11-06 04:33Z -
+// the gate caught the regression): SINCE T24 (ADR-0014 Amendment 2) a
+// decision is a valid-header ENTRY ON THE RESERVED PAIR - observer the
+// leader, observed openrig-ledger. The old self pair (observer = observed
+// = from) holds recall material and deriver look-alikes only; looking
+// there found nothing a renamed leader would ever read back, which is
+// exactly the bug (a renamed leader started with an empty ledger).
 //
-// Copy shape per decision, in the to-peer's session <to>--<mission>--<n>
+// Copy shape per entry: the SAME conclusion content, VERBATIM, on the new
+// leader's pair (observer = to, observed = openrig-ledger), written into a
+// session <to>--<mission>--<n> for the mission the entry was WRITTEN in
 // (n by the plugin's freeN, so the new seat's own later sessions do not
 // collide; every created session is stamped {rig_peer, mission} like the
-// plugin's): an explicit conclusion (observer = observed = to - exactly
-// what fetchMissionDecisions reads at session start) AND a decision
-// message with metadata.kind "decision", metadata.copied_from <from> and
-// metadata.original_at (the original message's created_at). redact() runs
-// on the way out as a belt (content was redacted on the way in, and
-// redaction is idempotent).
+// plugin's). Verbatim is the whole point: the entry id, the supersedes
+// link and the retire link live INSIDE the content, so the copied ledger
+// computes the SAME in-force set (currentLedger works off those links, and
+// inForceFor off the session's mission). Only header entries are carried -
+// a plain conclusion is never a decision. An entry whose session carries
+// no mission is counted, reported, and left in place: the script never
+// invents a mission. redact() runs on the way out as a belt (content was
+// redacted on the way in, and redaction is idempotent). Decision messages
+// carry no authority after T24, so nothing is written to messages.
 //
 // The peer card is copied whole: GET from, PUT to, with every WHOLE-WORD
 // occurrence of <from> inside an item replaced by <to> (whole word = not
 // adjacent to [A-Za-z0-9_-], since peer ids themselves contain hyphens).
 // Decisions are copied verbatim.
 //
-// Idempotent: a decision whose content already exists as a to-peer
-// decision message (metadata.copied_from set by a previous run) is skipped;
-// a second --apply creates nothing new.
+// Idempotent: an entry whose content already exists on the to-peer's pair
+// (a previous run copied it verbatim) is skipped; a second --apply creates
+// nothing new.
 //
 // Output: counts only, never contents (missions, decisions found, created,
 // skipped, card items). Exit 0 on success; non-zero with a fact/reason/fix
@@ -49,16 +53,15 @@
 // (same rule as the plugin's env.loadConfig), from === to, malformed or
 // missing arguments.
 //
-// Paging (architect ruling 2026-11-02 03:42Z): NO item ceiling. Every list
-// is read to the end - the from-peer's sessions, the decision messages in
-// each session (pilot's old architect has hundreds of messages per
-// session), the matching self-conclusions, and the to-peer's carried copies
-// for idempotency - by following the page/pages fields of each page answer
-// at size 100. The summary reports the number of pages read.
+// Paging (architect ruling 2026-11-02 03:42Z, shapes updated by T27): NO
+// item ceiling. Both ledger-pair reads (from-peer, and to-peer for
+// idempotency) are read to the end by following the page/pages fields of
+// each page answer at size 100. The summary reports the number of pages
+// read.
 
 import { createClient } from "../plugin/src/honcho.ts";
 import { redact } from "../plugin/src/redact.ts";
-import { clientId } from "../plugin/src/shape.ts";
+import { LEDGER_PEER, parseEntry } from "../plugin/src/ledger.ts";
 import { freeN } from "../plugin/src/writer.ts";
 import { scopeFor } from "../plugin/src/missions.ts";
 
@@ -247,29 +250,6 @@ async function pagedList(
   }
 }
 
-interface SrvMessage {
-  content: string;
-  peer_id: string;
-  created_at?: string;
-  metadata?: Record<string, unknown>;
-}
-
-/** One decision reconstructed from its message (or its chunk group). */
-interface Decision {
-  mission: string;
-  content: string;
-  originalAt: string;
-  matchedConclusion: boolean;
-}
-
-function missionOf(msg: SrvMessage, sessionId: string, fromPeer: string): string {
-  const m = msg.metadata?.mission;
-  if (typeof m === "string" && m !== "") return m;
-  const m2 = /^(.*)--\d+$/.exec(sessionId);
-  const prefix = m2?.[1] ?? sessionId;
-  return prefix.startsWith(`${fromPeer}--`) ? prefix.slice(fromPeer.length + 2) : prefix;
-}
-
 export async function runCopy(
   args: CopyArgs,
   log: (line: string) => void,
@@ -286,150 +266,73 @@ export async function runCopy(
 
   const pagesRead = { n: 0 };
 
-  // 1. the from-peer's sessions, ALL pages (stamped ones; every
-  // plugin-created session stamps rig_peer, so this is every session the
-  // seat could have recorded in)
-  const sr = await pagedList(
+  // 1. (T27) the from-peer's LEDGER PAIR, ALL pages: observer = from,
+  // observed = openrig-ledger. Since T24 this is where a leader's entries
+  // live; the old self-pair + decision-message lookup found nothing the
+  // renamed leader would read back - the gate regression this fixes.
+  const fromPair = await pagedList(
     base,
     args.workspace,
     args.apiKey,
-    `/workspaces/${w}/sessions/list`,
-    { metadata: { rig_peer: args.from } },
+    `/workspaces/${w}/conclusions/list`,
+    { observer_id: args.from, observed_id: LEDGER_PEER },
     pagesRead,
   );
-  if (!sr.ok) {
+  if (!fromPair.ok) {
     return fail(
-      `listing sessions of ${args.from} failed: HTTP ${sr.status}`,
-      sr.error,
+      `listing the ledger pair of ${args.from} failed: HTTP ${fromPair.status}`,
+      fromPair.error,
       "check --url / --workspace / HONCHO_API_KEY and that the workspace exists",
     );
   }
-  const fromSessions = sr.items
-    .map((s) => (typeof s.id === "string" ? s.id : ""))
-    .filter((id) => id !== "");
 
-  // 2. decision messages per session, ALL pages (peer_id = from,
-  // metadata.kind = decision - hundreds of messages per session on pilot)
-  const byMission = new Map<string, Decision[]>();
-  let found = 0;
-  for (const sid of fromSessions) {
-    const ml = await pagedList(
-      base,
-      args.workspace,
-      args.apiKey,
-      `/workspaces/${w}/sessions/${encodeURIComponent(sid)}/messages/list`,
-      { peer_id: args.from, metadata: { kind: "decision" } },
-      pagesRead,
+  // 2. idempotency set: contents already on the to-peer's pair (verbatim
+  // copies are identical content) - ALL pages. A second --apply doubles
+  // nothing.
+  const toPair = await pagedList(
+    base,
+    args.workspace,
+    args.apiKey,
+    `/workspaces/${w}/conclusions/list`,
+    { observer_id: args.to, observed_id: LEDGER_PEER },
+    pagesRead,
+  );
+  if (!toPair.ok) {
+    return fail(
+      `listing the ledger pair of ${args.to} failed: HTTP ${toPair.status}`,
+      toPair.error,
+      "check --url / --workspace / HONCHO_API_KEY and that the workspace exists",
     );
-    if (!ml.ok) {
-      return fail(
-        `listing messages of session ${sid} failed`,
-        ml.error,
-        "check --url / --workspace / HONCHO_API_KEY; the session must exist",
-      );
-    }
-    // belt: re-apply the filter client-side too - the server filter is the
-    // selector, a misbehaving page must not smuggle other kinds in
-    const items = (ml.items as unknown as SrvMessage[]).filter(
-      (m) =>
-        typeof m.content === "string" &&
-        m.peer_id === args.from &&
-        m.metadata?.kind === "decision",
-    );
-
-    // group chunked messages back into whole decisions
-    const singles: SrvMessage[] = [];
-    const chunks = new Map<string, SrvMessage[]>();
-    for (const m of items) {
-      const ch = m.metadata?.chunk as { id?: string; i?: number } | undefined;
-      if (ch !== undefined && typeof ch.id === "string") {
-        const list = chunks.get(ch.id) ?? [];
-        list.push(m);
-        chunks.set(ch.id, list);
-      } else {
-        singles.push(m);
-      }
-    }
-    const groups: SrvMessage[][] = [
-      ...singles.map((m) => [m]),
-      ...[...chunks.values()].map((g) =>
-        [...g].sort((a, b) => Number(a.metadata?.chunk?.i ?? 0) - Number(b.metadata?.chunk?.i ?? 0)),
-      ),
-    ];
-    if (items.length > 0) {
-      // self-conclusions of this session, ALL pages, exact-content match
-      const cr = await pagedList(
-        base,
-        args.workspace,
-        args.apiKey,
-        `/workspaces/${w}/conclusions/list`,
-        { observer_id: args.from, observed_id: args.from, session_id: sid },
-        pagesRead,
-      );
-      const concl = new Set(
-        cr.ok ? cr.items.map((c) => (typeof c.content === "string" ? c.content : "")) : [],
-      );
-      if (!cr.ok) {
-        // matching is informational (the message is the authority); a failed
-        // conclusions page must not stop the copy - log and proceed unmatched
-        log(`note: conclusion matching unavailable for ${sid} (${cr.error})`);
-      }
-      for (const g of groups) {
-        const first = g[0];
-        if (first === undefined) continue;
-        const d: Decision = {
-          mission: missionOf(first, sid, args.from),
-          content: g.map((m) => m.content).join(""),
-          originalAt: typeof first.created_at === "string" ? first.created_at : "",
-          matchedConclusion: false,
-        };
-        d.matchedConclusion = concl.has(d.content);
-        const list = byMission.get(d.mission) ?? [];
-        list.push(d);
-        byMission.set(d.mission, list);
-        found += 1;
-      }
-    }
   }
-
-  // 3. idempotency set: contents already carried for the to-peer by this
-  // script (its decision messages carry metadata.copied_from) - ALL pages
   const already = new Set<string>();
-  const toSr = await pagedList(
-    base,
-    args.workspace,
-    args.apiKey,
-    `/workspaces/${w}/sessions/list`,
-    { metadata: { rig_peer: args.to } },
-    pagesRead,
-  );
-  if (!toSr.ok) {
-    return fail(
-      `listing sessions of ${args.to} failed: HTTP ${toSr.status}`,
-      toSr.error,
-      "check --url / --workspace / HONCHO_API_KEY and that the workspace exists",
-    );
+  for (const c of toPair.items) if (typeof c.content === "string") already.add(c.content);
+
+  // 3. classify: ENTRIES ONLY (a plain conclusion is never a decision -
+  // parseEntry is the same rule the plugin uses), grouped by the mission
+  // the entry was WRITTEN in: its session <from>--<mission>--<n>, parsed
+  // like ledger.ts parses it. An entry on an untagged or foreign session
+  // has no mission to carry: counted, reported, left in place.
+  const fromSessRe = new RegExp(`^${args.from}--(.*)--\\d+$`);
+  const byMission = new Map<string, string[]>();
+  let found = 0;
+  let unattributed = 0;
+  for (const c of fromPair.items) {
+    if (typeof c.content !== "string") continue;
+    if (parseEntry(c.content).kind === "plain") continue;
+    found += 1;
+    const sid = typeof c.session_id === "string" ? c.session_id : "";
+    const ms = fromSessRe.exec(sid);
+    const mission = ms?.[1];
+    if (mission === undefined || mission === "") {
+      unattributed += 1;
+      continue;
+    }
+    const list = byMission.get(mission) ?? [];
+    list.push(c.content);
+    byMission.set(mission, list);
   }
-  for (const s of toSr.items) {
-    if (typeof s.id !== "string") continue;
-    const ml = await pagedList(
-      base,
-      args.workspace,
-      args.apiKey,
-      `/workspaces/${w}/sessions/${encodeURIComponent(s.id)}/messages/list`,
-      { peer_id: args.to, metadata: { kind: "decision", copied_from: args.from } },
-      pagesRead,
-    );
-    if (!ml.ok) {
-      return fail(
-        `listing messages of session ${s.id} failed`,
-        ml.error,
-        "check --url / --workspace / HONCHO_API_KEY",
-      );
-    }
-    for (const m of ml.items as unknown as SrvMessage[]) {
-      if (typeof m.content === "string") already.add(m.content);
-    }
+  if (unattributed > 0) {
+    log(`note: ${unattributed} entries sit on sessions without a ${args.from}--<mission>--<n> name and stay in place`);
   }
 
   // 4. copy, mission by mission (sorted for deterministic output)
@@ -445,16 +348,17 @@ export async function runCopy(
   log(args.apply ? "APPLY" : "DRY RUN");
   const missions = [...byMission.keys()].sort();
   counts.missions = missions.length;
+  let ledgerPeerReady = false;
   for (const mission of missions) {
-    const decisions = byMission.get(mission) ?? [];
-    // belt: content was already redacted on the way in, redaction is
+    const entries = byMission.get(mission) ?? [];
+    // belt: content was already redacted on the way in; redact() is
     // idempotent; the skip decision runs on the redacted text
-    const toCreate: Array<{ d: Decision; content: string }> = [];
+    const toCreate: string[] = [];
     let missionSkipped = 0;
-    for (const d of decisions) {
-      const content = redact(d.content).text;
-      if (already.has(content)) missionSkipped += 1;
-      else toCreate.push({ d, content });
+    for (const content of entries) {
+      const red = redact(content).text;
+      if (already.has(red)) missionSkipped += 1;
+      else toCreate.push(red);
     }
     // the session is minted and created ONLY when something goes into it -
     // an all-skipped mission must create nothing at all (idempotency)
@@ -470,6 +374,20 @@ export async function runCopy(
         })();
       session = `${args.to}--${mission}--${n}`;
       if (args.apply) {
+        // the reserved pair peer must exist before a write to it lands
+        // (live 3.5.0: an uncreated observed peer is rejected) - get or
+        // create it ONCE per run
+        if (!ledgerPeerReady) {
+          const cp = await client.createPeer(LEDGER_PEER);
+          if (!cp.ok) {
+            return fail(
+              `creating the reserved ledger peer ${LEDGER_PEER} failed: HTTP ${cp.status ?? "?"}`,
+              cp.error ?? "the server refused the peer create",
+              "check --url / --workspace / HONCHO_API_KEY; rerun is safe (get-or-create)",
+            );
+          }
+          ledgerPeerReady = true;
+        }
         const cs = await client.createSession(session, {
           peers: { [args.to]: { observe_me: true, observe_others: false } },
           scopes: [scopeFor(mission)],
@@ -483,41 +401,19 @@ export async function runCopy(
           );
         }
       }
-      for (const { d, content } of toCreate) {
+      for (const content of toCreate) {
         if (args.apply) {
           const cc = await client.createConclusion({
             content,
             observer_id: args.to,
-            observed_id: args.to,
+            observed_id: LEDGER_PEER,
             session_id: session,
           });
           if (!cc.ok) {
             return fail(
-              `creating a conclusion in ${session} failed: HTTP ${cc.status ?? "?"}`,
+              `creating a pair entry in ${session} failed: HTTP ${cc.status ?? "?"}`,
               cc.error ?? "the server refused the conclusion create",
-              "rerun is safe: completed decisions are skipped, not doubled",
-            );
-          }
-          const ts = d.originalAt !== "" ? d.originalAt : now();
-          const am = await client.addMessages(session, [
-            {
-              peer_id: args.to,
-              content,
-              created_at: ts,
-              metadata: {
-                client_id: clientId(args.to, session, ts, content),
-                kind: "decision",
-                mission,
-                copied_from: args.from,
-                original_at: d.originalAt,
-              },
-            },
-          ]);
-          if (!am.ok) {
-            return fail(
-              `creating a decision message in ${session} failed: HTTP ${am.status ?? "?"}`,
-              am.error ?? "the server refused the message create",
-              "rerun is safe: completed decisions are skipped, not doubled",
+              "rerun is safe: completed entries are skipped, not doubled",
             );
           }
           already.add(content);
@@ -527,9 +423,8 @@ export async function runCopy(
     }
     counts.created += missionCreated;
     counts.skipped += missionSkipped;
-    const matched = decisions.filter((x) => x.matchedConclusion).length;
     log(
-      `mission ${mission}: ${decisions.length} decisions (${matched} matched), ` +
+      `mission ${mission}: ${entries.length} entries, ` +
         `${args.apply ? "created" : "would create"} ${missionCreated}, skipped ${missionSkipped}` +
         (session !== "" ? `, session ${session}` : ""),
     );
@@ -578,7 +473,7 @@ export async function runCopy(
 
   counts.pages = pagesRead.n;
   log(
-    `total: missions ${counts.missions}, decisions found ${counts.found}, ` +
+    `total: missions ${counts.missions}, entries found ${counts.found}, ` +
       `${args.apply ? "created" : "would create"} ${counts.created}, ` +
       `skipped ${counts.skipped}, card items ${counts.cardItems}, pages read ${counts.pages}`,
   );

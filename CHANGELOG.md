@@ -1,5 +1,31 @@
 # Changelog
 
+## v0.3.0 (2026-11-06)
+
+Memory reaches a seat when it can change what the seat does, and what it says can
+be trusted. Requires Honcho 3.5.0.
+
+- **Continuity digest.** At every startup, resume, clear and compaction a seat sees
+  its open work (live from OpenRig), where it left off, decisions in force,
+  approvals it holds, what changed while it was away, and its restore map. About
+  2 500 characters. `HONCHO_DIGEST=off` keeps the old block. (ADR-0014)
+- **Decision ledger.** `remember` gains reason, scope, supersedes and kind (decision
+  or approval), and a new `retire` tool ends an entry. Entries live on a reserved
+  pair that nothing derived can write to, and only that pair counts as in force.
+  Decisions recorded before v0.3 no longer show as in force; `search` and recall
+  still find them. `scripts/migrate-ledger.ts` can carry them over. (ADR-0014)
+- **Approvals are scoped.** An approval for a queue item shows only to a seat that
+  has that item open. If the open-work lookup fails, none is shown.
+- **Quieter recall.** Items the seat's transcript already holds are dropped, and a
+  block with fewer than 2 items is not shown. `HONCHO_RECALL_NOVELTY=off` keeps
+  the old behaviour.
+- **Routine messages skip the deriver.** Short status messages are stored but not
+  turned into memories. `HONCHO_SKIP_ROUTINE=off` keeps the old behaviour.
+- **Sender check.** It uses OpenRig's delivery time, recognizes a seat's own wakes,
+  and logs how a body differs, as counts only. It still only logs.
+- **Measurement.** `scripts/eval-use.ts`, the recall holdout
+  (`HONCHO_RECALL_HOLDOUT`), `bun run bench` and `bun run scenario`. (ADR-0013)
+
 ## v0.2.2 (2026-11-02)
 
 - Recall is chosen by relevance. When another seat of the rig writes, recall

@@ -1,6 +1,8 @@
 // The env contract (ADR-0001). Pure: reads only the record it is given,
 // never process.env, files, stdin or network.
 
+import { LEDGER_PEER } from "./ledger.ts";
+
 export interface Config {
   enabled: true;
   /** Base URL including /v3, e.g. http://localhost:8000/v3 */
@@ -190,9 +192,20 @@ export function loadConfig(
   if (!ID_RE.test(peer)) {
     return disabled("HONCHO_PEER is not a valid id (^[A-Za-z0-9_-]{1,100}$)");
   }
+  // T24 (ADR-0014 Amendment 2): the ledger peer is reserved. A seat may not
+  // BE it (it never sends; a seat named that would collide with every
+  // leader's ledger pair), and neither may the owner or leader id - the
+  // attribute.ts sender guard lets the owner name through unchanged, so the
+  // config is where that door closes.
+  if (peer === LEDGER_PEER) {
+    return disabled("HONCHO_PEER is reserved: openrig-ledger is the decision-ledger peer, not a seat id");
+  }
 
   const ownerPeer = checkId("HONCHO_OWNER_PEER", env.HONCHO_OWNER_PEER, "owner");
   if ("reason" in ownerPeer) return ownerPeer;
+  if (ownerPeer.value === LEDGER_PEER) {
+    return disabled("HONCHO_OWNER_PEER is reserved: openrig-ledger is the decision-ledger peer");
+  }
 
   const profileWorkspace = checkId(
     "HONCHO_PROFILE_WORKSPACE",
@@ -203,6 +216,9 @@ export function loadConfig(
 
   const leaderPeer = checkId("HONCHO_LEADER_PEER", env.HONCHO_LEADER_PEER, null);
   if ("reason" in leaderPeer) return leaderPeer;
+  if (leaderPeer.value === LEDGER_PEER) {
+    return disabled("HONCHO_LEADER_PEER is reserved: openrig-ledger is the decision-ledger peer");
+  }
 
   let apiKey = "local";
   if (env.HONCHO_API_KEY !== undefined) {

@@ -4,9 +4,6 @@ How to install, run and look after the plugin. For what it is, start with the
 [README](../README.md). For how it is built, see
 [ARCHITECTURE.md](ARCHITECTURE.md) and [DESIGN.md](DESIGN.md).
 
-This guide describes the latest release. Features still in development are listed
-in the README under [Status](../README.md#status).
-
 ## Terms
 
 | Term | Meaning here |
@@ -31,9 +28,6 @@ in the README under [Status](../README.md#status).
   supported.
 - All seats of one rig on one host. The plugin keeps a little state on local
   disk.
-
-Version 0.2.2 expects Honcho 3.4.0, so on 3.5.0 its `status` report shows a version
-warning. Recording and recall are not affected.
 
 The examples use `http://localhost:8000/v3`; use your server's address.
 
@@ -197,6 +191,9 @@ off and writes the reason, never the value, to `<state dir>/log/_config.log`.
 | `HONCHO_RECALL` | on | `off` turns off only the recall block. |
 | `HONCHO_RECALL_MAX_DISTANCE` | `0.45` | How close a memory must be to the message to be recalled, 0.05 to 1. Higher lets in less related memories. |
 | `HONCHO_RECALL_HOLDOUT` | `0` | Measurement knob (ADR-0013): the share of eligible recall blocks that are computed and logged but not shown, so memory's effect can be compared against what a seat does anyway. A number 0 to 0.9; the same message always takes the same arm. `0` shows every block, as today. |
+| `HONCHO_DIGEST` | on | `off` keeps the old session-start block instead of the continuity digest. |
+| `HONCHO_RECALL_NOVELTY` | on | `off` keeps recall items the seat's transcript already holds, and blocks of one item. |
+| `HONCHO_SKIP_ROUTINE` | on | `off` sends routine status messages through the deriver as well. |
 
 ## The `rig_memory` tools
 
@@ -204,7 +201,8 @@ off and writes the reason, never the value, to `<state dir>/log/_config.log`.
 |---|---|
 | `search(query, about?)` | Before guessing about past work, decisions or what another seat found. Answers in about a second. `about` is a peer id; it also searches what is known about that peer. |
 | `ask(question, mission?)` | You need reasoning over everything the rig remembers, not a lookup. Takes 30-50 s and times out at 90 s. `mission` keeps it inside one mission. |
-| `remember(fact)` | Leader only: record a decision the rig must keep. Every seat sees it at session start. |
+| `remember(fact, reason?, scope?, supersedes?, kind?)` | Leader only: record a decision or an owner approval. `scope` is `rig`, `mission` (the default) or a queue item id. Replies with the entry's id. |
+| `retire(decision_id, reason)` | Leader only: end an entry. It leaves in-force views, and `search` still finds it, marked. |
 | `mission(id)` | The rig moves to another OpenRig mission. Every seat's next message lands in that mission's sessions. |
 | `status()` | Memory seems absent or wrong: server, mission, session, held messages, recent errors. Never shows keys. |
 

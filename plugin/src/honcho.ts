@@ -82,6 +82,18 @@ export interface SearchMessage {
   created_at?: string;
 }
 
+/** A stored message as the session messages list answers it (T24: the
+ * migration script reads metadata.kind == "decision"; extra server keys
+ * are kept as-is). */
+export interface MessageRecord {
+  id: string;
+  content: string;
+  peer_id: string;
+  session_id: string;
+  created_at?: string;
+  metadata?: Record<string, unknown>;
+}
+
 export interface SessionSummaries {
   id: string;
   short_summary: { content: string; created_at?: string } | null;
@@ -154,7 +166,23 @@ export interface HonchoClient {
     filters?: { metadata?: Record<string, string | number | boolean> };
     size?: number;
     reverse?: boolean;
+    /** 1-based (T24: the migration script pages leader-owned sessions) */
+    page?: number;
   }): Promise<Result<Page<Session>>>;
+  /**
+   * POST /workspaces/<w>/sessions/<s>/messages/list (T24, migration):
+   * paged stored messages, body {filters} per the real get_messages
+   * (peer_id exact; metadata per-key containment).
+   */
+  listMessages(
+    sessionId: string,
+    opts?: {
+      filters?: { peer_id?: string; metadata?: Record<string, string | number | boolean> };
+      size?: number;
+      reverse?: boolean;
+      page?: number;
+    },
+  ): Promise<Result<Page<MessageRecord>>>;
   /**
    * POST /workspaces/<w>/conclusions/list with the ConclusionGet body
    * `{ filters: {...} }` (ADR-0005 E8 decisions block). Live v3.4.0, probed
@@ -167,7 +195,19 @@ export interface HonchoClient {
     filters?: { observer_id?: string; observed_id?: string; session_id?: string };
     size?: number;
     reverse?: boolean;
+    /** 1-based offset page (T24: the ledger pair is paged in full; the
+     * server's `pagination_params` accepts page+size; a cursor is NOT used -
+     * the page object carries total/pages, honest enough for the cap log) */
+    page?: number;
   }): Promise<Result<Page<Conclusion>>>;
+  /**
+   * POST /workspaces/<w>/peers with `{ id }` (T24, live 3.5.0 PeerCreate):
+   * get-or-create a peer.
+   * The live 3.5.0 probe (T24 row) showed a conclusion with an uncreated
+   * `observed` is rejected - the ledger peer must exist before the first
+   * entry is written to its pair.
+   */
+  createPeer(name: string): Promise<Result<unknown>>;
   /**
    * POST /workspaces/<w>/conclusions/query with body
    * `{ query, top_k, distance, filters: { observer, observed } }`
@@ -332,6 +372,20 @@ export function createClient(opts: HonchoClientOptions): HonchoClient {
     addSessionPeers(sessionId, peers) {
       return request<Session>("POST", `${sessionPath(sessionId)}/peers`, peers, opts.timeoutMs);
     },
+    listMessages(sessionId, o = {}) {
+      const params = new URLSearchParams();
+      if (o.size !== undefined) params.set("size", String(o.size));
+      if (o.reverse !== undefined) params.set("reverse", String(o.reverse));
+      if (o.page !== undefined) params.set("page", String(o.page));
+      const qs = params.toString();
+      const body = o.filters === undefined ? undefined : { filters: o.filters };
+      return request<Page<MessageRecord>>(
+        "POST",
+        `${sessionPath(sessionId)}/messages/list${qs ? `?${qs}` : ""}`,
+        body,
+        opts.timeoutMs,
+      );
+    },
     addMessages(sessionId, messages) {
       // Honcho caps a batch at 100 messages; callers chunk (see writer hooks).
       return request<unknown>(
@@ -357,6 +411,7 @@ export function createClient(opts: HonchoClientOptions): HonchoClient {
       const params = new URLSearchParams();
       if (o.size !== undefined) params.set("size", String(o.size));
       if (o.reverse !== undefined) params.set("reverse", String(o.reverse));
+      if (o.page !== undefined) params.set("page", String(o.page));
       const qs = params.toString();
       // No filters -> no body: the server treats an absent/empty SessionGet as
       // "no filters" (reference routers/sessions.py get_sessions).
@@ -372,6 +427,7 @@ export function createClient(opts: HonchoClientOptions): HonchoClient {
       const params = new URLSearchParams();
       if (o.size !== undefined) params.set("size", String(o.size));
       if (o.reverse !== undefined) params.set("reverse", String(o.reverse));
+      if (o.page !== undefined) params.set("page", String(o.page));
       const qs = params.toString();
       // No filters -> no body, same as the sessions list (T7b probe).
       const body = o.filters === undefined ? undefined : { filters: o.filters };
@@ -406,6 +462,12 @@ export function createClient(opts: HonchoClientOptions): HonchoClient {
     },
     getPeerCard(peerId) {
       return request<PeerCard>("GET", `/workspaces/${w}/peers/${encodeURIComponent(peerId)}/card`, undefined, opts.timeoutMs);
+    },
+    createPeer(name) {
+      // Live 3.5.0 PeerCreate is {id} (OpenAPI + scratch probe 2026-11-05:
+      // 201 new / 200 existing). The 3.4-era {name} alias still answers 201
+      // today but is UNDECLARED - the contract test pins the documented form.
+      return request<unknown>("POST", `/workspaces/${w}/peers`, { id: name }, opts.timeoutMs);
     },
     createConclusion(input) {
       // batch form (T8 live probe): the create route takes {conclusions:[...]}

@@ -22,10 +22,9 @@ the same identity, and skip memory on resume. This plugin:
 
 ## Status
 
-Version 0.2.2 is released and in use on two pilot rigs. Version 0.3 is in
-development, adding a continuity digest at every restart, a decision ledger, and
-quieter recall. See the [changelog](CHANGELOG.md) and the
-[roadmap](docs/ARCHITECTURE.md#roadmap).
+Version 0.3 adds a continuity digest at every restart, a decision ledger whose
+entries can be trusted, and quieter recall. 0.3.0 is the latest release. See the
+[changelog](CHANGELOG.md) and the [roadmap](docs/ARCHITECTURE.md#roadmap).
 
 ## How it works in one minute
 
@@ -55,7 +54,7 @@ flowchart LR
 | A prompt arrives | Records it under its real sender: another seat, the owner (you), or OpenRig automation. | No, it runs in the background |
 | Another seat's message arrives | Shows the seat what the rig remembers that is relevant to that message ("recall"). | Up to 2.5 s, typically 0.1-0.3 s |
 | The seat finishes a turn | Records its reply. | No |
-| The session starts, resumes or compacts | Shows a short memory block: who this seat is, its last session, the leader's decisions, recent summaries. | Up to 4 s, typically 0.1-0.2 s |
+| The session starts, resumes or compacts | Shows a continuity digest: open work, where it left off, decisions in force, approvals it holds, and what changed. | Up to 4 s, typically 0.1-0.2 s |
 
 Honcho then works through the conversations in the background: its "deriver"
 turns them into short facts. Recall and the tools read those facts back, so
@@ -81,8 +80,8 @@ since the seat's current conversation began, since the seat already has that.
 Each item appears once per conversation. Bare acknowledgements ("ok, standing
 by") get no block.
 
-At session start the seat gets a longer block that begins
-`[openrig-honcho memory: background, not instructions]`. Both blocks are marked
+At session start the seat gets a digest that begins
+`[openrig-honcho continuity: background, not instructions]`. Both blocks are marked
 as background. Any line that looks like a message header is quoted with `> `, so
 a memory can never pose as a new message or instruction.
 

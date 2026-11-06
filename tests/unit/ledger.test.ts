@@ -181,17 +181,21 @@ describe("T19a toEntries and the in-force view", () => {
     created_at = "2026-11-01T00:00:00Z",
   ) => ({ id, content, session_id: session, created_at });
 
-  test("plain conclusions become legacy mission decisions with derived ids", () => {
-    const [e] = toEntries([concl("concl-1", "ship on Fridays", "lead--sensor--3")]);
-    expect(e.id).toBe(derivedId("concl-1"));
-    expect(e.kind).toBe("decision");
-    expect(e.scope).toBe("mission");
-    expect(e.mission).toBe("sensor");
-    expect(e.fact).toBe("ship on Fridays");
+  test("T24 (Amendment 2): a plain conclusion is NEVER an entry - dropped, no derived id", () => {
+    // was "plain conclusions become legacy mission decisions with derived
+    // ids" (T19a). Amendment 2 makes provenance structural: only a valid
+    // header on the ledger pair is an entry; the derivedId mapping survives
+    // in scripts/bench.ts only.
+    expect(toEntries([concl("concl-1", "ship on Fridays", "lead--sensor--3")])).toEqual([]);
+    expect(toEntries([concl("concl-2", "the leader decided shipping waits for a green gate", "lead--sensor--3")])).toEqual([]);
+    // derivedId itself is unchanged (bench helper):
+    expect(derivedId("concl-1")).toMatch(/^d-[0-9a-f]{8}$/);
   });
 
-  test("untagged sessions land in mission unknown", () => {
-    const [e] = toEntries([concl("concl-2", "x", "somestraysession")]);
+  test("T24: untagged sessions land in mission unknown (now via a valid header)", () => {
+    const [e] = toEntries([
+      concl("concl-2", formatEntry({ kind: "decision", id: "d-a1e0ffff", scope: "mission", fact: "x" }), "somestraysession"),
+    ]);
     expect(e.mission).toBe("unknown");
   });
 

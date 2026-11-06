@@ -14,6 +14,7 @@ import { createClient } from "../../plugin/src/honcho.ts";
 import { readSeatState, seatStatePath } from "../../plugin/src/missions.ts";
 import { buildInjection, type ContinuityStats, type ReaderDeps } from "../../plugin/src/reader.ts";
 import { fetchOpenWork } from "../../plugin/src/daemon.ts";
+import { LEDGER_PEER } from "../../plugin/src/ledger.ts";
 import { startFakeHoncho, type FakeHoncho } from "../support/fake-honcho.ts";
 import { makeTempDir } from "../support/tempdir.ts";
 
@@ -191,14 +192,14 @@ describe("T19b digest build", () => {
       fake.addConclusion(WS, {
         content: "[decision d-deadbeef · scope mission] Use LoRa at 868.",
         observer_id: SELF,
-        observed_id: SELF,
+        observed_id: LEDGER_PEER, // T24: entries live on the ledger pair
         session_id: s1,
         created_at: ago(3 * HOUR),
       });
       fake.addConclusion(WS, {
         content: "[approval d-cafe0001 · scope qitem-a] Ship the pilot build.",
         observer_id: SELF,
-        observed_id: SELF,
+        observed_id: LEDGER_PEER,
         session_id: s1,
         created_at: ago(HOUR),
       });
@@ -493,7 +494,7 @@ describe("T19b digest build", () => {
         fake.addConclusion(WS, {
           content: "[decision d-deadbeef · scope mission] Use LoRa at 868.",
           observer_id: SELF,
-          observed_id: SELF,
+          observed_id: LEDGER_PEER, // T24: the old block reads the ledger pair too
           session_id: s1,
           created_at: ago(3 * HOUR),
         });
@@ -538,11 +539,11 @@ describe("T20c item-scoped approvals and labels", () => {
       const s1 = await firstRun(config, deps());
       fake.addConclusion(WS, {
         content: `[approval d-57a1e001 · scope ${QID_Z}] Ship release 9.`,
-        observer_id: SELF, observed_id: SELF, session_id: s1, created_at: ago(HOUR),
+        observer_id: SELF, observed_id: LEDGER_PEER, session_id: s1, created_at: ago(HOUR),
       });
       fake.addConclusion(WS, {
         content: "[decision d-9b170002 · scope mission] Use LoRa at 868.",
-        observer_id: SELF, observed_id: SELF, session_id: s1, created_at: ago(3 * HOUR),
+        observer_id: SELF, observed_id: LEDGER_PEER, session_id: s1, created_at: ago(3 * HOUR),
       });
       const text = await buildInjection(
         { source: "startup", claudeSessionId: "claude-2" },
@@ -574,11 +575,11 @@ describe("T20c item-scoped approvals and labels", () => {
       const s1 = await firstRun(config, deps());
       fake.addConclusion(WS, {
         content: `[approval d-4eed0009 · scope ${QID_Z}] Ship release 8.`,
-        observer_id: SELF, observed_id: SELF, session_id: s1, created_at: ago(HOUR),
+        observer_id: SELF, observed_id: LEDGER_PEER, session_id: s1, created_at: ago(HOUR),
       });
       fake.addConclusion(WS, {
         content: "[approval d-91900001 · scope rig] Always sign releases.",
-        observer_id: SELF, observed_id: SELF, session_id: s1, created_at: ago(2 * HOUR),
+        observer_id: SELF, observed_id: LEDGER_PEER, session_id: s1, created_at: ago(2 * HOUR),
       });
       const text = await buildInjection(
         { source: "startup", claudeSessionId: "claude-2" },
@@ -602,11 +603,11 @@ describe("T20c item-scoped approvals and labels", () => {
       const s1 = await firstRun(config, deps());
       fake.addConclusion(WS, {
         content: "[decision d-0f3b0001 · scope qitem-b] Antenna budget is 5 dBi.",
-        observer_id: SELF, observed_id: SELF, session_id: s1, created_at: ago(HOUR),
+        observer_id: SELF, observed_id: LEDGER_PEER, session_id: s1, created_at: ago(HOUR),
       });
       fake.addConclusion(WS, {
         content: `[decision d-60ae0001 · scope ${QID_C}] Ship from the old runner.`,
-        observer_id: SELF, observed_id: SELF, session_id: s1, created_at: ago(2 * HOUR),
+        observer_id: SELF, observed_id: LEDGER_PEER, session_id: s1, created_at: ago(2 * HOUR),
       });
       const text = await buildInjection(
         { source: "startup", claudeSessionId: "claude-2" },
@@ -630,7 +631,7 @@ describe("T20c item-scoped approvals and labels", () => {
       const s1 = await firstRun(config, deps());
       fake.addConclusion(WS, {
         content: "[approval d-431d0001 · scope qitem-a] Wire the radio driver is approved.",
-        observer_id: SELF, observed_id: SELF, session_id: s1, created_at: ago(HOUR),
+        observer_id: SELF, observed_id: LEDGER_PEER, session_id: s1, created_at: ago(HOUR),
       });
       const text = await buildInjection(
         { source: "startup", claudeSessionId: "claude-2" },

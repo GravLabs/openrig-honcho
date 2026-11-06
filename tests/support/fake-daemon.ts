@@ -7,6 +7,8 @@ export interface FakeDaemonOpts {
   /** body for GET /api/queue/outbox/list (default: the empty array) */
   outbox?: unknown;
   outboxStatus?: number;
+  /** body for GET /api/queue/list (default: the empty array) - T25 */
+  queueList?: unknown;
   /** body for GET /api/queue/<id> (default: the empty object) */
   item?: unknown;
   itemStatus?: number;
@@ -31,6 +33,9 @@ export async function startFakeDaemon(opts: FakeDaemonOpts = {}): Promise<FakeDa
       }
       if (path === "/api/queue/outbox/list") {
         return Response.json(opts.outbox ?? [], { status: opts.outboxStatus ?? 200 });
+      }
+      if (path === "/api/queue/list") {
+        return Response.json(opts.queueList ?? []);
       }
       if (path.startsWith("/api/queue/") && path.length > "/api/queue/".length) {
         return Response.json(opts.item ?? {}, { status: opts.itemStatus ?? 200 });

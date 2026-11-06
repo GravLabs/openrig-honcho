@@ -12,6 +12,7 @@ import type { Config } from "../../plugin/src/env.ts";
 import { createClient } from "../../plugin/src/honcho.ts";
 import { handleLine } from "../../plugin/src/mcp.ts";
 import { renderInjection } from "../../plugin/src/inject.ts";
+import { LEDGER_PEER } from "../../plugin/src/ledger.ts";
 import { startFakeHoncho, type FakeHoncho } from "../support/fake-honcho.ts";
 
 const WS = "ws";
@@ -243,7 +244,9 @@ describe("search tool (T16d)", () => {
     const h = await mk({ leader: true });
     try {
       const seed = (content: string, at: string): void => {
-        h.fake.addConclusion(WS, { content, observer_id: SELF, observed_id: SELF, created_at: at });
+        // T24: search finds ledger entries on the reserved pair; marks come
+        // from the same pair read.
+        h.fake.addConclusion(WS, { content, observer_id: SELF, observed_id: LEDGER_PEER, created_at: at });
       };
       seed("[decision d-11111111 · scope mission] run on 868", ago(4 * HOUR));
       seed("[decision d-22222222 · scope mission · supersedes d-11111111] run on 915", ago(3 * HOUR));

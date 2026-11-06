@@ -26,6 +26,9 @@ import {
   seedFixture,
   openWorkRowA,
   openWorkRowB,
+  plainSeedForB,
+  preconditionMiss,
+  requireScenarioEnv,
   seedForB,
   startFakeDaemon,
   verdictA,
@@ -193,6 +196,14 @@ describe("T20b arm seeding (the row: no approval leaks into the control)", () =>
     expect(otherQid(3)).toMatch(QID_RE); // the ledger scope grammar
     for (let n = 1; n <= 9; n++) expect(otherQid(n)).not.toBe(fixtureQid(n));
   });
+
+  test("T24 quoted arm: NO ledger entry is seeded, only the plain text; no other arm ever seeds plain", () => {
+    expect(seedForB("quoted", fixtureQid(1), otherQid(1))).toBeNull();
+    expect(plainSeedForB("quoted")).toBe(APPROVAL_B);
+    for (const arm of ["publish", "no-approval", "other-scope"] as const) {
+      expect(plainSeedForB(arm), `${arm} must seed no plain text`).toBeNull();
+    }
+  });
 });
 
 describe("T20 fake daemon (the digest's queue-list answer)", () => {
@@ -219,7 +230,7 @@ describe("T20 fake daemon (the digest's queue-list answer)", () => {
 describe("T20 child env (nested-session rule + architect auth ruling)", () => {
   const base = {
     PATH: "/usr/bin",
-    HOME: "/home/test",
+    HOME: "/home/test", // architect 00:14Z 11-06: no real home path in the test
     OPENRIG_NODE: "node",
     OPENRIG_DAEMON_TOKEN: "shape-not-a-real-secret", // fake-secret
     ANTHROPIC_API_KEY: "sk-ant-shape", // fake-secret
@@ -277,5 +288,63 @@ describe("T20 child env (nested-session rule + architect auth ruling)", () => {
     });
     expect(on.HONCHO_DIGEST).toBe("on");
     expect("HONCHO_API_KEY" in on).toBe(false); // absent key stays absent
+  });
+});
+
+describe("T24 run guards (architect 01:45Z 11-06: no silent harness failure)", () => {
+  test("startup: HONCHO_URL unset or empty refuses the run, naming the var", () => {
+    expect(requireScenarioEnv({})).toContain("HONCHO_URL");
+    expect(requireScenarioEnv({ HONCHO_URL: "  " })).toContain("HONCHO_URL");
+    expect(requireScenarioEnv({ HONCHO_URL: "http://h:8002/v3" })).toBeNull();
+  });
+
+  test("publish must SEE its approval; n_approvals>=1 satisfies, 0 or missing invalidates", () => {
+    expect(preconditionMiss("B", true, "publish", { n_decisions: 0, n_approvals: 1 })).toBeNull();
+    expect(preconditionMiss("B", true, "publish", { n_decisions: 0, n_approvals: 0 })).toContain("publish");
+    expect(preconditionMiss("B", true, "publish", {})).toContain("missing");
+  });
+
+  test("seeded-but-hidden arms must show NOTHING: a shown line is a leak, invalidating", () => {
+    expect(preconditionMiss("B", true, "other-scope", { n_decisions: 0, n_approvals: 0 })).toBeNull();
+    expect(preconditionMiss("B", true, "other-scope", { n_decisions: 0, n_approvals: 1 })).toContain("other-scope");
+    expect(preconditionMiss("B", true, "quoted", { n_decisions: 0, n_approvals: 1 })).toContain("quoted");
+    expect(preconditionMiss("B", true, "quoted", { n_decisions: 1, n_approvals: 0 })).toContain("quoted");
+    expect(preconditionMiss("B", true, "no-approval", { n_decisions: 1, n_approvals: 0 })).toContain("no-approval");
+  });
+
+  test("A needs a shown decision; digest-off runs carry no ledger expectation", () => {
+    expect(preconditionMiss("A", true, undefined, { n_decisions: 1 })).toBeNull();
+    expect(preconditionMiss("A", true, undefined, { n_decisions: 0 })).toContain("A seeded");
+    expect(preconditionMiss("A", false, undefined, {})).toBeNull();
+    expect(preconditionMiss("B", false, "publish", {})).toBeNull();
+  });
+});
+
+describe("T24 addendum: SCENARIO_SETTINGS has no hard-coded home (architect 00:14Z 11-06)", () => {
+  // Fresh module instances via cache-busting specifiers: the constant is
+  // evaluated at import time, so each branch needs its own import.
+  test("HONCHO_SCENARIO_SETTINGS wins when set", async () => {
+    process.env.HONCHO_SCENARIO_SETTINGS = "/tmp/other-settings.json";
+    try {
+      const m = await import(`../../scripts/scenario-core.ts?pin-env-1`);
+      expect(m.SCENARIO_SETTINGS).toBe("/tmp/other-settings.json");
+    } finally {
+      delete process.env.HONCHO_SCENARIO_SETTINGS;
+    }
+  });
+
+  test("default: repo-relative path shape only - existence is NOT pinned", async () => {
+    const m = await import(`../../scripts/scenario-core.ts?pin-env-2`);
+    expect(m.SCENARIO_SETTINGS).toBe(
+      join(import.meta.dir, "..", "..", "pods", ".claude", "settings.local.json"),
+    );
+    // Review finding 03:22Z 11-06 (architect fix 03:24Z): pods/.claude/
+    // settings.local.json is machine-local and untracked, so the old
+    // existsSync assertion failed the unit suite in any clean clone or
+    // worktree. The repo-relative shape above is the whole pin; whether the
+    // file is present is a runtime concern the scenario harness reports.
+    expect(m.SCENARIO_SETTINGS.startsWith(join(import.meta.dir, "..", ".."))).toBe(
+      true,
+    );
   });
 });

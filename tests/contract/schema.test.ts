@@ -49,10 +49,18 @@ const CALLS: CallSpec[] = [
   { client: "listScopeSessions", method: "POST", path: "/workspaces/:w/scopes/:sc/sessions/list",
     body: {}, query: ["size", "reverse"], response: ["items", "total", "page", "size", "pages", "items.id"] },
   { client: "listSessions", method: "POST", path: "/workspaces/:w/sessions/list",
-    body: { filters: "object?" }, query: ["size", "reverse"], response: ["items", "total", "page", "size", "pages", "items.id"] },
+    body: { filters: "object?" }, query: ["size", "reverse", "page"], response: ["items", "total", "page", "size", "pages", "items.id"] },
   { client: "listConclusions", method: "POST", path: "/workspaces/:w/conclusions/list",
-    body: { filters: "object?" }, query: ["size", "reverse"],
+    body: { filters: "object?" }, query: ["size", "reverse", "page"],
     response: ["items", "total", "page", "size", "pages", "items.id", "items.content", "items.created_at"] },
+  // T24 (Amendment 2): get-or-create a peer (the ledger peer must exist
+  // before its first entry - live probe, T24 row); offset-paged messages
+  // list (migrate-ledger reads the leader's decision messages).
+  { client: "createPeer", method: "POST", path: "/workspaces/:w/peers",
+    body: { id: "string" }, query: [], response: ["id"] },
+  { client: "listMessages", method: "POST", path: "/workspaces/:w/sessions/:s/messages/list",
+    body: { filters: "object?" }, query: ["size", "reverse", "page"],
+    response: ["items", "total", "page", "size", "pages", "items.id"] },
   // the answer is a plain ARRAY (no page wrapper, probe 2026-11-01);
   // fieldExists cannot descend an array root, so response stays [] like
   // createConclusion - recall.ts reads id/content/created_at off elements.

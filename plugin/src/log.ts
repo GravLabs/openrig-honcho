@@ -72,6 +72,14 @@ export interface LogEvent {
   n_approvals?: number;
   n_away?: number;
   has_pointer?: boolean;
+  /** T24 F2: ledger-pair read hit the page cap; value is the total count. */
+  ledger_capped?: number;
+  /** T22b: shape of an outbox body mismatch - COUNTS and one character
+   * CLASS only, never characters or text (architect 02:13Z 11-06). */
+  stored_len?: number;
+  delivered_len?: number;
+  offset?: number;
+  char_class?: string;
   bytes?: number;
   error_class?: string;
 }
@@ -134,6 +142,11 @@ export function logEvent(config: LogTarget, e: LogEvent): void {
     if (e.n_approvals !== undefined) line.n_approvals = e.n_approvals;
     if (e.n_away !== undefined) line.n_away = e.n_away;
     if (e.has_pointer !== undefined) line.has_pointer = e.has_pointer;
+    if (e.ledger_capped !== undefined) line.ledger_capped = e.ledger_capped;
+    if (e.stored_len !== undefined) line.stored_len = e.stored_len;
+    if (e.delivered_len !== undefined) line.delivered_len = e.delivered_len;
+    if (e.offset !== undefined) line.offset = e.offset;
+    if (e.char_class !== undefined) line.char_class = e.char_class;
     if (e.bytes !== undefined) line.bytes = e.bytes;
     if (e.error_class !== undefined) line.error_class = e.error_class;
     appendFileSync(file, `${JSON.stringify(line)}\n`, { mode: 0o600 });

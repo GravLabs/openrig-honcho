@@ -414,6 +414,24 @@ export async function startFakeHoncho(): Promise<FakeHoncho> {
       });
     }
 
+    // POST /workspaces/:w/peers - get-or-create (T24; live 3.5.0 schema is
+    // PeerCreate{id} - probed 2026-11-05 23:3xZ on scratch: {id} answers 201
+    // new / 200 existing, and a conclusion needs BOTH pair peers created
+    // first). Answer the peer; the peer becomes known so a later conclusion
+    // on its pair passes the existence check.
+    if (segs.length === 3 && segs[2] === "peers" && method === "POST") {
+      const b = (body ?? {}) as { id?: unknown };
+      if (typeof b.id !== "string" || b.id === "") {
+        return Response.json({ detail: "id required" }, { status: 422 });
+      }
+      if (!ID_RE.test(b.id)) return badId("peer", b.id);
+      const set = state.peers.get(w) ?? new Set<string>();
+      const existed = set.has(b.id);
+      set.add(b.id);
+      state.peers.set(w, set);
+      return Response.json({ id: b.id, workspace_id: w }, { status: existed ? 200 : 201 });
+    }
+
     // GET /workspaces/:w/peers/:peer/card - a setPeerCard seed answers for any
     // peer; otherwise a known peer gets [] and an unknown one 404 (live).
     if (segs.length === 5 && segs[2] === "peers" && segs[4] === "card" && method === "GET") {
@@ -464,8 +482,30 @@ export async function startFakeHoncho(): Promise<FakeHoncho> {
         items = items.filter((c) => c[k] === v);
       }
       if (params.get("reverse") === "true") items = items.reverse();
-      if (sizeParam !== null && Number.isFinite(Number(sizeParam))) items = items.slice(0, Math.max(0, Number(sizeParam)));
-      return page(items);
+      // T24: offset paging like the real paginate_offset_or_cursor and like
+      // messages/list above - the ledger-pair reader pages 1..5 x 100 and
+      // trusts total. A size-less caller keeps the old answer (everything,
+      // page 1 of 1); page defaults to 1, so old size+no-page callers are
+      // unchanged too.
+      const total = items.length;
+      const sizeNum = sizeParam !== null && Number.isFinite(Number(sizeParam))
+        ? Math.max(0, Number(sizeParam)) : total;
+      const pageRaw = params.get("page");
+      const pageNumRaw = pageRaw !== null ? Number(pageRaw) : NaN;
+      const pageNum = Number.isFinite(pageNumRaw) ? Math.max(1, pageNumRaw) : 1;
+      const pages = sizeNum > 0 ? Math.max(1, Math.ceil(total / sizeNum)) : 1;
+      const slice = sizeNum > 0 ? items.slice((pageNum - 1) * sizeNum, pageNum * sizeNum) : [];
+      return Response.json({
+        items: slice,
+        total,
+        page: pageNum,
+        size: sizeNum,
+        pages,
+        current_page: pageNum,
+        next_page: pageNum < pages ? pageNum + 1 : null,
+        previous_page: pageNum > 1 ? pageNum - 1 : null,
+        current_page_backwards: false,
+      });
     }
 
     // POST /workspaces/:w/conclusions/query (T16b, ADR-0011 decision 1) -
@@ -504,6 +544,13 @@ export async function startFakeHoncho(): Promise<FakeHoncho> {
         const c = (item ?? {}) as Record<string, unknown>;
         for (const k of ["observer_id", "observed_id", "session_id"] as const) {
           if (typeof c[k] === "string" && !ID_RE.test(c[k] as string)) return badId(k, c[k] as string);
+        }
+        // live precondition (T24 row probe): creating needs EXISTING peers -
+        // an uncreated observer/observed answers 404, session membership
+        // does not matter. addConclusion() seeds past this route on purpose.
+        for (const k of ["observer_id", "observed_id"] as const) {
+          const p = c[k];
+          if (typeof p === "string" && !state.peers.get(w)?.has(p)) return notFound();
         }
       }
       const list = state.conclusions.get(w) ?? [];

@@ -19,6 +19,7 @@ import type { HonchoClient } from "../../plugin/src/honcho.ts";
 import { handleLine } from "../../plugin/src/mcp.ts";
 import { readRigMission } from "../../plugin/src/missions.ts";
 import { startFakeHoncho, type FakeHoncho } from "../support/fake-honcho.ts";
+import { LEDGER_PEER } from "../../plugin/src/ledger.ts";
 
 const WS = "ws";
 const SELF = "build";
@@ -173,7 +174,7 @@ describe("bin/mcp.ts rig_memory (T8)", () => {
       expect(String(c0.content)).toContain("[REDACTED");
       expect(String(c0.content)).not.toContain("FAKETHISIS");
       expect(c0.observer_id).toBe(SELF);
-      expect(c0.observed_id).toBe(SELF);
+      expect(c0.observed_id).toBe(LEDGER_PEER); // T24: entries ride the reserved pair
       expect(c0.session_id).toBe("build--general--1");
       // the session was ensured first (the real server 404s otherwise)
       expect(fake.state.sessions.has(`${WS}/build--general--1`)).toBe(true);

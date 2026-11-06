@@ -23,7 +23,7 @@ import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { cleanupScratch, scratchWorkspace } from "../tests/support/scratch.ts";
 import type { HonchoClient } from "../plugin/src/honcho.ts";
-import { currentLedger, derivedId, toEntries } from "../plugin/src/ledger.ts";
+import { currentLedger, derivedId, parseEntry, type LedgerEntry } from "../plugin/src/ledger.ts";
 
 // ---------------------------------------------------------------- types
 
@@ -162,14 +162,46 @@ export function formatReport(cells: Cell[]): string {
 /** A "lead entry" for the ledger links: a conclusion the lead authored. */
 const isLead = (c: Concl): boolean => c.observer === "lead";
 
+/**
+ * T24 (Amendment 2): ledger.toEntries dropped the legacy plain->derived-id
+ * mapping for real data; the BENCHMARK still needs it (the dataset is plain
+ * content with supersedes links), so the mapping lives HERE, test-helper
+ * only. It must never be reached from a plugin read path.
+ */
+function benchEntries(
+  items: { id: string; content: string; session_id?: string; created_at?: string }[],
+): LedgerEntry[] {
+  return items.map((c) => {
+    const p = parseEntry(c.content);
+    const at = typeof c.created_at === "string" ? c.created_at : "";
+    const m = /^(.*)--(.*)--\d+$/.exec(typeof c.session_id === "string" ? c.session_id : "");
+    const mission = m === null ? "unknown" : m[2];
+    if (p.kind === "plain")
+      return { id: derivedId(c.id), kind: "decision" as const, scope: "mission", mission, fact: p.fact, at };
+    if (p.kind === "retire")
+      return { id: c.id, kind: "retire" as const, scope: "mission", mission, fact: "", target: p.target, at };
+    return {
+      id: p.id,
+      kind: p.kind,
+      scope: p.scope,
+      ...(p.supersedes !== undefined ? { supersedes: p.supersedes } : {}),
+      mission,
+      fact: p.fact,
+      ...(p.reason !== undefined ? { reason: p.reason } : {}),
+      at,
+    };
+  });
+}
+
 /** T19a2: the dataset ids IN FORCE as of asOf - the ledger rule is NOT
- * reimplemented here: entries are built by ledger.toEntries (plain dataset
- * content -> mission decisions with derived ids), the dataset's supersedes
- * links are grafted onto those ledger ids, and ledger.currentLedger does
- * the supersession closure. Entries newer than asOf do not exist yet. */
+ * reimplemented here: entries are built by benchEntries (the benchmark's
+ * legacy plain-content -> derived-id mapping, kept after T24), the
+ * dataset's supersedes links are grafted onto those ledger ids, and
+ * ledger.currentLedger does the supersession closure. Entries newer than
+ * asOf do not exist yet. */
 export function inForceIds(conclusions: Concl[], asOf: string): Set<string> {
   const past = conclusions.filter((c) => c.created_at <= asOf);
-  const entries = toEntries(
+  const entries = benchEntries(
     past.map((c) => ({ id: c.id, content: c.content, session_id: c.session, created_at: c.created_at })),
   );
   const byLedgerId = new Map(entries.map((e) => [e.id, e]));

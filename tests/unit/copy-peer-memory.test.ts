@@ -1,23 +1,25 @@
-// T17a (architect brief 2026-11-02): build-owned unit tests for
+// T17a (architect brief 2026-11-02) build-owned unit tests for
 // scripts/copy-peer-memory.ts, entirely against the fake server - no real
-// server, no scratch workspace touched (the scratch integration is a separate
-// file and runs only with the architect told first).
+// server, no scratch workspace touched (the scratch integration is a
+// separate file and runs only with the architect told first).
 //
-// Seeds mirror the remember shape: a stamped from-session, a decision message
-// (metadata.kind "decision", sender = the peer) plus the matching
-// observer = observed self-conclusion, and deriver look-alikes (self
-// conclusions with NO message) that must never be copied.
+// T27 (architect 2026-11-06 04:33Z): the script carries the RESERVED-PAIR
+// ledger entries (observer = the leader, observed = openrig-ledger) - the
+// post-T24 truth. Seeds here write pair conclusions directly (the same
+// addConclusion door the reader pins use); deriver look-alikes on the SELF
+// pair and plain conclusions on the pair must never be carried, and the
+// in-force set must compute identical before and after a copy (a superseded
+// and a retired entry ride the links inside the content).
 
 import { describe, expect, test } from "bun:test";
 import { createClient } from "../../plugin/src/honcho.ts";
 import { parseArgs, runCopy, type CopyArgs } from "../../scripts/copy-peer-memory.ts";
+import { LEDGER_PEER, formatEntry, formatRetire, parseEntry, toEntries, inForceFor } from "../../plugin/src/ledger.ts";
 import { startFakeHoncho, type FakeHoncho } from "../support/fake-honcho.ts";
 
 const WS = "ws";
 const FROM = "dev-arch";
 const TO = "design-arch";
-const T1 = "2026-10-01T00:00:00.000Z";
-const T2 = "2026-10-02T00:00:00.000Z";
 
 const mk = async () => {
   const fake: FakeHoncho = await startFakeHoncho();
@@ -26,101 +28,60 @@ const mk = async () => {
   return { fake, client, args };
 };
 
-const sessionSeed = (peer: string, mission: string) => ({
-  peers: { [peer]: { observe_me: true, observe_others: false } },
-  scopes: [mission === "general" ? "general" : `mission-${mission}`],
-  metadata: { rig_peer: peer, mission },
-});
-
-const decisionMsg = (content: string, mission: string, clientId: string, at: string) => ({
-  peer_id: FROM,
-  content,
-  created_at: at,
-  metadata: { client_id: clientId, kind: "decision", mission },
-});
-
-/** A remember-shaped decision: stamped session + message + self conclusion. */
-const seedDecision = async (
-  client: ReturnType<typeof createClient>,
-  sessionId: string,
-  mission: string,
+/** Pair entry straight into the fake state (bypasses the create route's
+ * peer precondition like every reader pin does). */
+const seedPair = (
+  fake: FakeHoncho,
+  peer: string,
+  session: string,
   content: string,
-  clientId: string,
-  at: string,
-) => {
-  const cs = await client.createSession(sessionId, sessionSeed(FROM, mission));
-  expect(cs.ok).toBe(true);
-  const am = await client.addMessages(sessionId, [decisionMsg(content, mission, clientId, at)]);
-  expect(am.ok).toBe(true);
-  const cc = await client.createConclusion({
+  at = "2026-10-01T00:00:00.000Z",
+): void => {
+  fake.addConclusion(WS, {
     content,
-    observer_id: FROM,
-    observed_id: FROM,
-    session_id: sessionId,
+    observer_id: peer,
+    observed_id: LEDGER_PEER,
+    session_id: session,
+    created_at: at,
   });
-  expect(cc.ok).toBe(true);
 };
 
-const stateSize = (m: Map<string, unknown>): number => m.size;
-const msgTotal = (fake: FakeHoncho): number =>
-  [...fake.state.messages.values()].reduce((a, l) => a + l.length, 0);
+const dec = (id: string, fact: string, scope = "mission", supersedes?: string): string =>
+  formatEntry({ kind: "decision", id, scope, fact, ...(supersedes !== undefined ? { supersedes } : {}) });
+
+const pairRows = (fake: FakeHoncho, peer: string): Array<Record<string, unknown>> =>
+  (fake.state.conclusions.get(WS) ?? []).filter(
+    (c) => c.observer_id === peer && c.observed_id === LEDGER_PEER,
+  ) as Array<Record<string, unknown>>;
+const pairContents = (fake: FakeHoncho, peer: string): string[] =>
+  pairRows(fake, peer).map((c) => String(c.content));
 const conclTotal = (fake: FakeHoncho): number =>
   [...fake.state.conclusions.values()].reduce((a, l) => a + l.length, 0);
-const msgsOf = (fake: FakeHoncho, session: string): Array<Record<string, unknown>> =>
-  (fake.state.messages.get(`${WS}/${session}`) ?? []) as Array<Record<string, unknown>>;
-const conclContents = (fake: FakeHoncho, peer: string): string[] =>
-  (fake.state.conclusions.get(WS) ?? [])
-    .filter((c) => c.observer_id === peer && c.observed_id === peer)
-    .map((c) => String(c.content));
 
-async function seedFull(t: { fake: FakeHoncho; client: ReturnType<typeof createClient> }) {
-  // mission deploy: one plain decision + one chunked (2 messages, one conclusion)
-  await seedDecision(t.client, `${FROM}--deploy--1`, "deploy", "we chose sqlite", "c1", T1);
-  const cs = await t.client.createSession(`${FROM}--deploy--2`, sessionSeed(FROM, "deploy"));
-  expect(cs.ok).toBe(true);
-  const am = await t.client.addMessages(`${FROM}--deploy--2`, [
-    {
-      peer_id: FROM,
-      content: "part A ",
-      created_at: T2,
-      metadata: { client_id: "c2a", kind: "decision", mission: "deploy", chunk: { id: "ch1", i: 1, n: 2 } },
-    },
-    {
-      peer_id: FROM,
-      content: "part B",
-      created_at: T2,
-      metadata: { client_id: "c2b", kind: "decision", mission: "deploy", chunk: { id: "ch1", i: 2, n: 2 } },
-    },
-  ]);
-  expect(am.ok).toBe(true);
-  const cc = await t.client.createConclusion({
-    content: "part A part B",
-    observer_id: FROM,
-    observed_id: FROM,
-    session_id: `${FROM}--deploy--2`,
-  });
-  expect(cc.ok).toBe(true);
-  // mission general: one decision
-  await seedDecision(t.client, `${FROM}--general--1`, "general", "ship on friday", "c3", T2);
-  // deriver look-alikes: self conclusions with NO message (the 818/856 shape)
-  const lookalikes = await t.client.createConclusion({
+/** The standard seed: deploy keeps a supersede chain (only d-aaaa0002 is
+ * in force), general has a retired entry (nothing in force), plus a
+ * rig-scoped entry visible everywhere, a PLAIN pair conclusion and a
+ * self-pair look-alike - neither of which is ever carried. */
+async function seedStandard(fake: FakeHoncho): Promise<void> {
+  seedPair(fake, FROM, `${FROM}--deploy--1`, dec("d-aaaa0001", "we chose sqlite"));
+  seedPair(
+    fake,
+    FROM,
+    `${FROM}--deploy--1`,
+    dec("d-aaaa0002", "we chose postgres", "mission", "d-aaaa0001"),
+    "2026-10-02T00:00:00.000Z",
+  );
+  seedPair(fake, FROM, `${FROM}--general--1`, dec("d-cccc0003", "ship on friday"));
+  seedPair(fake, FROM, `${FROM}--general--1`, formatRetire("d-cccc0003", "superseded by calendar"));
+  seedPair(fake, FROM, `${FROM}--deploy--1`, dec("d-eeee0005", "no force pushes", "rig"));
+  seedPair(fake, FROM, `${FROM}--deploy--1`, "a plain recall note - never an entry");
+  // the 818/856 shape: deriver look-alike on the SELF pair
+  fake.addConclusion(WS, {
     content: "derived noise, never a decision",
     observer_id: FROM,
     observed_id: FROM,
     session_id: `${FROM}--deploy--1`,
   });
-  expect(lookalikes.ok).toBe(true);
-  // a NON-decision message (must not be copied even though the peer sent it)
-  const am2 = await t.client.addMessages(`${FROM}--deploy--1`, [
-    { peer_id: FROM, content: "just chatter", created_at: T1, metadata: { client_id: "c4", kind: "reply", mission: "deploy" } },
-  ]);
-  expect(am2.ok).toBe(true);
-  // the card: whole-word rename + a look-alike substring that must survive
-  t.fake.setPeerCard(WS, FROM, [
-    `${FROM} leads the deploy work`,
-    "the ex-dev-arch-x note stays verbatim",
-    "plain line",
-  ]);
 }
 
 describe("T17a parseArgs refusals (no network)", () => {
@@ -151,171 +112,113 @@ describe("T17a parseArgs refusals (no network)", () => {
   });
 });
 
-describe("T17a copy against the fake server", () => {
-  test("apply: decisions (incl. chunked) land for the to-peer, look-alikes never; card renamed", async () => {
-    const t = await mk();
-    await seedFull(t);
-    const lines: string[] = [];
-    const res = await runCopy(t.args, (l) => lines.push(l), () => "2026-11-02T04:00:00.000Z");
-    expect(res.ok).toBe(true);
-    if (!res.ok) return;
-    expect(res.counts).toMatchObject({ missions: 2, found: 3, created: 3, skipped: 0, cardItems: 3, cardCopied: true });
-    expect(res.dry).toBe(false);
-
-    // to-sessions exist, stamped like the plugin creates them
-    const dep = t.fake.state.sessions.get(`${WS}/${TO}--deploy--1`);
-    expect(dep).toBeDefined();
-    expect((dep as { metadata: Record<string, unknown> }).metadata).toEqual({ rig_peer: TO, mission: "deploy" });
-    expect(t.fake.state.sessions.get(`${WS}/${TO}--general--1`)).toBeDefined();
-
-    // conclusions: the 3 decisions, none of the look-alikes, none of the chatter
-    const toConcl = conclContents(t.fake, TO);
-    expect(toConcl.sort()).toEqual(["part A part B", "ship on friday", "we chose sqlite"]);
-    expect(toConcl).not.toContain("derived noise, never a decision");
-    expect(toConcl).not.toContain("just chatter");
-
-    // decision messages: to-peer author, copied_from + original_at metadata
-    const dm = msgsOf(t.fake, `${TO}--deploy--1`);
-    expect(dm.length).toBe(2);
-    const sqlite = dm.find((m) => m.content === "we chose sqlite");
-    expect(sqlite).toBeDefined();
-    const md = (sqlite as { metadata: Record<string, unknown> }).metadata;
-    expect(md.kind).toBe("decision");
-    expect(md.copied_from).toBe(FROM);
-    expect(md.original_at).toBe(T1);
-    expect(md.mission).toBe("deploy");
-    expect((sqlite as { peer_id: string }).peer_id).toBe(TO);
-
-    // card: whole-word from->to, substring survivor, plain line kept
-    const cardResp = await t.client.getPeerCard(TO);
-    expect(cardResp.ok).toBe(true);
-    expect((cardResp as { data: { peer_card: string[] } }).data.peer_card).toEqual([
-      `${TO} leads the deploy work`,
+describe("T27 pair copy against the fake server", () => {
+  test("apply: entries land verbatim on the to pair; plain and look-alikes never; card renamed", async () => {
+    const { fake, args } = await mk();
+    await seedStandard(fake);
+    fake.setPeerCard(WS, FROM, [
+      `${FROM} leads the deploy work`,
       "the ex-dev-arch-x note stays verbatim",
       "plain line",
     ]);
+    const res = await runCopy(args, () => {});
+    expect(res.ok).toBe(true);
+    if (!res.ok) throw new Error(`${res.fact} / ${res.reason} / ${res.fix}`);
+    // 6 pair rows, 1 plain -> found counts ENTRIES only (sqlite, postgres,
+    // ship, retire, rig-entry)
+    expect(res.counts).toMatchObject({ missions: 2, found: 5, created: 5, skipped: 0, cardItems: 3 });
+    const to = pairContents(fake, TO);
+    // every VALID-HEADER entry of the from pair rides over verbatim
+    for (const c of pairRows(fake, FROM)) {
+      if (parseEntry(String(c.content)).kind === "plain") continue;
+      expect(to).toContain(String(c.content));
+    }
+    expect(to.some((c) => c.includes("plain recall note"))).toBe(false); // never an entry
+    expect(to.some((c) => c.includes("derived noise"))).toBe(false); // self pair never read
+    const card = fake.state.peerCards.get(`${WS}/${TO}`) ?? [];
+    expect(card).toContain(`${TO} leads the deploy work`);
+    expect(card).toContain("the ex-dev-arch-x note stays verbatim");
+  });
 
-    // nothing of the from-peer changed
-    expect(conclContents(t.fake, FROM)).toContain("derived noise, never a decision");
+  test("the in-force set computes IDENTICAL before and after, superseded and retired included", async () => {
+    const { fake, args } = await mk();
+    await seedStandard(fake);
+    const res = await runCopy(args, () => {});
+    expect(res.ok).toBe(true);
+    const before = (mission: string): string[] =>
+      inForceFor(toEntries(pairRows(fake, FROM) as never), mission).map((e) => e.id).sort();
+    const after = (mission: string): string[] =>
+      inForceFor(toEntries(pairRows(fake, TO) as never), mission).map((e) => e.id).sort();
+    // deploy: postgres (sqlite superseded) + the rig entry; general: ship
+    // retired out; the ids ride the verbatim content unchanged
+    expect(before("deploy")).toEqual(["d-aaaa0002", "d-eeee0005"]);
+    expect(after("deploy")).toEqual(before("deploy"));
+    expect(before("general")).toEqual(["d-eeee0005"]);
+    expect(after("general")).toEqual(before("general"));
+    expect(after("general")).not.toContain("d-cccc0003");
   });
 
   test("idempotency: a second apply creates nothing (skipped = found), state unchanged", async () => {
-    const t = await mk();
-    await seedFull(t);
-    const first = await runCopy(t.args, () => {}, () => "2026-11-02T04:00:00.000Z");
+    const { fake, args } = await mk();
+    await seedStandard(fake);
+    const first = await runCopy(args, () => {});
     expect(first.ok).toBe(true);
-    const sessions = stateSize(t.fake.state.sessions);
-    const msgs = msgTotal(t.fake);
-    const concl = conclTotal(t.fake);
-    const second = await runCopy(t.args, () => {}, () => "2026-11-02T04:00:00.000Z");
+    if (!first.ok) throw new Error(first.fact);
+    const totalAfterFirst = conclTotal(fake);
+    const second = await runCopy(args, () => {});
     expect(second.ok).toBe(true);
-    if (!second.ok) return;
-    expect(second.counts).toMatchObject({ found: 3, created: 0, skipped: 3 });
-    expect(stateSize(t.fake.state.sessions)).toBe(sessions);
-    expect(msgTotal(t.fake)).toBe(msgs);
-    expect(conclTotal(t.fake)).toBe(concl);
+    if (!second.ok) throw new Error(second.fact);
+    expect(second.counts).toMatchObject({ found: 5, created: 0, skipped: 5 });
+    expect(conclTotal(fake)).toBe(totalAfterFirst);
   });
 
   test("dry run: same counts, ZERO writes", async () => {
-    const t = await mk();
-    await seedFull(t);
-    const before = {
-      sessions: stateSize(t.fake.state.sessions),
-      msgs: msgTotal(t.fake),
-      concl: conclTotal(t.fake),
-      cards: stateSize(t.fake.state.peerCards),
-    };
-    const res = await runCopy({ ...t.args, apply: false }, () => {}, () => "2026-11-02T04:00:00.000Z");
+    const { fake, args } = await mk();
+    await seedStandard(fake);
+    const total = conclTotal(fake);
+    const res = await runCopy({ ...args, apply: false }, () => {});
     expect(res.ok).toBe(true);
-    if (!res.ok) return;
+    if (!res.ok) throw new Error(res.fact);
+    expect(res.counts).toMatchObject({ found: 5, created: 5, skipped: 0 });
     expect(res.dry).toBe(true);
-    expect(res.counts).toMatchObject({ found: 3, created: 3, skipped: 0, cardItems: 3, cardCopied: false });
-    expect(stateSize(t.fake.state.sessions)).toBe(before.sessions);
-    expect(msgTotal(t.fake)).toBe(before.msgs);
-    expect(conclTotal(t.fake)).toBe(before.concl);
-    expect(stateSize(t.fake.state.peerCards)).toBe(before.cards);
-    expect(t.fake.state.peerCards.get(`${WS}/${TO}`)).toBeUndefined();
+    expect(conclTotal(fake)).toBe(total); // nothing written
+    expect(pairContents(fake, TO)).toEqual([]);
   });
 
-  test("already-carried content is skipped, the rest still copies into a fresh free-n session", async () => {
-    const t = await mk();
-    await seedFull(t);
-    // pre-exist one carried decision for the to-peer in deploy
-    const cs = await t.client.createSession(`${TO}--deploy--1`, sessionSeed(TO, "deploy"));
-    expect(cs.ok).toBe(true);
-    const am = await t.client.addMessages(`${TO}--deploy--1`, [
-      {
-        peer_id: TO,
-        content: "we chose sqlite",
-        created_at: T1,
-        metadata: { client_id: "x1", kind: "decision", mission: "deploy", copied_from: FROM, original_at: T1 },
-      },
-    ]);
-    expect(am.ok).toBe(true);
-    const res = await runCopy(t.args, () => {}, () => "2026-11-02T04:00:00.000Z");
+  test("paging: 105 entries in one mission (page 2 reached) are all found and copied", async () => {
+    const { fake, args } = await mk();
+    for (let i = 0; i < 105; i++) {
+      seedPair(fake, FROM, `${FROM}--deploy--1`, dec(`d-${(0xe0000000 + i).toString(16)}`, `entry ${i}`));
+    }
+    const res = await runCopy(args, () => {});
     expect(res.ok).toBe(true);
-    if (!res.ok) return;
-    expect(res.counts).toMatchObject({ found: 3, created: 2, skipped: 1 });
-    // freeN saw the existing deploy session -> the new copies land at n=2
-    expect(t.fake.state.sessions.get(`${WS}/${TO}--deploy--2`)).toBeDefined();
-    expect(msgsOf(t.fake, `${TO}--deploy--2`).length).toBe(1); // the chunked decision only
-  });
-
-  test("paging: with 105 decisions in one session (last on page 2) every one is found and copied", async () => {
-    const t = await mk();
-    const cs = await t.client.createSession(`${FROM}--deploy--1`, sessionSeed(FROM, "deploy"));
-    expect(cs.ok).toBe(true);
-    // 105 decision messages in one session, batched like the writer (100 + 5):
-    // the server-side filter still leaves 105 matches, so the decision list
-    // spans two pages and the 105th (the marker) is on page 2 - a capped
-    // read would silently miss it (architect ruling 03:42Z)
-    const batch = (from: number, n: number) => ({
-      messages: Array.from({ length: n }, (_, i) => {
-        const k = from + i;
-        return {
-          peer_id: FROM,
-          content: `standing decision number ${k}`,
-          created_at: T1,
-          metadata: { client_id: `p-${k}`, kind: "decision", mission: "deploy" },
-        };
-      }),
-    });
-    const a1 = await t.client.addMessages(`${FROM}--deploy--1`, batch(1, 100).messages);
-    expect(a1.ok).toBe(true);
-    const a2 = await t.client.addMessages(`${FROM}--deploy--1`, [
-      ...batch(101, 4).messages,
-      {
-        peer_id: FROM,
-        content: "decision number 105 was on page two",
-        created_at: T1,
-        metadata: { client_id: "p-105", kind: "decision", mission: "deploy" },
-      },
-    ]);
-    expect(a2.ok).toBe(true);
-    const res = await runCopy(t.args, () => {}, () => "2026-11-02T04:00:00.000Z");
-    expect(res.ok).toBe(true);
-    if (!res.ok) return;
+    if (!res.ok) throw new Error(res.fact);
     expect(res.counts).toMatchObject({ found: 105, created: 105, skipped: 0 });
-    expect(res.counts.pages).toBeGreaterThan(1); // the page walk really walked
-    const toConcl = conclContents(t.fake, TO);
-    expect(toConcl.length).toBe(105);
-    expect(toConcl).toContain("decision number 105 was on page two");
-    expect(toConcl).toContain("standing decision number 1");
-    expect(toConcl).toContain("standing decision number 104");
-    // one second pass stays idempotent across the paged read too
-    const second = await runCopy(t.args, () => {}, () => "2026-11-02T04:00:00.000Z");
-    expect(second.ok).toBe(true);
-    if (!second.ok) return;
-    expect(second.counts).toMatchObject({ found: 105, created: 0, skipped: 105 });
+    expect(pairContents(fake, TO).length).toBe(105);
+    expect(res.counts.pages).toBeGreaterThanOrEqual(2);
+  });
+
+  test("an entry on an untagged session is counted, reported, and left in place", async () => {
+    const { fake, args } = await mk();
+    seedPair(fake, FROM, "loose-session-id", dec("d-abcd0001", "orphan entry"));
+    seedPair(fake, FROM, `${FROM}--deploy--1`, dec("d-abcd0002", "normal entry"));
+    const lines: string[] = [];
+    const res = await runCopy(args, (l) => lines.push(l));
+    expect(res.ok).toBe(true);
+    if (!res.ok) throw new Error(res.fact);
+    expect(res.counts).toMatchObject({ found: 2, created: 1, skipped: 0, missions: 1 });
+    expect(lines.some((l) => l.includes("1 entries sit on sessions without"))).toBe(true);
+    const to = pairContents(fake, TO);
+    expect(to.length).toBe(1);
+    expect(to[0]).toContain("d-abcd0002");
   });
 
   test("no card on the from-peer: ok with 0 card items, no PUT", async () => {
-    const t = await mk();
-    await seedDecision(t.client, `${FROM}--deploy--1`, "deploy", "solo fact", "c9", T1);
-    const res = await runCopy(t.args, () => {}, () => "2026-11-02T04:00:00.000Z");
+    const { fake, args } = await mk();
+    seedPair(fake, FROM, `${FROM}--deploy--1`, dec("d-abca0001", "one entry"));
+    const res = await runCopy(args, () => {});
     expect(res.ok).toBe(true);
-    if (!res.ok) return;
+    if (!res.ok) throw new Error(res.fact);
     expect(res.counts).toMatchObject({ found: 1, created: 1, cardItems: 0, cardCopied: false });
-    expect(t.fake.state.peerCards.get(`${WS}/${TO}`)).toBeUndefined();
   });
 });

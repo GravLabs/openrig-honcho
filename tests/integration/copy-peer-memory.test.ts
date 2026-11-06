@@ -3,13 +3,17 @@
 // limit; tests/support/scratch.ts is the single door - honcho-bridge-scratch*,
 // deleted in afterAll). Run ONLY after the architect was told (brief).
 //
-// Shape per the brief: seed the from-peer the REAL way - the MCP remember
-// tool for 3 decisions in two missions - plus direct deriver look-alike
-// self-conclusions and a card; run the script with --apply; then run the
-// plugin's own SessionStart reader for the to-peer as leader and assert its
-// decisions block shows exactly the seeded decisions in the right missions
-// and its card shows the renamed items; run --apply again and expect 0
-// created; clean up through the scratch helpers. No workspaceChat anywhere.
+// Shape per the T27 brief (architect 2026-11-06 04:33Z): decisions live on
+// the RESERVED PAIR since T24, so seed the from-peer the REAL way through
+// the MCP tools - remember for 5 entries in two missions (one SUPERSEDES
+// another via the supersedes arg, one carries scope rig) and retire for one
+// of them - plus direct deriver look-alike self-conclusions and a card; run
+// the script with --apply; then run the plugin's own SessionStart reader
+// for the to-peer as leader and assert its decisions block shows the COPIED
+// IN-FORCE SET per mission (the superseded and the retired fact absent, the
+// keeper present, the rig-scope entry in both missions) and its card shows
+// the renamed items; run --apply again and expect 0 created; clean up
+// through the scratch helpers. No workspaceChat anywhere.
 
 import { afterAll, beforeAll, expect, test } from "bun:test";
 import { makeTempDir } from "../support/tempdir.ts";
@@ -67,12 +71,28 @@ const seatConfig = (ws: string, peer: string, stateDir: string): Config => ({
   leaderPeer: peer, // remember is leader-only; both test seats are their own leader
 });
 
-const rememberFrame = (id: number, fact: string): string =>
+const rememberFrame = (id: number, fact: string, extra: Record<string, string> = {}): string =>
   JSON.stringify({
     jsonrpc: "2.0",
     id,
     method: "tools/call",
-    params: { name: "remember", arguments: { fact } },
+    params: { name: "remember", arguments: { fact, ...extra } },
+  });
+
+// remember answers "remembered in <session> (d-xxxxxxxx)" inside the frame;
+// the d-id is what supersedes and retire take (T27 seeding).
+const decisionId = (frame: string | null): string => {
+  const parsed = JSON.parse(String(frame)) as { result?: { content?: { text?: string }[] } };
+  const text = parsed.result?.content?.[0]?.text ?? "";
+  return /\((d-[0-9a-f]{8})\)/.exec(text)?.[1] ?? "";
+};
+
+const retireFrame = (id: string, decisionIdArg: string, reason: string): string =>
+  JSON.stringify({
+    jsonrpc: "2.0",
+    id,
+    method: "tools/call",
+    params: { name: "retire", arguments: { decision_id: decisionIdArg, reason } },
   });
 
 test("copy-peer-memory end to end in scratch", async () => {
@@ -81,7 +101,9 @@ test("copy-peer-memory end to end in scratch", async () => {
   const dirFrom = makeTempDir("t17a-from-");
   const dirTo = makeTempDir("t17a-to-");
 
-  // 1. seed the from-peer the real way: MCP remember, two missions
+  // 1. seed the from-peer the real way: MCP remember on the reserved pair,
+  // two missions, one SUPERSEDE (remember --supersedes) and one RETIRE -
+  // the copy must carry the links and the retire, not just facts (T27)
   const cfgFrom = seatConfig(s.name, FROM, dirFrom);
   await setRigMission(dirFrom, s.name, "deploy", "seed");
   const r1 = await handleLine(rememberFrame(1, "we chose sqlite for state"), {
@@ -90,12 +112,24 @@ test("copy-peer-memory end to end in scratch", async () => {
     now: () => NOW,
   });
   expect(r1).toContain("remembered in");
+  expect(decisionId(r1)).not.toBe("");
   const r2 = await handleLine(rememberFrame(2, "the deriver stays off in scratch"), {
     config: cfgFrom,
     client,
     now: () => NOW,
   });
   expect(r2).toContain("remembered in");
+  const r4 = await handleLine(
+    rememberFrame(4, "we chose postgres for state", { supersedes: decisionId(r1) }),
+    { config: cfgFrom, client, now: () => NOW },
+  );
+  expect(r4).toContain("remembered in");
+  const r5 = await handleLine(rememberFrame(5, "no force pushes on main", { scope: "rig" }), {
+    config: cfgFrom,
+    client,
+    now: () => NOW,
+  });
+  expect(r5).toContain("remembered in");
   await setRigMission(dirFrom, s.name, "audit", "seed");
   const r3 = await handleLine(rememberFrame(3, "release v0.2.2 is the pilot baseline"), {
     config: cfgFrom,
@@ -103,6 +137,11 @@ test("copy-peer-memory end to end in scratch", async () => {
     now: () => NOW,
   });
   expect(r3).toContain("remembered in");
+  const rr = await handleLine(
+    retireFrame(6, decisionId(r3), "superseded by the v0.3 line"),
+    { config: cfgFrom, client, now: () => NOW },
+  );
+  expect(rr).toContain("retired");
 
   // deriver look-alikes: self conclusions with NO decision message (direct,
   // the 818/856 shape) - they must never be copied. handleLine answers a
@@ -145,15 +184,18 @@ test("copy-peer-memory end to end in scratch", async () => {
   const first = await runCopy(args, () => {}, () => NOW);
   expect(first.ok).toBe(true);
   if (!first.ok) throw new Error(`${first.fact} / ${first.reason} / ${first.fix}`);
-  expect(first.counts).toMatchObject({ missions: 2, found: 3, created: 3, skipped: 0, cardItems: 2 });
+  // 5 decisions + 1 retire entry = 6 pair entries, two missions
+  expect(first.counts).toMatchObject({ missions: 2, found: 6, created: 6, skipped: 0, cardItems: 2 });
 
   // 3. the plugin's own SessionStart reader for the to-peer as leader:
   //    exactly the seeded decisions, per mission, and the renamed card
   const cfgTo = seatConfig(s.name, TO, dirTo);
   await setRigMission(dirTo, s.name, "deploy", "check");
   const injectDeploy = await buildInjection({ source: "startup" }, cfgTo, { client, now: () => NOW });
-  expect(injectDeploy).toContain("we chose sqlite for state");
+  expect(injectDeploy).toContain("we chose postgres for state"); // the superseded sqlite fact stays out
+  expect(injectDeploy).not.toContain("we chose sqlite for state");
   expect(injectDeploy).toContain("the deriver stays off in scratch");
+  expect(injectDeploy).toContain("no force pushes on main"); // rig scope reads in every mission
   expect(injectDeploy).not.toContain("release v0.2.2 is the pilot baseline");
   expect(injectDeploy).not.toContain("derived lookalike");
   expect(injectDeploy).toContain(`${TO} leads the deploy mission`);
@@ -161,7 +203,8 @@ test("copy-peer-memory end to end in scratch", async () => {
 
   await setRigMission(dirTo, s.name, "audit", "check");
   const injectAudit = await buildInjection({ source: "startup" }, cfgTo, { client, now: () => NOW });
-  expect(injectAudit).toContain("release v0.2.2 is the pilot baseline");
+  expect(injectAudit).toContain("no force pushes on main"); // the rig entry rides into every mission
+  expect(injectAudit).not.toContain("release v0.2.2 is the pilot baseline"); // retired: the retire entry rode over too
   expect(injectAudit).not.toContain("we chose sqlite for state");
   expect(injectAudit).not.toContain("derived lookalike");
 
@@ -169,5 +212,5 @@ test("copy-peer-memory end to end in scratch", async () => {
   const second = await runCopy(args, () => {}, () => NOW);
   expect(second.ok).toBe(true);
   if (!second.ok) throw new Error(`${second.fact} / ${second.reason} / ${second.fix}`);
-  expect(second.counts).toMatchObject({ found: 3, created: 0, skipped: 3 });
+  expect(second.counts).toMatchObject({ found: 6, created: 0, skipped: 6 });
 }, 180_000);

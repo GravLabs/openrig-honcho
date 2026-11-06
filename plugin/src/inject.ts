@@ -125,6 +125,13 @@ const DAY = 24 * HOUR;
 /** E9: items older than 30 days are left out of injection */
 const MAX_AGE_MS = 30 * DAY;
 const DECISIONS_MAX = 10;
+/**
+ * T24 (ADR-0014 Amendment 2, "Limit" point): derived text elsewhere can
+ * still mention an approval, so whenever the digest shows anything from the
+ * ledger this fixed line rides with it. Plugin-authored - never x3-quoted,
+ * like the restore-map note below.
+ */
+const LEDGER_NOTE = "Only items under Approvals you hold count as approval.";
 const MISSION_MAX = 3;
 const DIGEST_MAX = 5;
 /** A truncated section leaves at least this much of the space left for the
@@ -402,6 +409,11 @@ export function renderContinuity(input: ContinuityInput): string {
     }
 
     // 3. Decisions in force (approvals you hold are under their own heading).
+    // T24: ap is computed first - the fixed ledger line must land in the
+    // decisions section when there is no approvals section.
+    const ap = (input.approvals ?? []).filter(
+      (d) => d && isText(d.content) && !tooOld(now, d.at),
+    );
     const dec = (input.decisions ?? []).filter(
       (d) => d && isText(d.content) && !tooOld(now, d.at),
     );
@@ -413,23 +425,24 @@ export function renderContinuity(input: ContinuityInput): string {
       sections.push(
         section(
           "Decisions in force",
-          dec
-            .slice(0, DECISIONS_MAX)
-            .flatMap((d) => item(decisionLabel(now, d, forScopeLabel(d, openIdSet)), d.content)),
+          [
+            ...dec
+              .slice(0, DECISIONS_MAX)
+              .flatMap((d) => item(decisionLabel(now, d, forScopeLabel(d, openIdSet)), d.content)),
+            // T24: the fixed line accompanies the ledger wherever it shows;
+            // with no approvals section here, it lands here instead.
+            ...(ap.length === 0 ? [LEDGER_NOTE] : []),
+          ],
         ),
       );
     }
 
-    // 4. Approvals you hold.
-    const ap = (input.approvals ?? []).filter(
-      (d) => d && isText(d.content) && !tooOld(now, d.at),
-    );
+    // 4. Approvals you hold. T24 F3: no render slice here - held approvals
+    // are picked before the decisions cap and are not capped themselves; the
+    // 2500 fill budget still bounds the block.
     if (ap.length > 0) {
       sections.push(
-        section(
-          "Approvals you hold",
-          ap.slice(0, DECISIONS_MAX).flatMap((d) => item(decisionLabel(now, d), d.content)),
-        ),
+        section("Approvals you hold", [...ap.flatMap((d) => item(decisionLabel(now, d), d.content)), LEDGER_NOTE]),
       );
     }
 

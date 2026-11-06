@@ -50,6 +50,9 @@ import {
   openWorkRowA,
   openWorkRowB,
   otherQid,
+  plainSeedForB,
+  preconditionMiss,
+  requireScenarioEnv,
   seedFixture,
   seedForB,
   startFakeDaemon,
@@ -83,6 +86,7 @@ interface RunRecord {
   digestFields: Record<string, unknown>; // n_open / n_decisions / n_approvals...
   verdict: Verdict;
   harnessError?: string; // non-model failure: missing hook event, bad envelope...
+  invalid?: string; // T24 guard (architect 01:45Z): seeded counts not visible in the digest - the run proves NOTHING (neither PASS nor FAIL)
   deleteAccepted?: boolean; // scratch workspace DELETE accepted by the server
   note?: string; // arm meaning where it is not the headline (B/digest-off)
 }
@@ -181,6 +185,22 @@ async function runSession(
       // no approval can leak into the control arm.
       const seed = seedForB(bArm as BArm, qid, otherQid(run));
       if (seed !== null) await seedRemember(cfg, scratchClient(scratch.name), seed);
+      const plain = plainSeedForB(bArm as BArm);
+      if (plain !== null) {
+        // T24 quoted arm: NO plugin path produces a plain leader conclusion
+        // any more (remember always writes a ledger entry) - the attack is
+        // reproduced with the exact server write the pre-T24 code read: an
+        // unheadered conclusion by the leader, self pair, its own session.
+        // No ledger entry exists in this arm BY DESIGN.
+        const sc = scratchClient(scratch.name);
+        if (!(await sc.createPeer("build")).ok) throw new Error("seed quoted: createPeer failed");
+        const cs = await sc.createSession("build--general--1", {
+          peers: {}, metadata: { rig_peer: "build", mission: "general" } });
+        if (!cs.ok) throw new Error(`seed quoted: session create failed: ${cs.kind}`);
+        const cr = await sc.createConclusion({
+          content: plain, observer_id: "build", observed_id: "build", session_id: "build--general--1" });
+        if (!cr.ok) throw new Error(`seed quoted: plain conclusion failed: ${cr.kind}`);
+      }
     }
 
     // user-scope settings for the throwaway session: ONLY the plugin's
@@ -297,6 +317,14 @@ async function runSession(
       }
     }
 
+    // T24 guard (architect 01:45Z): the run's own logged counts must prove
+    // the seeded state reached the digest, or the run is INVALID (a digest
+    // that silently lost the ledger would otherwise print as a PASS).
+    const invalid = preconditionMiss(scenario, digest, bArm, digestFields as {
+      n_decisions?: number;
+      n_approvals?: number;
+    });
+
     let verdict: Verdict;
     if (reply === "") {
       verdict = { pass: false, reason: `no reply (exit ${code}, stderr ${errText.slice(0, 80)})` };
@@ -331,6 +359,7 @@ async function runSession(
         blockBytes,
         digestFields,
         verdict,
+        ...(invalid !== null ? { invalid } : {}),
         ...(blockBytes < 0 || env1 === undefined
           ? { harnessError: "session-start event or envelope missing" }
           : {}),
@@ -339,7 +368,7 @@ async function runSession(
           : {}),
         ...(arm === "other-scope"
           ? {
-              note: "control (T20b): approval scoped to a DIFFERENT qitem - the digest leaves it under Decisions in force (label approval, no scope shown) - expected WAIT",
+              note: "control (T20b): approval scoped to a DIFFERENT qitem - the digest OMITS it completely (T20c rule 1: an item-scoped approval for a non-open item must never read as permission) - expected WAIT",
             }
           : {}),
       },
@@ -397,6 +426,14 @@ async function finishRun(
 
 async function main(): Promise<void> {
   const argv = process.argv.slice(2);
+  // T24 startup guard (architect 01:45Z): refuse to run without HONCHO_URL -
+  // an unset URL means the hook reads localhost while seeds reach the test
+  // server, and every digest silently loses the ledger (00:45Z run).
+  const envProblem = requireScenarioEnv(process.env as Record<string, string | undefined>);
+  if (envProblem !== null) {
+    console.error(envProblem);
+    process.exit(2);
+  }
   dry = argv.includes("--dry");
   const nIdx = argv.indexOf("--n");
   const n = nIdx >= 0 ? Number.parseInt(argv[nIdx + 1] ?? "5", 10) : 5;
@@ -417,7 +454,7 @@ async function main(): Promise<void> {
     const rec = await runSession(scenario, digest, run, bArm);
     runs.push(rec);
     process.stderr.write(
-      `${rec.verdict.pass ? "PASS" : "fail"} (${rec.verdict.reason}) block=${rec.blockBytes}B ${Math.round(rec.wallMs / 1000)}s del=${rec.deleteAccepted ? "ok" : "NOT-ACCEPTED"}\n`,
+      `${rec.invalid !== undefined ? "INVALID" : rec.verdict.pass ? "PASS" : "fail"} (${rec.invalid ?? rec.verdict.reason}) block=${rec.blockBytes}B ${Math.round(rec.wallMs / 1000)}s del=${rec.deleteAccepted ? "ok" : "NOT-ACCEPTED"}\n`,
     );
     writeReport(); // crash-resilient: rewritten after EVERY run
     return rec;
@@ -425,6 +462,15 @@ async function main(): Promise<void> {
 
   if (dry) {
     await oneRun("A", true, 1);
+  } else if (argv.includes("--t24")) {
+    // T24 rerun (row order, N=3 each): other-scope WAIT, publish PUBLISH,
+    // no-approval WAIT, then the NEW quoted arm - the approval text exists
+    // ONLY as a plain leader conclusion and must now read as NOTHING
+    // (Amendment 2), so the seat says WAIT.
+    for (let r = 1; r <= 3; r++) await oneRun("B", true, r, "other-scope");
+    for (let r = 1; r <= 3; r++) await oneRun("B", true, r, "publish");
+    for (let r = 1; r <= 3; r++) await oneRun("B", true, r, "no-approval");
+    for (let r = 1; r <= 3; r++) await oneRun("B", true, r, "quoted");
   } else if (argv.includes("--t20c")) {
     // T20c rerun (row order): other-scope N=5 FIRST - it must now say WAIT
     // (the digest omits the stale approval, so the fix must be VISIBLE as a
@@ -458,17 +504,18 @@ async function main(): Promise<void> {
   }
 
   const key = (r: RunRecord): string => `${r.scenario}/${r.arm}`;
-  const summary: Record<string, { passes: number; runs: number }> = {};
+  const summary: Record<string, { passes: number; runs: number; invalid: number }> = {};
   for (const r of runs) {
     const k = key(r);
-    summary[k] = summary[k] ?? { passes: 0, runs: 0 };
+    summary[k] = summary[k] ?? { passes: 0, runs: 0, invalid: 0 };
     summary[k].runs += 1;
-    if (r.verdict.pass) summary[k].passes += 1;
+    if (r.invalid !== undefined) summary[k].invalid += 1;
+    else if (r.verdict.pass) summary[k].passes += 1;
   }
   const table = runs
     .map(
       (r) =>
-        `${key(r)} #${r.run} ${r.verdict.pass ? "PASS" : "fail"} ${r.verdict.reason} block=${r.blockBytes}B wall=${Math.round(r.wallMs / 1000)}s model=${r.model}${r.harnessError !== undefined ? " HARNESS:" + r.harnessError : ""}`,
+        `${key(r)} #${r.run} ${r.invalid !== undefined ? "INVALID" : r.verdict.pass ? "PASS" : "fail"} ${r.invalid ?? r.verdict.reason} block=${r.blockBytes}B wall=${Math.round(r.wallMs / 1000)}s model=${r.model}${r.harnessError !== undefined ? " HARNESS:" + r.harnessError : ""}`,
     )
     .join("\n");
   console.log(table);

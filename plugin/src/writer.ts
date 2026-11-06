@@ -26,8 +26,9 @@ import {
   stripLeadingReminders,
   UNKNOWN_SENDER_PEER,
 } from "./attribute.ts";
-import { fetchOutbox, fetchQueueItem, matchesOutboxEntry } from "./daemon.ts";
+import { bodyMismatchShape, deliveryInWindow, fetchOutbox, fetchQueueItem, matchesOutboxEntry, trimTrailing } from "./daemon.ts";
 import { parseEnvelope } from "./envelope.ts";
+import { LEDGER_PEER } from "./ledger.ts";
 import type { Config } from "./env.ts";
 import { createClient } from "./honcho.ts";
 import { withLock, writeJsonAtomic } from "./lock.ts";
@@ -172,8 +173,11 @@ export async function ensureSession(
   const seatFile = seatStatePath(stateDir, workspace, config.peer);
   const session = resolved.session;
   // ADR-0002 peer table: openrig (automation) and unknown-sender are never
-  // observed; every real sender observes this seat only.
-  const derivedSender = sender !== AUTOMATION_PEER && sender !== UNKNOWN_SENDER_PEER;
+  // observed; every real sender observes this seat only. T24 (Amendment 2):
+  // the reserved ledger peer is never observed either - defense in depth
+  // behind attribute.ts's refusal to record anything under that name.
+  const derivedSender =
+    sender !== AUTOMATION_PEER && sender !== UNKNOWN_SENDER_PEER && sender !== LEDGER_PEER;
   const senderCfg: SessionPeerConfig = { observe_me: derivedSender, observe_others: false };
   const basePeers: Record<string, SessionPeerConfig> = {
     [config.ownerPeer]: { observe_me: true, observe_others: false },
@@ -703,6 +707,30 @@ async function promptSteps(
                 ? "self"
                 : "verified";
           if (hit !== undefined) outboxId = hit.outboxId;
+          // T22b (architect 02:13Z 11-06): right sender (we fetched by it),
+          // right destination and window, DIFFERENT body - log the shape of
+          // the difference (counts + one character class, never text) to
+          // settle the delivery-wrapper hypothesis. verify is unchanged:
+          // a near-miss stays unverified, and nothing gains verification.
+          if (hit === undefined) {
+            const promptTrim = trimTrailing(input.prompt ?? "");
+            const near = res.entries.find(
+              (e) =>
+                e.destinationSession === sessionName &&
+                typeof e.body === "string" &&
+                trimTrailing(e.body) !== promptTrim &&
+                deliveryInWindow(e, deps.now()),
+            );
+            if (near !== undefined) {
+              logEvent(config, {
+                hook: "user-prompt",
+                event: "outbox-shape",
+                ok: true,
+                ms: 0,
+                ...bodyMismatchShape(trimTrailing(near.body as string), promptTrim),
+              });
+            }
+          }
         } else {
           verify = "unchecked";
         }

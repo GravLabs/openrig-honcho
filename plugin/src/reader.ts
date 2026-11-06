@@ -14,10 +14,10 @@
 import { readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 import type { Config } from "./env.ts";
-import { type HonchoClient } from "./honcho.ts";
+import { type Conclusion, type HonchoClient } from "./honcho.ts";
 import { readSeatState, resolveSession, normalizeMission, readRigMission, seatStatePath, scopeFor } from "./missions.ts";
 import { ensureSession, freeN } from "./writer.ts";
-import { entryBody, inForceFor, toEntries } from "./ledger.ts";
+import { entryBody, inForceFor, LEDGER_PEER, toEntries } from "./ledger.ts";
 import { DAEMON_TIMEOUT_MS, fetchOpenWork } from "./daemon.ts";
 import { isItemScope, renderContinuity, renderInjection, type InjectionAwayConclusion, type InjectionDecision, type InjectionDigestEntry, type InjectionInput, type InjectionMissionSummary, type InjectionSessionSummary, type InjectionSource } from "./inject.ts";
 
@@ -29,6 +29,10 @@ export interface ContinuityStats {
   n_approvals: number;
   n_away: number;
   has_pointer: boolean;
+  /** T24 F2 / T26: set when the ledger pair read is PARTIAL (page cap,
+   * mid-read page failure, or no finite total answered) - the count known
+   * from the server, 0 when the end was never answered. Never content. */
+  ledger_capped?: number;
 }
 
 export interface ReaderDeps {
@@ -59,52 +63,120 @@ function parseSessionId(id: string): { peer: string; mission: string } | null {
   return { peer: m[1], mission: m[2] };
 }
 
+/** The ledger pair is paged in FULL (T24 F2): 100 per page, 5 pages max. */
+export const LEDGER_PAGE = 100;
+export const LEDGER_MAX_PAGES = 5;
+
+export interface LedgerPairRead {
+  /** every conclusion read off the pair, newest first, valid-header or not */
+  items: Conclusion[];
+  /**
+   * The read is PARTIAL and must never be treated as complete (T26, review
+   * T2): stopped at the page cap with items left server-side, a page failed
+   * mid-read, or a full page answered without a finite total (the end is
+   * then unknown). A failed FIRST page is not partial - it is today's empty
+   * read, capped:false.
+   */
+  capped: boolean;
+  /** the server's total for the pair (0 when failed or never answered) */
+  total: number;
+}
+
+/**
+ * T24 (ADR-0014 Amendment 2, F2): the ONE shared fetch of the ledger pair -
+ * observer the leader, observed the reserved ledger peer. Pages the WHOLE
+ * pair before any filtering (the old single 100-entry page let 101 newer
+ * entries from other missions starve this mission's live decision, review
+ * F2). No mission or session filter is applied here: consumers filter after
+ * the full read. Any failure is an empty read, never a throw.
+ *
+ * T26 (architect 03:46Z, review T2): every read that STOPS BEFORE THE KNOWN
+ * END signals capped:true - a failed later page, or a full page with no
+ * finite total. What was already read is kept (newest entries are the ones
+ * that matter; an entry hiding another is always newer than its target).
+ * Only a failed FIRST page stays the silent empty read; a complete read
+ * stays capped:false and logs nothing extra.
+ */
+export async function fetchLedgerPair(
+  client: HonchoClient,
+  leaderPeer: string,
+): Promise<LedgerPairRead> {
+  const items: Conclusion[] = [];
+  let total = 0;
+  let totalKnown = false;
+  for (let page = 1; page <= LEDGER_MAX_PAGES; page++) {
+    const r = await client.listConclusions({
+      filters: { observer_id: leaderPeer, observed_id: LEDGER_PEER },
+      reverse: true,
+      size: LEDGER_PAGE,
+      page,
+    });
+    if (!r.ok) {
+      // first page: the ruled empty read; a LATER page failing means items
+      // that exist were never reached - partial, and it must say so (T26).
+      return page === 1 ? { items: [], capped: false, total: 0 } : { items, capped: true, total };
+    }
+    if (typeof r.data.total === "number" && Number.isFinite(r.data.total)) {
+      total = r.data.total;
+      totalKnown = true;
+    }
+    const pageItems = Array.isArray(r.data.items) ? r.data.items : [];
+    items.push(...pageItems);
+    // a short page is the server's own end-of-list: complete either way
+    if (pageItems.length < LEDGER_PAGE) return { items, capped: false, total };
+    // full page, known total reached: complete
+    if (totalKnown && items.length >= total) return { items, capped: false, total };
+    // full page with NO finite total answered yet: the end is unknown -
+    // stopping here without a signal is the F2 miss shape (T26)
+    if (!totalKnown) return { items, capped: true, total };
+  }
+  // ran out of pages: partial when a known total has more left, and always
+  // partial when the end was never answered (T26)
+  return { items, capped: !totalKnown || items.length < total, total };
+}
+
 /**
  * The IN-FORCE decisions and approvals for this mission (T19a, ADR-0014 d2 +
- * amendment; E8; SHARED with the ask tool per the ADR-0004 amendment - one
- * query, one computation, no drift). Fetches the leader's own-observed
- * conclusions up to 100 newest ACROSS missions (fixed point 5: a superseding
- * entry may live in another mission), parses the ledger headers, computes the
- * current ledger, then keeps this mission's entries plus rig-scope entries
- * from any mission. Plain conclusions are legacy mission decisions with
- * derived ids (reader never hides them - they are the mission's decisions).
- * Superseded and retired entries are hidden here - and only here (search
- * still shows them, marked). Content is the entry body without the header;
- * id and kind ride along so the renderer can label them. Newest first, max
- * 10. Any failure is an empty list, never a throw.
+ * amendments; E8; SHARED with the ask tool per the ADR-0004 amendment - one
+ * query, one computation, no drift). T24 (Amendment 2): entries come from
+ * the shared ledger-pair read ONLY - observer the leader, observed the
+ * reserved ledger peer - and only valid-header content is an entry; plain
+ * conclusions on the pair are ignored, and a plain leader conclusion
+ * anywhere is no longer a decision. The full pair is paged first (F2), the
+ * mission and session filters run after. Superseded and retired entries are
+ * hidden here - and only here (search still shows them, marked). Content is
+ * the entry body without the header; id and kind ride along so the renderer
+ * can label them. Newest first, UNCAPPED - F3: the cap is the caller's,
+ * because held approvals must be picked before it (the digest and ask pass
+ * their own limits). Any failure is an empty list, never a throw.
  */
 export async function fetchMissionDecisions(
   client: HonchoClient,
   leaderPeer: string,
   mission: string,
+  onCap?: (total: number) => void,
 ): Promise<InjectionDecision[]> {
-  const r = await client.listConclusions({
-    filters: { observer_id: leaderPeer, observed_id: leaderPeer },
-    reverse: true,
-    size: 100,
-  });
-  if (!r.ok) return [];
+  const pair = await fetchLedgerPair(client, leaderPeer);
+  if (pair.capped) onCap?.(pair.total);
   // only the leader's OWN sessions: remember always writes there, and a
   // conclusion in another peer's session is not a ledger entry (architect,
   // T19a acceptance: the in-force view must not widen what ask shows)
-  const items = r.data.items.filter(
+  const items = pair.items.filter(
     (c) =>
       typeof c.session_id === "string" &&
       parseSessionId(c.session_id)?.peer === leaderPeer &&
       typeof c.content === "string" &&
       c.content.trim() !== "",
   );
-  return inForceFor(toEntries(items), mission)
-    .slice(0, 10)
-    .map((e) => ({
-      content: entryBody(e),
-      at: e.at,
-      id: e.id,
-      kind: e.kind === "approval" ? ("approval" as const) : ("decision" as const),
-      // T19b: scope lets the digest match approvals to open items; the old
-      // renderer and the ask tool ignore it.
-      scope: e.scope,
-    }));
+  return inForceFor(toEntries(items), mission).map((e) => ({
+    content: entryBody(e),
+    at: e.at,
+    id: e.id,
+    kind: e.kind === "approval" ? ("approval" as const) : ("decision" as const),
+    // T19b: scope lets the digest match approvals to open items; the old
+    // renderer and the ask tool ignore it.
+    scope: e.scope,
+  }));
 }
 
 /**
@@ -233,13 +305,23 @@ async function build(
         })
       : Promise.resolve(undefined);
 
-  // E8: the leader's own-observed conclusions in THIS mission, newest 10
-  // (fetchMissionDecisions: the same query the ask tool runs).
+  // E8: the in-force ledger entries for THIS mission from the ledger pair
+  // (fetchMissionDecisions: the same query the ask tool runs; T24 F3 moved
+  // the cap out - the digest picks held approvals before capping, and the
+  // old path below keeps its own slice(0,10), byte-identical).
+  let ledgerCapped: number | undefined;
   const decisionsPart = (): Promise<InjectionDecision[] | undefined> =>
     config.leaderPeer === undefined
       ? Promise.resolve(undefined)
       : part(deadline, config.timeoutMs, async (): Promise<InjectionDecision[] | undefined> =>
-          fetchMissionDecisions(deps.client, config.leaderPeer as string, resolved.mission));
+          fetchMissionDecisions(
+            deps.client,
+            config.leaderPeer as string,
+            resolved.mission,
+            (t) => {
+              ledgerCapped = t;
+            },
+          ));
 
   // T19b (ADR-0014 decision 1): the continuity digest replaces the block's
   // body; the old path below stays byte-for-byte for HONCHO_DIGEST=off.
@@ -258,6 +340,7 @@ async function build(
       ownPart,
       lastPart,
       decisionsPart,
+      capInfo: () => ledgerCapped,
     });
   }
 
@@ -348,7 +431,9 @@ async function build(
     ...(peerCard !== undefined && peerCard.length > 0 ? { peerCard } : {}),
     ...(ownSession !== undefined ? { ownSession } : {}),
     ...(lastSession !== undefined ? { lastSession } : {}),
-    ...(decisions !== undefined && decisions.length > 0 ? { decisions } : {}),
+    // T24 F3: fetchMissionDecisions is uncapped now; the old block keeps its
+    // exact newest-10 behavior (digest-off pins are byte-identical).
+    ...(decisions !== undefined && decisions.length > 0 ? { decisions: decisions.slice(0, 10) } : {}),
     ...(missionSummaries !== undefined && missionSummaries.length > 0 ? { missionSummaries } : {}),
     ...(rigDigest !== undefined && rigDigest.length > 0 ? { rigDigest } : {}),
     ...(ownerCard !== undefined && ownerCard.length > 0 ? { ownerCard } : {}),
@@ -381,6 +466,8 @@ async function buildContinuity(a: {
   ownPart: () => Promise<InjectionSessionSummary & { session: string } | undefined>;
   lastPart: () => Promise<InjectionSessionSummary & { session: string } | undefined>;
   decisionsPart: () => Promise<InjectionDecision[] | undefined>;
+  /** T24 F2: the ledger-pair page-cap count once decisionsPart has answered. */
+  capInfo: () => number | undefined;
 }): Promise<string> {
   const { deadline, now, config, deps, resolved, ensureP } = a;
   const [peerCard, ownSession, lastSession, decisions, openWork] = await Promise.all([
@@ -411,8 +498,14 @@ async function buildContinuity(a: {
   // mission-scoped approvals are unchanged and stay labelled.
   const staleScopedApproval = (d: InjectionDecision): boolean =>
     d.kind === "approval" && isItemScope(d.scope) && !openIds.has(d.scope as string);
+  // T24 F3 (review F3): the ten-entry cut applies to Decisions in force
+  // ONLY, and AFTER the held approvals are picked - an approval for an open
+  // item can no longer be crowded out by 10 newer entries. Held approvals
+  // are uncapped (the render cap bounds the block either way).
   const approvals = allDec.filter(heldByOpen);
-  const decisionsInForce = allDec.filter((d) => !heldByOpen(d) && !staleScopedApproval(d));
+  const decisionsInForce = allDec
+    .filter((d) => !heldByOpen(d) && !staleScopedApproval(d))
+    .slice(0, 10);
   const leftOff = a.source === "compact" ? ownSession : lastSession;
   const away = await awayConclusions(deadline, config, deps, resolved.mission, openItems, a.prevLastSeen);
   const pointer = findRestoreMap(a.cwd, config.sessionName, Date.parse(now));
@@ -428,6 +521,7 @@ async function buildContinuity(a: {
     ...(pointer !== undefined ? { pointer } : {}),
     ...(peerCard !== undefined && peerCard.length > 0 ? { peerCard } : {}),
   });
+  const cappedTotal = a.capInfo();
   deps.stats?.({
     moment: "continuity",
     n_open: openItems.length,
@@ -435,6 +529,7 @@ async function buildContinuity(a: {
     n_approvals: approvals.length,
     n_away: away.length,
     has_pointer: pointer !== undefined,
+    ...(cappedTotal !== undefined ? { ledger_capped: cappedTotal } : {}),
   });
   return text;
 }

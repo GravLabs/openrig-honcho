@@ -148,6 +148,7 @@ export async function fetchOpenWork(
       qitemId?: unknown;
       state?: unknown;
       destinationSession?: unknown;
+      summary?: unknown;
       body?: unknown;
       tsUpdated?: unknown;
       tsCreated?: unknown;
@@ -161,7 +162,17 @@ export async function fetchOpenWork(
         : typeof d.tsCreated === "string"
           ? d.tsCreated
           : "";
-    items.push({ qitemId: d.qitemId, summary: summarizeQueueBody(d.body), state: d.state, at });
+    // T25 (architect 22:17Z): queue rows carry their own summary, written
+    // for exactly this line - prefer it when it is a usable non-empty string,
+    // else the first non-empty body line as before. Same 120-char cap and
+    // quoting either way (summarizeQueueBody is the single rule).
+    const usable = typeof d.summary === "string" && d.summary.trim() !== "";
+    items.push({
+      qitemId: d.qitemId,
+      summary: summarizeQueueBody(usable ? d.summary : d.body),
+      state: d.state,
+      at,
+    });
   }
   items.sort((a, b) => {
     const o = OPEN_STATES[a.state] - OPEN_STATES[b.state];
@@ -175,8 +186,64 @@ export async function fetchOpenWork(
 
 /** Trailing whitespace (spaces, tabs, CR/LF): the outbox stores the typed
  * body, hook stdin may carry a trailing newline. Leading side stays exact. */
-function trimTrailing(s: string): string {
+export function trimTrailing(s: string): string {
   return s.replace(/\s+$/, "");
+}
+
+/** The delivery stamp is valid and within the last 10 minutes (the same
+ * basis and window matchesOutboxEntry uses) - split out for T22b so a
+ * near-miss record can be proven in-window WITHOUT its body matching. */
+export function deliveryInWindow(entry: OutboxEntry, nowIso: string): boolean {
+  const ts = entry.deliveredAt ?? entry.tsDispatched ?? entry.ts_dispatched;
+  if (typeof ts !== "string") return false;
+  const at = Date.parse(ts);
+  const now = Date.parse(nowIso);
+  if (!Number.isFinite(at) || !Number.isFinite(now)) return false;
+  return at <= now && now - at <= 10 * 60_000;
+}
+
+/**
+ * T22b (architect 02:13Z 11-06): when the sender, destination and window
+ * all match but the body differs, the LOG records the shape of the
+ * difference and nothing else - stored length, delivered length, first
+ * differing offset, and the CLASS of the character there. Never a
+ * character, never text. offset = first differing code-unit index, or the
+ * shorter length when one is a prefix of the other, or -1 when equal. The
+ * class is of the DELIVERED char at the offset (what this hook received),
+ * or the stored char when the delivered text ended there.
+ */
+export interface BodyShape {
+  stored_len: number;
+  delivered_len: number;
+  offset: number;
+  char_class: string;
+}
+
+export function bodyMismatchShape(stored: string, delivered: string): BodyShape {
+  const n = Math.min(stored.length, delivered.length);
+  let offset = -1;
+  for (let i = 0; i < n; i++) {
+    if (stored[i] !== delivered[i]) {
+      offset = i;
+      break;
+    }
+  }
+  if (offset === -1 && stored.length !== delivered.length) offset = n;
+  const ch =
+    offset >= 0 ? (offset < delivered.length ? delivered[offset] : stored[offset]) : "";
+  const charClass =
+    ch === ""
+      ? "none"
+      : ch === "\n" || ch === "\r"
+        ? "newline"
+        : ch.trim() === ""
+          ? "space"
+          : /\p{L}/u.test(ch)
+            ? "letter"
+            : /\p{N}/u.test(ch)
+              ? "digit"
+              : "other";
+  return { stored_len: stored.length, delivered_len: delivered.length, offset, char_class: charClass };
 }
 
 /**
@@ -198,10 +265,5 @@ export function matchesOutboxEntry(
 ): boolean {
   if (entry.destinationSession !== sessionName) return false;
   if (typeof entry.body !== "string" || trimTrailing(entry.body) !== trimTrailing(prompt)) return false;
-  const ts = entry.deliveredAt ?? entry.tsDispatched ?? entry.ts_dispatched;
-  if (typeof ts !== "string") return false;
-  const at = Date.parse(ts);
-  const now = Date.parse(nowIso);
-  if (!Number.isFinite(at) || !Number.isFinite(now)) return false;
-  return at <= now && now - at <= 10 * 60_000;
+  return deliveryInWindow(entry, nowIso);
 }

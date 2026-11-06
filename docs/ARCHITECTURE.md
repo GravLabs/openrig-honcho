@@ -9,7 +9,7 @@ server. The goal is a memory layer that lets the team improve itself: outcomes
 come from outside the agent, lessons are proposed, and a gate decides what reaches
 the team.
 
-Snapshot: 2026-11-05, with version 0.3 in development.
+Snapshot: 2026-11-06, at the release of version 0.3.
 
 ## How the pieces connect
 
@@ -104,7 +104,8 @@ flowchart LR
 ```
 
 This closes a hole the v0.3 review proved: quoted text could fabricate an approval.
-The move to the reserved pair is being built now.
+In a scenario test, approval text that existed only as a plain conclusion gave WAIT
+3 of 3 times, while a real approval gave PUBLISH 3 of 3 times.
 
 ## The learning loop
 
@@ -141,7 +142,7 @@ is made on evidence, by running other stores through the same tests.
 ```mermaid
 flowchart LR
   V3["v0.3: resume and trust<br/>ledger, digest, quieter recall,<br/>routine messages skipped, scenario tests"]
-  V4["v0.4: capture and deliver<br/>outcome log, lessons in seat lore,<br/>lessons before risky actions, trust classes"]
+  V4["v0.4: capture and deliver<br/>outcome log, lessons in seat lore,<br/>lessons before risky actions, trust classes,<br/>local checkpoints"]
   V5["v0.5: learn safely<br/>proposed lessons, promotion gate,<br/>attack tests, store decision"]
   V6["v0.6: self-tuning<br/>under the same gate"]
   ST["Store test run:<br/>Caura, Hindsight, Graphiti, MemOS"]

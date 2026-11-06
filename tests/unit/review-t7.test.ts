@@ -17,6 +17,7 @@ import type { Config } from "../../plugin/src/env.ts";
 import { createClient } from "../../plugin/src/honcho.ts";
 import { readSeatState, seatStatePath } from "../../plugin/src/missions.ts";
 import { buildInjection } from "../../plugin/src/reader.ts";
+import { LEDGER_PEER } from "../../plugin/src/ledger.ts";
 import { renderInjection, type InjectionInput } from "../../plugin/src/inject.ts";
 import { startFakeHoncho } from "../support/fake-honcho.ts";
 
@@ -236,13 +237,18 @@ const mk = async (over: Partial<Config> = {}) => {
 };
 
 describe("R-T7b reader decisions + digest filters", () => {
+  // T24 (Amendment 2): entries live on the ledger pair with valid headers;
+  // these E8 pins seed that pair. hd(i) = a distinct valid decision header.
+  const hd = (marker: string, i: number): string =>
+    `[decision d-a1e0${String(i).padStart(4, "0")} · scope mission] ${marker}`;
+
   test("E8 for EVERY seat: leaderPeer set, self != leader -> the leader's decisions render", async () => {
     const h = await mk({ leaderPeer: "lead" });
     try {
       h.fake.addConclusion(WS, {
-        content: "LEAD-DECISION-1",
+        content: hd("LEAD-DECISION-1", 1),
         observer_id: "lead",
-        observed_id: "lead",
+        observed_id: LEDGER_PEER,
         session_id: "lead--general--3",
         created_at: new Date(h.clock.value - 60_000).toISOString() });
       const out = await buildInjection({ source: "startup", claudeSessionId: "c1" }, h.config, h.deps());
@@ -253,31 +259,36 @@ describe("R-T7b reader decisions + digest filters", () => {
     }
   });
 
-  test("decisions: other observer/observed, other mission, malformed or missing session, blank -> dropped; 13 valid -> newest 10", async () => {
+  test("decisions: off-pair observer/observed, other mission, malformed or missing session, blank and PLAIN -> dropped; 13 valid -> newest 10", async () => {
     const h = await mk({ leaderPeer: "lead" });
     try {
       const at = (mins: number) => new Date(h.clock.value - mins * 60_000).toISOString();
       const good = (i: number) => ({
-        content: `D${String(i).padStart(2, "0")}`,
+        content: hd(`D${String(i).padStart(2, "0")}`, i),
         observer_id: "lead",
-        observed_id: "lead",
+        observed_id: LEDGER_PEER,
         session_id: "lead--general--2",
         created_at: at(100 - i) });
       for (let i = 1; i <= 13; i++) h.fake.addConclusion(WS, good(i));
       // every dropped shape, each with unique marker text
-      h.fake.addConclusion(WS, { content: "WRONG-OBSERVER", observer_id: "x", observed_id: "x", session_id: "lead--general--2", created_at: at(1) });
-      h.fake.addConclusion(WS, { content: "WRONG-OBSERVED", observer_id: "lead", observed_id: "build", session_id: "lead--general--2", created_at: at(1) });
-      h.fake.addConclusion(WS, { content: "OTHER-MISSION", observer_id: "lead", observed_id: "lead", session_id: "lead--slice-07--1", created_at: at(1) });
-      h.fake.addConclusion(WS, { content: "NO-SESSION", observer_id: "lead", observed_id: "lead", created_at: at(1) });
-      h.fake.addConclusion(WS, { content: "JUNK-SESSION", observer_id: "lead", observed_id: "lead", session_id: "junk", created_at: at(1) });
-      h.fake.addConclusion(WS, { content: "   ", observer_id: "lead", observed_id: "lead", session_id: "lead--general--2", created_at: at(1) });
+      h.fake.addConclusion(WS, { content: hd("WRONG-OBSERVER", 21), observer_id: "x", observed_id: "x", session_id: "lead--general--2", created_at: at(1) });
+      h.fake.addConclusion(WS, { content: hd("WRONG-OBSERVED", 22), observer_id: "lead", observed_id: "build", session_id: "lead--general--2", created_at: at(1) });
+      h.fake.addConclusion(WS, { content: hd("OTHER-MISSION", 23), observer_id: "lead", observed_id: LEDGER_PEER, session_id: "lead--slice-07--1", created_at: at(1) });
+      h.fake.addConclusion(WS, { content: hd("NO-SESSION", 24), observer_id: "lead", observed_id: LEDGER_PEER, created_at: at(1) });
+      h.fake.addConclusion(WS, { content: hd("JUNK-SESSION", 25), observer_id: "lead", observed_id: LEDGER_PEER, session_id: "junk", created_at: at(1) });
+      h.fake.addConclusion(WS, { content: "   ", observer_id: "lead", observed_id: LEDGER_PEER, session_id: "lead--general--2", created_at: at(1) });
+      // T24: PLAIN content on the pair is not an entry (the old self-pair
+      // legacy-decision channel is gone).
+      h.fake.addConclusion(WS, { content: "PLAIN-ON-PAIR", observer_id: "lead", observed_id: LEDGER_PEER, session_id: "lead--general--2", created_at: at(1) });
+      // and a valid header on the OLD self pair must no longer count:
+      h.fake.addConclusion(WS, { content: hd("SELF-PAIR-QUOTED", 26), observer_id: "lead", observed_id: "lead", session_id: "lead--general--2", created_at: at(1) });
       const out = await buildInjection({ source: "startup", claudeSessionId: "c1" }, h.config, h.deps());
       expect(out).toContain("## Decisions from the leader");
       expect(out).toContain("D13"); // newest creation order wins
       expect(out).toContain("D04"); // 10th newest
       expect(out).not.toContain("D03"); // 11th and older: capped
       expect(out).not.toContain("D01");
-      for (const m of ["WRONG-OBSERVER", "WRONG-OBSERVED", "OTHER-MISSION", "NO-SESSION", "JUNK-SESSION"]) {
+      for (const m of ["WRONG-OBSERVER", "WRONG-OBSERVED", "OTHER-MISSION", "NO-SESSION", "JUNK-SESSION", "PLAIN-ON-PAIR", "SELF-PAIR-QUOTED"]) {
         expect(out, m).not.toContain(m);
       }
     } finally {

@@ -244,7 +244,10 @@ flowchart LR
 
 **After v0.3** the owner-approved plan supersedes phases 3 and 4 where they differ:
 - v0.4: outcome log, lessons as itemized lore updates, lessons shown before risky
-  actions, trust classes; a test run of other stores alongside.
+  actions, trust classes, local checkpoints; a test run of other stores alongside.
+  A checkpoint is a short line the Stop hook saves from a seat's final reply, in
+  local state, with no model involved. The digest shows it first, so "where you
+  left off" still works when Honcho is behind.
 - v0.5: proposed lessons, a promotion gate with rollback, standing attack tests,
   the store decision.
 - v0.6: self-tuning, only if O7 and O8 have held.

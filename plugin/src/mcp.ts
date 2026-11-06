@@ -15,11 +15,12 @@ import { ageLabel, forScopeLabel, x3 } from "./inject.ts";
 import { logEvent } from "./log.ts";
 import { missionIdIsSecretShaped, normalizeMission, readRigMission, readSeatState, resolveSession, scopeFor, seatStatePath, setRigMission } from "./missions.ts";
 import { redact } from "./redact.ts";
-import { fetchMissionDecisions } from "./reader.ts";
+import { fetchLedgerPair, fetchMissionDecisions } from "./reader.ts";
 import {
   currentLedger,
   formatEntry,
   formatRetire,
+  LEDGER_PEER,
   newDecisionId,
   parseEntry,
   supersededMap,
@@ -210,7 +211,9 @@ async function callAsk(deps: McpDeps, args: Record<string, unknown>): Promise<To
   // decisions part; a failed or empty fetch appends nothing (never fails ask).
   if (missionId !== undefined && config.leaderPeer !== undefined) {
     try {
-      const decisions = await fetchMissionDecisions(client, config.leaderPeer, missionId);
+      // T24 F3 moved the cap out of fetchMissionDecisions; ask keeps its
+      // exact newest-10 view.
+      const decisions = (await fetchMissionDecisions(client, config.leaderPeer, missionId)).slice(0, 10);
       if (decisions.length > 0) {
         const now = (deps.now ?? (() => new Date().toISOString()))();
         const lines: string[] = ["Recorded decisions in this mission:"];
@@ -310,6 +313,10 @@ async function callSearch(deps: McpDeps, args: Record<string, unknown>): Promise
           { observer: scopePeer, observed: about },
           { observer: config.peer, observed: about },
         ];
+  // T24 #6 (Amendment 2): entries left the self pair, so search must query
+  // the ledger pair too - decisions stay findable, marked below as today.
+  if (config.leaderPeer !== undefined)
+    pairs.push({ observer: config.leaderPeer, observed: LEDGER_PEER });
   // each job writes its own slot the moment it answers, so the snapshot at
   // the wall IS "what finished" (a late answer still lands, but this frame
   // is already on its way out)
@@ -338,21 +345,18 @@ async function callSearch(deps: McpDeps, args: Record<string, unknown>): Promise
       }
     })(),
   );
-  // T19a (fixed point 4): search still shows superseded entries, MARKED. The
-  // replacement map comes from the leader's ledger list inside the same wall;
-  // late or failed means simply no marks, never a worse answer.
+  // T19a (fixed point 4): search still shows superseded entries, MARKED.
+  // T24: the map comes from the shared ledger-pair read (Amendment 2 - the
+  // entries live there now) inside the same wall; late or failed means
+  // simply no marks, never a worse answer.
   let superseded: Map<string, string> | undefined;
   if (config.leaderPeer !== undefined) {
     const leaderPeer = config.leaderPeer;
     jobs.push(
       (async () => {
         try {
-          const r = await client.listConclusions({
-            filters: { observer_id: leaderPeer, observed_id: leaderPeer },
-            reverse: true,
-            size: 100,
-          });
-          if (r.ok) superseded = supersededMap(toEntries(r.data.items));
+          const pair = await fetchLedgerPair(client, leaderPeer);
+          superseded = supersededMap(toEntries(pair.items));
         } catch {
           // no marks
         }
@@ -402,6 +406,18 @@ async function callSearch(deps: McpDeps, args: Record<string, unknown>): Promise
  * not exist (probed 2026-10-28), so ensure must precede create. Shared by
  * remember and retire (T19a); behavior identical to the old inline block.
  */
+/**
+ * T24 (Amendment 2): ledger entries live on the pair (leader, openrig-ledger)
+ * and the server needs the observed peer to EXIST (live probe, T24 row) -
+ * get-or-create it before every ledger write. A failure refuses the write:
+ * an entry that cannot land on the pair is not in force anywhere, and a
+ * half-written ledger is exactly what Amendment 2 removes.
+ */
+async function ensureLedgerPeer(client: HonchoClient): Promise<{ ok: true } | { ok: false; why: string }> {
+  const r = await client.createPeer(LEDGER_PEER);
+  return r.ok ? { ok: true } : { ok: false, why: r.kind };
+}
+
 async function leaderSession(
   client: HonchoClient,
   config: Config,
@@ -433,18 +449,16 @@ async function leaderSession(
 }
 
 /**
- * The leader's own-observed conclusions, newest first up to 100 (fixed point
- * 5: the ledger is computed over ALL of them - a superseder may live in
- * another mission), as ledger entries. Any failure yields [] (view-side
- * code treats that as "nothing known", never as "everything is current").
+ * The CURRENT ledger entries (T24, ADR-0014 Amendment 2): the shared paged
+ * read of the LEDGER PAIR (observer the leader, observed the reserved ledger
+ * peer; fixed point 5 kept - a superseder may live in another mission, so
+ * the whole pair is read before anything is filtered). Only valid-header
+ * content is an entry; plain conclusions there are ignored. Any failure
+ * yields [] (validation treats that as "nothing known", never "current").
  */
 async function ledgerFromServer(client: HonchoClient, leaderPeer: string): Promise<LedgerEntry[]> {
-  const r = await client.listConclusions({
-    filters: { observer_id: leaderPeer, observed_id: leaderPeer },
-    reverse: true,
-    size: 100,
-  });
-  return r.ok ? toEntries(r.data.items) : [];
+  const pair = await fetchLedgerPair(client, leaderPeer);
+  return toEntries(pair.items);
 }
 
 const optStr = (v: unknown): string | undefined => (typeof v === "string" && v.trim() !== "" ? v : undefined);
@@ -509,10 +523,14 @@ async function callRemember(deps: McpDeps, args: Record<string, unknown>): Promi
     });
     const sess = await leaderSession(client, config, now);
     if (!sess.ok) return textResult(`memory unavailable: ${sess.why}`, true);
+    const lp = await ensureLedgerPeer(client);
+    if (!lp.ok) return textResult(`memory unavailable: ${lp.why}`, true);
+    // T24 (Amendment 2): the entry lands on the reserved ledger pair - that
+    // is what makes it an entry. The decision MESSAGE below is unchanged.
     const c = await client.createConclusion({
       content,
       observer_id: config.peer,
-      observed_id: config.peer,
+      observed_id: LEDGER_PEER,
       session_id: sess.session,
     });
     if (!c.ok) return textResult(`memory unavailable: ${c.kind}`, true);
@@ -579,10 +597,13 @@ async function callRetire(deps: McpDeps, args: Record<string, unknown>): Promise
     const content = formatRetire(target, reasonR);
     const sess = await leaderSession(client, config, now);
     if (!sess.ok) return textResult(`memory unavailable: ${sess.why}`, true);
+    const lp = await ensureLedgerPeer(client);
+    if (!lp.ok) return textResult(`memory unavailable: ${lp.why}`, true);
+    // T24 (Amendment 2): retire entries live on the ledger pair too.
     const c = await client.createConclusion({
       content,
       observer_id: config.peer,
-      observed_id: config.peer,
+      observed_id: LEDGER_PEER,
       session_id: sess.session,
     });
     if (!c.ok) return textResult(`memory unavailable: ${c.kind}`, true);

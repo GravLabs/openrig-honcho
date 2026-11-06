@@ -117,7 +117,9 @@ async function main(): Promise<void> {
   const scratch = await scratchWorkspace(); // the ONLY workspace ever touched
   const stateDir = makeTempDir("latency-");
   const env: Record<string, string> = {
-    ...process.env as Record<string, string>,
+    // never inherit the running seat's OpenRig session: it would make the test
+    // sender look like another rig's seat, and recall would rightly stay silent
+    ...(Object.fromEntries(Object.entries(process.env).filter(([k]) => !k.startsWith("OPENRIG_"))) as Record<string, string>),
     HOME: stateDir,
     HONCHO_STATE_DIR: stateDir,
     HONCHO_URL: BASE,
@@ -155,8 +157,8 @@ async function main(): Promise<void> {
       [RECALL_SENDER]: { observe_me: true, observe_others: false } });
     if (!ap.ok) throw new Error(`seed recall sender peer: ${safe(JSON.stringify(ap.error), 160)}`);
     for (const content of [
-      "latency recall note one about the sender",
-      "latency recall note two about the sender",
+      "latency recall note one about the sender: retention window lengthened",
+      "latency recall note two about the sender: backpressure threshold lowered",
     ]) {
       const rc = await client.createConclusion({
         content,
@@ -166,7 +168,7 @@ async function main(): Promise<void> {
       if (!rc.ok) throw new Error(`seed recall conclusion: ${safe(JSON.stringify(rc.error), 160)}`);
     }
     const sc = await client.createConclusion({
-      content: "latency recall scope note about the sender",
+      content: "latency recall scope note about the sender: rollout postponed",
       observer_id: "scope.general",
       observed_id: RECALL_SENDER,
       session_id: `${WS_PEER}--general--1` });
@@ -182,12 +184,14 @@ async function main(): Promise<void> {
     };
 
     const bin = (n: (typeof BIN)[number]): string => join(REPO, "plugin/bin", `${n}.ts`);
-    const ssStdin = (source: string): string =>
-      JSON.stringify({ session_id: "claude-latency", source, cwd: stateDir });
+    // a session per run: identical stdin would hit the once-guard and measure
+    // its early exit, not the digest
+    const ssStdin = (source: string, i: number): string =>
+      JSON.stringify({ session_id: `claude-latency-${source}-${i}`, source, cwd: stateDir });
 
-    await timed("session-start startup", () => runChild([process.execPath, bin("session-start")], env, ssStdin("startup")));
-    await timed("session-start resume", () => runChild([process.execPath, bin("session-start")], env, ssStdin("resume")));
-    await timed("session-start compact", () => runChild([process.execPath, bin("session-start")], env, ssStdin("compact")));
+    await timed("session-start startup", (i) => runChild([process.execPath, bin("session-start")], env, ssStdin("startup", i)));
+    await timed("session-start resume", (i) => runChild([process.execPath, bin("session-start")], env, ssStdin("resume", i)));
+    await timed("session-start compact", (i) => runChild([process.execPath, bin("session-start")], env, ssStdin("compact", i)));
 
     await timed("user-prompt (DM)", (i) =>
       runChild(

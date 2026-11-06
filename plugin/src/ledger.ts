@@ -9,12 +9,23 @@
 //
 // The current ledger is every entry that no other entry supersedes and no
 // retire entry names; supersession is transitive (A superseded by B, B by C,
-// leaves only C). A plain conclusion from before the ledger (no header) is a
-// mission decision whose id derives from its server conclusion id, so old
-// entries stay addressable for supersede/retire. Hidden in "in force" views
-// only (session start, ask); search still shows superseded entries, marked.
+// leaves only C). T24 (Amendment 2): plain conclusions are never decisions -
+// only valid-header content on the ledger pair is; pre-ledger decisions stop
+// showing in force unless migrated (scripts/migrate-ledger.ts). Hidden in
+// "in force" views only (session start, ask); search still shows superseded
+// entries, marked.
 
 import { createHash } from "node:crypto";
+
+/**
+ * T24 (ADR-0014 Amendment 2): ledger entries live on their OWN pair -
+ * observer the leader, observed this reserved peer. The peer never sends a
+ * message, so the deriver never writes there, and provenance is structural:
+ * an entry is what sits on this pair with a valid header, nothing else. The
+ * writer refuses this peer as a message sender (attribute.ts) and as a
+ * configured seat id (env.ts), like `openrig`.
+ */
+export const LEDGER_PEER = "openrig-ledger";
 
 export type LedgerKind = "decision" | "approval";
 
@@ -55,7 +66,11 @@ const sha8 = (s: string): string =>
 export const newDecisionId = (peer: string, at: string, fact: string): string =>
   `d-${sha8(JSON.stringify([peer, at, fact]))}`;
 
-/** A pre-ledger plain conclusion's addressable id: hash of its server id. */
+/**
+ * A pre-ledger plain conclusion's addressable id: hash of its server id.
+ * T24: kept ONLY as the benchmark/test helper (scripts/bench.ts seeds its
+ * dataset this way); no reader of real data uses it any more.
+ */
 export const derivedId = (conclusionId: string): string => `d-${sha8(conclusionId)}`;
 
 // The header grammar. Fields after kind+id are optional but canonical in
@@ -129,32 +144,36 @@ function missionOf(sessionId: string): string {
 }
 
 /**
- * Conclusions (newest first, as listed) to ledger entries. Plain content
- * becomes a legacy mission decision with a derived id; its fact is the whole
- * content as stored.
+ * Conclusions (newest first, as listed) to ledger entries. T24 (Amendment
+ * 2): ONLY a valid header makes an entry - a plain conclusion is not a
+ * decision and is silently dropped here (it may be recall material, never
+ * in-force). The legacy derivedId mapping survives only as a benchmark/test
+ * helper (scripts/bench.ts); nothing on real data uses it.
  */
 export function toEntries(
   items: { id: string; content: string; session_id?: string; created_at?: string }[],
 ): LedgerEntry[] {
-  return items.map((c) => {
+  const out: LedgerEntry[] = [];
+  for (const c of items) {
     const p = parseEntry(c.content);
     const at = typeof c.created_at === "string" ? c.created_at : "";
     const mission = missionOf(typeof c.session_id === "string" ? c.session_id : "");
-    if (p.kind === "plain")
-      return { id: derivedId(c.id), kind: "decision", scope: "mission", mission, fact: p.fact, at };
+    if (p.kind === "plain") continue;
     if (p.kind === "retire")
-      return { id: c.id, kind: "retire", scope: "mission", mission, fact: "", target: p.target, at };
-    return {
-      id: p.id,
-      kind: p.kind,
-      scope: p.scope,
-      ...(p.supersedes !== undefined ? { supersedes: p.supersedes } : {}),
-      mission,
-      fact: p.fact,
-      ...(p.reason !== undefined ? { reason: p.reason } : {}),
-      at,
-    };
-  });
+      out.push({ id: c.id, kind: "retire", scope: "mission", mission, fact: "", target: p.target, at });
+    else
+      out.push({
+        id: p.id,
+        kind: p.kind,
+        scope: p.scope,
+        ...(p.supersedes !== undefined ? { supersedes: p.supersedes } : {}),
+        mission,
+        fact: p.fact,
+        ...(p.reason !== undefined ? { reason: p.reason } : {}),
+        at,
+      });
+  }
+  return out;
 }
 
 /**

@@ -4,7 +4,9 @@ Shared memory for an OpenRig rig, as a Claude Code plugin that records who said
 what to whom into a self-hosted [Honcho](https://honcho.dev) server and gives it
 back at session start, when another seat writes, and on demand. This document explains how it works and why;
 each section links the decision record (ADR) that holds the detail. Version
-0.2.2. For setup and day-to-day use, see the [user guide](USER-GUIDE.md); for
+0.2.2, with the v0.3 changes in [ARCHITECTURE.md](ARCHITECTURE.md) and
+[ADR-0014](adr/0014-continuity-digest-and-decision-ledger.md). For setup and
+day-to-day use, see the [user guide](USER-GUIDE.md); for
 what has been measured in real use, see [EVALUATION.md](EVALUATION.md).
 
 ## 1. Problem and goals
@@ -223,6 +225,9 @@ sequenceDiagram
 Decision: [ADR-0002](adr/0002-sessions-missions-scopes.md).
 
 ## 6. Session start
+
+From v0.3 the block below is replaced by the continuity digest, unless
+`HONCHO_DIGEST=off`. See [ARCHITECTURE.md](ARCHITECTURE.md#how-the-digest-is-built).
 
 At startup, resume, clear and compaction, the seat gets one block of background
 memory, fetched in parallel within 4 seconds; anything slower is left out.

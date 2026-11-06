@@ -1,6 +1,6 @@
 # ADR-0014: A continuity digest and a decision ledger (v0.3, phase 2)
 
-Status: proposed (2026-11-04, design.architect), under the owner's approval of
+Status: accepted (built for v0.3; proposed 2026-11-04, design.architect), under the owner's approval of
 the STRATEGY.md objectives. To be built after ADR-0013's metric and holdout,
 and judged by them.
 

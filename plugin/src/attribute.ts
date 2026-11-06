@@ -4,6 +4,7 @@
 // imported) and from the daemon envelope surface (ADR-0003).
 
 import { parseEnvelope, type To } from "./envelope.ts";
+import { LEDGER_PEER } from "./ledger.ts";
 
 export interface AttrCtx {
   /** This seat's peer id, e.g. "dev-build". */
@@ -131,6 +132,12 @@ function validateDerived(peer: string, ctx: AttrCtx): string {
   // ownerPeer arrives from validated config (ADR-0001 checked its shape at
   // load), so a name that equals it stays as-is.
   if (peer === ctx.ownerPeer) return peer;
+  // T24 (ADR-0014 Amendment 2): the reserved ledger peer never takes a
+  // message. A From: claiming it records as unknown-sender instead - it must
+  // never land under that peer, or a leader observing the peer would seed
+  // the ledger pair with derived conclusions (the writer's openrig handling
+  // only stands down observation; here the NAME itself is the hazard).
+  if (peer === LEDGER_PEER) return UNKNOWN_SENDER_PEER;
   return PEER_ID_RE.test(peer) ? peer : UNKNOWN_SENDER_PEER;
 }
 

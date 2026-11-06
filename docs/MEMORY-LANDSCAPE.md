@@ -208,7 +208,7 @@ A system that can edit its own exam will pass it.
 | Release | Content |
 |---|---|
 | v0.3 | As planned. Unchanged. |
-| v0.4 | Outcome log, playbook lessons, action-moment delivery, trust classes. Baseline for O7. |
+| v0.4 | Outcome log, playbook lessons, action-moment delivery, trust classes, local checkpoints. Baseline for O7. |
 | Bake-off (alongside v0.4) | Caura first, then Hindsight, Graphiti and MemOS, on the same benchmark and scenarios, on the local model. Includes cost, latency and multi-seat behaviour. |
 | v0.5 | Lesson candidates, promotion gate, poisoning tests, and the store decision from the bake-off. |
 | v0.6 | Self-tuning, only if O7 and O8 have held. |
@@ -230,6 +230,7 @@ this MIT plugin.
 | Itemized lessons | `ace-agent/ace`, `kayba-ai/agentic-context-engine`: reflector and curator prompts, delta merge | Prompts and logic |
 | Lesson candidates | `google-research/reasoning-bank`: extraction prompts for success and failure | Prompts |
 | Promotion gate | `jennyzzt/dgm`: the archive and evaluate-before-keep structure | Design |
+| Local checkpoints | Orca's worktree checkpoints: one line on what happened and what is next. Ours are saved by the Stop hook, not written by the agent | Design |
 | Bake-off harness | `mem0ai/memory-benchmarks`, LongMemEval (MIT), LongMemEval-V2 | Tools and data |
 
 Not reusable: anything for team authority across the queue, moment-based delivery

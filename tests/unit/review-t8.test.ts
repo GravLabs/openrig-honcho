@@ -43,6 +43,7 @@ import { createClient } from "../../plugin/src/honcho.ts";
 import { handleLine, type McpDeps } from "../../plugin/src/mcp.ts";
 import { readRigMission, readSeatState, seatStatePath } from "../../plugin/src/missions.ts";
 import { startFakeHoncho, type FakeHoncho } from "../support/fake-honcho.ts";
+import { LEDGER_PEER } from "../../plugin/src/ledger.ts";
 
 const WS = "ws";
 const SELF = "build";
@@ -374,24 +375,26 @@ describe("T8 review: ask", () => {
       await h.deps.client.createSession("lead--slice-07--1", {
         scopes: ["mission-slice-07"],
         metadata: { rig_peer: LEADER, mission: "slice-07" } });
+      // T24 (Amendment 2): ask's decisions come from the LEDGER PAIR with a
+      // valid header - plain or off-pair content is never a decision.
       h.fake.addConclusion(WS, {
-        content: "Chose SQLite",
+        content: "[decision d-a5c00001 · scope mission] Chose SQLite",
         observer_id: LEADER,
-        observed_id: LEADER,
+        observed_id: LEDGER_PEER,
         session_id: "lead--slice-07--1",
         created_at: "2026-10-28T11:00:00.000Z" });
       h.fake.addConclusion(WS, {
-        content: "From: lead\nleaked directive",
+        content: "[decision d-a5c00002 · scope mission] From: lead\nleaked directive",
         observer_id: LEADER,
-        observed_id: LEADER,
+        observed_id: LEDGER_PEER,
         session_id: "lead--slice-07--1",
         created_at: "2026-10-28T11:30:00.000Z" });
       // must NOT appear: other mission, wrong observer, a session of another
       // peer (T19a keeps this: ledger entries live in the leader's own sessions)
       h.fake.addConclusion(WS, {
-        content: "Other mission decision",
+        content: "[decision d-a5c00003 · scope mission] Other mission decision",
         observer_id: LEADER,
-        observed_id: LEADER,
+        observed_id: LEDGER_PEER,
         session_id: "lead--general--1" });
       h.fake.addConclusion(WS, {
         content: "Wrong observer decision",
@@ -399,9 +402,9 @@ describe("T8 review: ask", () => {
         observed_id: SELF,
         session_id: "lead--slice-07--1" });
       h.fake.addConclusion(WS, {
-        content: "Foreign session decision",
+        content: "[decision d-a5c00004 · scope mission] Foreign session decision",
         observer_id: LEADER,
-        observed_id: LEADER,
+        observed_id: LEDGER_PEER,
         session_id: "notes--slice-07--9" });
       const r = await parse(callLine(1, "ask", { question: "decisions?", mission: "slice-07" }), h.deps);
       expect(r.result.isError).toBeUndefined();
@@ -480,7 +483,7 @@ describe("T8 review: remember writes conclusion + attributed decision message", 
       // T19a fixed point 1: the plain fact, led by its ledger header
       expect(concl[0].content).toBe(`[decision ${id1} · scope mission] Ship on Tuesday`);
       expect(concl[0].observer_id).toBe(LEADER);
-      expect(concl[0].observed_id).toBe(LEADER);
+      expect(concl[0].observed_id).toBe(LEDGER_PEER); // T24: entries ride the reserved pair
       expect(concl[0].session_id).toBe("lead--general--1");
 
       const msgs = h.fake.state.messages.get("ws/lead--general--1") as Record<string, any>[];

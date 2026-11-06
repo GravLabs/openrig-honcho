@@ -5,6 +5,7 @@ import { describe, expect, test } from "bun:test";
 import {
   DAEMON_TIMEOUT_MS,
   fetchOutbox,
+  fetchOpenWork,
   fetchQueueItem,
   matchesOutboxEntry,
   type OutboxEntry,
@@ -199,5 +200,52 @@ describe("matchesOutboxEntry (pure)", () => {
     // in the anchor fails like a garbage stamp - it never falls back.
     expect(matchesOutboxEntry(entry({ deliveredAt: iso(+1) }), "dev-build@rig-x", "hello there", NOW)).toBe(false);
     expect(matchesOutboxEntry(entry({ deliveredAt: "yesterday" }), "dev-build@rig-x", "hello there", NOW)).toBe(false);
+  });
+});
+
+// T25 (architect 22:17Z 11-05): the open-work line prefers the row's own
+// summary field; the body's first line is the fallback. Same 120-cap rule.
+describe("fetchOpenWork summary preference (T25)", () => {
+  const S = "build@ws";
+  const row = (over: Record<string, unknown>) => ({
+    qitemId: "qitem-20261105010000-0000000000000001",
+    state: "in-progress",
+    destinationSession: S,
+    tsUpdated: iso(-60_000),
+    body: "body first line\nbody second",
+    ...over,
+  });
+  const first = async (queueList: unknown[]) => {
+    const d = await startFakeDaemon({ queueList });
+    try {
+      const r = await fetchOpenWork(d.url, S);
+      expect(r.ok).toBe(true);
+      if (!r.ok) return "";
+      expect(r.items.length).toBe(1);
+      return r.items[0].summary;
+    } finally {
+      d.close();
+    }
+  };
+
+  test("summary is preferred over the body line when it is a non-empty string", async () => {
+    expect(await first([row({ summary: "the row says what it is" })])).toBe("the row says what it is");
+    expect(await first([row({ summary: "  padded summary  " })])).toBe("padded summary"); // trimmed like a body line
+  });
+
+  test("missing, empty, blank or non-string summary fall back to the first body line", async () => {
+    expect(await first([row({})])).toBe("body first line");
+    expect(await first([row({ summary: "" })])).toBe("body first line");
+    expect(await first([row({ summary: "   " })])).toBe("body first line");
+    expect(await first([row({ summary: 42 })])).toBe("body first line");
+    expect(await first([row({ summary: null })])).toBe("body first line");
+  });
+
+  test("the 120-char cap and ellipsis apply to summary exactly like the body", async () => {
+    const long = "x".repeat(150);
+    expect(await first([row({ summary: long })])).toBe(`${"x".repeat(119)}…`);
+    const bodyLong = "y".repeat(150);
+    expect(await first([row({ body: `${bodyLong}\nsecond` })])).toBe(`${"y".repeat(119)}…`);
+    expect((await first([row({ summary: "z".repeat(120) })])).length).toBe(120); // 120 fits whole
   });
 });

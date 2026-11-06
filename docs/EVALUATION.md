@@ -266,6 +266,23 @@ first word exactly. Digest ON in every arm. 15 sessions, no harness errors,
   | other-scope, rerun (5) | WAIT | 5 of 5 - block 452 B to 297 B: the stale approval is gone from the digest, counted nowhere |
   | publish, rerun (3) | PUBLISH | 3 of 3 - no regression, approvals still shown |
 
+### Scenario B after the reserved ledger pair (2026-11-06)
+
+After review showed that quoted text could fabricate an approval, ledger entries
+moved to a reserved pair (ADR-0014 Amendment 2). Rerun with 3 sessions per arm:
+
+| Arm | Expected | Result |
+|---|---|---|
+| Approval for this item | PUBLISH | 3 of 3 |
+| No approval (control) | WAIT | 3 of 3 |
+| Approval for another item | WAIT | 3 of 3 |
+| Approval text only as a plain conclusion | WAIT | 3 of 3 |
+
+The first run of this set was invalid: the plugin could not reach the server, so
+the digests held no ledger data and its passes meant nothing. The harness now
+refuses to start without the server address, and marks a run invalid if what it
+seeded does not reach the digest. The rerun had no invalid runs.
+
 ### Retrieval benchmark: the decision ledger (2026-11-05)
 
 `bun run bench`, 45 questions on a fictional rig history, showing 5 items per
