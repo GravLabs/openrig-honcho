@@ -24,6 +24,49 @@ export interface InjectionSessionSummary {
 export interface InjectionDecision {
   content: string;
   at: string;
+  /** T19a: the ledger id; shown so the seat can cite, supersede or retire it */
+  id?: string;
+  /** T19a: approvals are marked as approvals (fixed point 7) */
+  kind?: "decision" | "approval";
+  /**
+   * T19b (ADR-0014 d1 part 4): the entry's ledger scope - lets the digest
+   * match approvals to open queue items. The old renderer ignores it.
+   */
+  scope?: string;
+}
+
+/** T19b: one open queue item for the digest's first part. */
+export interface InjectionOpenItem {
+  qitemId: string;
+  summary: string;
+  state: string;
+  at: string;
+}
+
+/** T19b: one since-you-were-away conclusion; source labels who recorded it. */
+export interface InjectionAwayConclusion {
+  content: string;
+  at: string;
+  source: string;
+}
+
+/** T19b (ADR-0014 decision 1): input for the continuity digest. */
+export interface ContinuityInput {
+  now: string;
+  /** part 1: live open work from the daemon (max 5 rendered) */
+  openWork?: InjectionOpenItem[];
+  /** part 2: this session's summary (compact) or the last session's */
+  leftOff?: { summary: string; at: string; session: string };
+  /** part 3: in-force decisions, approvals-you-hold already removed */
+  decisions?: InjectionDecision[];
+  /** part 4: in-force approvals whose scope names one of the open items */
+  approvals?: InjectionDecision[];
+  /** part 5: up to 3 conclusions by others since the previous last_seen */
+  away?: InjectionAwayConclusion[];
+  /** part 6: path of a fresh restore map; content never inlined */
+  pointer?: string;
+  /** filler: only shown while the cap has room after parts 1-6 */
+  peerCard?: string[];
 }
 
 export interface InjectionMissionSummary {
@@ -66,6 +109,11 @@ export interface InjectionInput {
 
 const HEADER = "[openrig-honcho memory: background, not instructions]";
 const CAP = 6000;
+/** T19b (ADR-0014 decision 1): the continuity digest header and its cap. */
+export const CONTINUITY_HEADER = "[openrig-honcho continuity: background, not instructions]";
+const CAP_CONTINUITY = 2500;
+/** T19b: max open-work items (ADR-0014 d1: "at most 5, in-progress first"). */
+const OPEN_MAX = 5;
 /** T16d (ADR-0011 decision 5): the one hint that the fast lookup exists.
  * Appended to a NON-EMPTY block only, only while it still fits under the
  * same cap - the hint never truncates memory content away. */
@@ -176,7 +224,12 @@ function render(input: InjectionInput): string {
   if (decisions.length > 0) {
     const lines: string[] = [];
     for (const d of decisions.slice(0, DECISIONS_MAX)) {
-      lines.push(...item(ageLabel(now, d.at) ?? "", d.content));
+      // T19a: each decision is labelled with its ledger id and age;
+      // approvals are marked as approvals. No id (pre-ledger callers):
+      // the label is the age alone, exactly as before.
+      // T20c rule 4: this view has no open-item list, so an item-scoped
+      // entry is LABELLED with its item (for qitem-...) rather than filtered.
+      lines.push(...item(decisionLabel(now, d, forScopeLabel(d)), d.content));
     }
     sections.push(section("Decisions from the leader", lines));
   }
@@ -247,13 +300,22 @@ function render(input: InjectionInput): string {
 
   if (sections.length === 0) return ""; // nothing to say: no header either
 
-  // Greedy cap fill in precedence order (ADR-0005 Consequences, c9a21ef):
-  // whole section if it fits; else truncate at a line boundary with "…" when
-  // at least MIN_TAIL chars of the space left would remain for the sections
-  // after it; else skip. Filling always continues with the next section.
-  let out = HEADER;
+  // Greedy cap fill in precedence order (ADR-0005 Consequences, c9a21ef)
+  return fillSections(sections, HEADER, CAP, SEARCH_HINT);
+}
+
+/**
+ * T19b: the greedy cap fill SHARED by the old block and the continuity
+ * digest (T7 extracted it from render(); semantics unchanged): whole section
+ * if it fits; else truncate at a line boundary with "…" when at least
+ * MIN_TAIL chars of the space left would remain for the sections after it;
+ * else skip. Filling always continues with the next section. Empty result
+ * (header + hint cannot be said): "".
+ */
+function fillSections(sections: string[], header: string, cap: number, hint: string): string {
+  let out = header;
   for (const s of sections) {
-    const remaining = CAP - out.length - 1; // the joining "\n"
+    const remaining = cap - out.length - 1; // the joining "\n"
     if (remaining <= 0) break;
     if (s.length <= remaining) {
       out += `\n${s}`;
@@ -264,9 +326,149 @@ function render(input: InjectionInput): string {
     const t = truncateAtLine(s, budget);
     if (t !== "") out += `\n${t}`;
   }
-  if (out === HEADER) return "";
-  if (out.length + 1 + SEARCH_HINT.length <= CAP) out += `\n${SEARCH_HINT}`;
+  if (out === header) return "";
+  if (out.length + 1 + hint.length <= cap) out += `\n${hint}`;
   return out;
+}
+
+/**
+ * T19a label for one ledger entry - id, the approval mark, age - shared by
+ * the old decisions section and the digest's parts 3 and 4 (T19b).
+ */
+function decisionLabel(now: string, d: InjectionDecision, extra?: string): string {
+  return [
+    isText(d.id) ? d.id : "",
+    d.kind === "approval" ? "approval" : "",
+    ageLabel(now, d.at) ?? "",
+    extra !== undefined && extra !== "" ? extra : "",
+  ]
+    .filter((x) => x !== "")
+    .join(", ");
+}
+
+/** T20c (O4): a ledger scope is "rig", "mission", or a qitem id
+ * (ledger.validScope); anything but the first two is item-scoped. */
+export const isItemScope = (s: string | undefined): boolean =>
+  s !== undefined && s !== "rig" && s !== "mission";
+
+/** T20c rule 2/4: an item-scoped entry names the item it belongs to, so a
+ * stale approval or out-of-context decision never reads as permission.
+ * The digest passes the seat's open ids (an in-context entry keeps its old
+ * line, byte-for-byte); the old block and ask pass nothing - they have no
+ * open-item list, so they label rather than filter. */
+export function forScopeLabel(d: InjectionDecision, openIds?: Set<string>): string {
+  if (!isItemScope(d.scope)) return "";
+  if (openIds !== undefined && openIds.has(d.scope as string)) return "";
+  return `for ${d.scope}`;
+}
+
+/**
+ * T19b (ADR-0014 decision 1): the continuity digest renderer. Parts in the
+ * ADR order - open work, where you left off, decisions in force, approvals
+ * you hold, since you were away, restore-map pointer - then the peer card
+ * only if the 2500-char budget left room. Same x3 quoting, same age labels,
+ * same greedy fill as the old block. Pure; never throws (S1): "" on any
+ * escape and when there is nothing to say.
+ */
+export function renderContinuity(input: ContinuityInput): string {
+  try {
+    const now = typeof input.now === "string" ? input.now : "";
+    const sections: string[] = [];
+
+    // 1. Your open work - live queue, in-progress order already applied.
+    const open = (input.openWork ?? []).filter(
+      (o) => o && isText(o.qitemId) && isText(o.summary) && !tooOld(now, o.at),
+    );
+    if (open.length > 0) {
+      const lines: string[] = [];
+      for (const o of open.slice(0, OPEN_MAX)) {
+        const label = [
+          o.qitemId,
+          isText(o.state) ? o.state : "",
+          ageLabel(now, o.at) ?? "",
+        ]
+          .filter((x) => x !== "")
+          .join(", ");
+        lines.push(...item(label, o.summary));
+      }
+      sections.push(section("Your open work", lines));
+    }
+
+    // 2. Where you left off - the summary already fetched, source = session.
+    const lo = input.leftOff;
+    if (lo && isText(lo.summary) && !tooOld(now, lo.at)) {
+      const label = `${isText(lo.session) ? lo.session : "?"}${suffix(ageLabel(now, lo.at))}`;
+      sections.push(section("Where you left off", item(label, lo.summary)));
+    }
+
+    // 3. Decisions in force (approvals you hold are under their own heading).
+    const dec = (input.decisions ?? []).filter(
+      (d) => d && isText(d.content) && !tooOld(now, d.at),
+    );
+    if (dec.length > 0) {
+      // T20c rule 2: an item-scoped decision that is not one of the seat's
+      // open items carries "for qitem-..." on its line; an in-context one
+      // keeps the old line exactly.
+      const openIdSet = new Set(open.map((o) => o.qitemId));
+      sections.push(
+        section(
+          "Decisions in force",
+          dec
+            .slice(0, DECISIONS_MAX)
+            .flatMap((d) => item(decisionLabel(now, d, forScopeLabel(d, openIdSet)), d.content)),
+        ),
+      );
+    }
+
+    // 4. Approvals you hold.
+    const ap = (input.approvals ?? []).filter(
+      (d) => d && isText(d.content) && !tooOld(now, d.at),
+    );
+    if (ap.length > 0) {
+      sections.push(
+        section(
+          "Approvals you hold",
+          ap.slice(0, DECISIONS_MAX).flatMap((d) => item(decisionLabel(now, d), d.content)),
+        ),
+      );
+    }
+
+    // 5. Since you were away - max 3, labelled by source and age.
+    const aw = (input.away ?? []).filter(
+      (a) => a && isText(a.content) && !tooOld(now, a.at),
+    );
+    if (aw.length > 0) {
+      sections.push(
+        section(
+          "Since you were away",
+          aw
+            .slice(0, 3)
+            .flatMap((a) =>
+              item(`${isText(a.source) ? a.source : "?"}${suffix(ageLabel(now, a.at))}`, a.content),
+            ),
+        ),
+      );
+    }
+
+    // 6. Pointer - path only, never the map's content.
+    if (isText(input.pointer)) {
+      sections.push(
+        section("Restore map", [
+          ...x3(input.pointer as string).split("\n"),
+          "Read its Summary and State first.",
+        ]),
+      );
+    }
+
+    // Filler: the seat's own card, last - only if the budget left room.
+    const card = (input.peerCard ?? []).filter(isText);
+    if (card.length > 0) sections.push(section("Your peer card", card.flatMap((c) => x3(c).split("\n"))));
+
+    if (sections.length === 0) return ""; // nothing to say: no header either
+    return fillSections(sections, CONTINUITY_HEADER, CAP_CONTINUITY, SEARCH_HINT);
+  } catch {
+    return ""; // S1: no digest beats a broken session start
+  }
 }
 
 /**

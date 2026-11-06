@@ -556,3 +556,100 @@ describe("nextSeen hashes (ADR-0011 decision 2)", () => {
     });
   });
 });
+
+// T19c (ADR-0014 decision 4; architect rulings 2026-11-04 23:52Z): the
+// novelty filter and the minimum block, render level. The bin-level paths
+// (transcript read, switch, holdout-on-the-filtered-block, log counts) are
+// pinned in tests/unit/novelty-bin.test.ts.
+describe("T19c novelty filter (render level)", () => {
+  const A = "zephyrium antenna"; // distinctive: zephyrium, antenna
+  const B = "kettleboard shipment slipped";
+  const C = "tarpaulin warehouse friday";
+  const it = (id: string, content: string) => item(id, content, ago(2 * HOUR));
+
+  const renderN = (args: {
+    aboutSender?: RecallItem[];
+    knownTerms?: Set<string>;
+    novel?: boolean;
+  }) =>
+    renderRecall({
+      sender: "dev-x",
+      aboutSender: args.aboutSender ?? [],
+      now: NOW,
+      ...(args.knownTerms !== undefined ? { knownTerms: args.knownTerms } : {}),
+      ...(args.novel !== undefined ? { novel: args.novel } : {}),
+    });
+
+  test("filter off: counts keep exactly today's four keys", () => {
+    const v = renderN({ aboutSender: [it("a", A)] });
+    expect(Object.keys(v.counts).sort()).toEqual(
+      ["considered", "dropped_context", "dropped_dup", "dropped_trivia"],
+    );
+    expect(v.text).toContain("zephyrium");
+  });
+
+  test("all distinctive terms known -> dropped_known; one term new -> kept", () => {
+    const known = new Set(["zephyrium", "antenna"]);
+    const v = renderN({ aboutSender: [it("a", A), it("b", B)], knownTerms: known });
+    expect(v.counts.dropped_known).toBe(1);
+    expect(v.text).toContain("kettleboard");
+    expect(v.text).not.toContain("zephyrium");
+
+    const known2 = new Set(["zephyrium"]); // antenna NOT known
+    const v2 = renderN({ aboutSender: [it("a2", A)], knownTerms: known2 });
+    expect(v2.counts.dropped_known).toBeUndefined();
+    expect(v2.text).toContain("zephyrium");
+  });
+
+  test("an item with NO distinctive terms (all GENERIC) is left to the trivia rule", () => {
+    const known = new Set(["context", "summary", "records"]); // all GENERIC
+    const v = renderN({ aboutSender: [it("g", "context summary records")], knownTerms: known });
+    expect(v.counts.dropped_known).toBeUndefined(); // not dropped here
+    expect(v.text).toContain("context summary records"); // and not trivia either: it stays
+  });
+
+  test("minimum block: one shown item under novel -> nothing shown, dropped_small 1", () => {
+    const v = renderN({ aboutSender: [it("b1", B)], knownTerms: new Set(), novel: true });
+    expect(v.text).toBe("");
+    expect(v.ids).toEqual([]);
+    expect(v.hashes).toEqual([]);
+    expect(v.counts.dropped_small).toBe(1);
+  });
+
+  test("minimum block: off keeps the single item (today's behavior); two items show", () => {
+    const off = renderN({ aboutSender: [it("b2", B)] });
+    expect(off.text).toContain("kettleboard");
+    expect(off.counts.dropped_small).toBeUndefined();
+    const two = renderN({ aboutSender: [it("b3", B), it("c3", C)], knownTerms: new Set(), novel: true });
+    expect(two.ids.length).toBe(2);
+    expect(two.counts.dropped_small).toBeUndefined();
+  });
+
+  test("zero shown stays the plain empty path: no dropped_small (ruling 23:52Z)", () => {
+    const v = renderN({ aboutSender: [], knownTerms: new Set(), novel: true });
+    expect(v.text).toBe("");
+    expect(v.counts.dropped_small).toBeUndefined();
+  });
+
+  test("the < 2 check is on the FINAL shown set: cap leaves one item -> suppressed", () => {
+    // A ~1400-char item fills the 1500 block alone; the small second item
+    // never fits, so novel suppresses the would-be one-item block.
+    const big = `flibberwick ${"padding words here ".repeat(120)}`.slice(0, 1400);
+    const v = renderN({
+      aboutSender: [it("big", big), it("sm", A)],
+      knownTerms: new Set(),
+      novel: true,
+    });
+    expect(v.text).toBe("");
+    expect(v.counts.dropped_small).toBe(1);
+  });
+
+  test("known drops count as considered; a suppression keeps the known count", () => {
+    const known = new Set(["zephyrium", "antenna", "kettleboard", "shipment", "slipped"]);
+    const v = renderN({ aboutSender: [it("a4", A), it("b4", B), it("c4", C)], knownTerms: known, novel: true });
+    expect(v.counts.considered).toBe(3);
+    expect(v.counts.dropped_known).toBe(2); // A and B known, C stays alone
+    expect(v.text).toBe("");
+    expect(v.counts.dropped_small).toBe(1);
+  });
+});

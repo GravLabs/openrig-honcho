@@ -24,7 +24,7 @@ const ago = (ms: number): string => new Date(Date.parse(NOW) - ms).toISOString()
 const SEARCH_HINT =
   "rig_memory search(query) finds past decisions and work in about a second; use it before guessing.";
 
-const mk = async (over: { timeoutMs?: number } = {}) => {
+const mk = async (over: { timeoutMs?: number; leader?: boolean } = {}) => {
   const fake: FakeHoncho = await startFakeHoncho();
   const dir = makeTempDir("mcp-search-test-");
   const timeoutMs = over.timeoutMs ?? 2000;
@@ -40,7 +40,8 @@ const mk = async (over: { timeoutMs?: number } = {}) => {
     recordAutomation: true,
     apiKey: "k",
     stateDir: dir,
-    timeoutMs };
+    timeoutMs,
+    ...(over.leader === true ? { leaderPeer: SELF } : {}) };
   const deps = { config, client, now: () => NOW };
   const call = async (args: Record<string, unknown>): Promise<Record<string, any>> => {
     const line = await handleLine(
@@ -233,6 +234,34 @@ describe("search tool (T16d)", () => {
       const r = await h.call({});
       expect(r.result.isError).toBe(true);
       expect(h.textOf(r)).toBe("usage: search {query: string, about?: string}");
+    } finally {
+      await h.fake.stop();
+    }
+  });
+
+  test("T19a marks: search keeps superseded and retired history, labelled", async () => {
+    const h = await mk({ leader: true });
+    try {
+      const seed = (content: string, at: string): void => {
+        h.fake.addConclusion(WS, { content, observer_id: SELF, observed_id: SELF, created_at: at });
+      };
+      seed("[decision d-11111111 · scope mission] run on 868", ago(4 * HOUR));
+      seed("[decision d-22222222 · scope mission · supersedes d-11111111] run on 915", ago(3 * HOUR));
+      seed("[decision d-33333333 · scope mission] keep this", ago(2 * HOUR));
+      seed("[retire d-33333333] stale", ago(HOUR));
+      const r = await h.call({ query: "run" });
+      expect(r.result.isError).toBeUndefined();
+      const text = h.textOf(r);
+      // history stays visible, marked: the replacement names itself, a retire says retired
+      expect(text).toContain("run on 868 (superseded by d-22222222)");
+      expect(text).toContain("keep this (retired)");
+      // the in-force entry carries no marker
+      expect(text).toContain("run on 915");
+      expect(text).not.toContain("run on 915 (");
+      // the retire entry itself stays unmarked (its header says it all)
+      expect(text).not.toContain("stale (");
+      const ev = h.logLines().find((l) => l.event === "tool:search");
+      expect(ev?.n_items).toBe(4);
     } finally {
       await h.fake.stop();
     }

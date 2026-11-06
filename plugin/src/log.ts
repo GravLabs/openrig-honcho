@@ -21,6 +21,10 @@ export interface LogEvent {
   ms: number;
   session?: string;
   n_msgs?: number;
+  /** T21 (ADR-0005 E5b): 1 on the user-prompt/stop events whose write the
+   * routine rule suppressed deriver reasoning for. A whitelisted count,
+   * never content. */
+  routine?: number;
   /** T14d-2: recall run - the count of items rendered, never their ids. */
   n_items?: number;
   /**
@@ -32,14 +36,42 @@ export interface LogEvent {
   dropped_context?: number;
   dropped_dup?: number;
   dropped_trivia?: number;
+  /**
+   * T19c (ADR-0014 decision 4): items dropped because all their distinctive
+   * terms were already known from the seat's transcript tail; and the
+   * minimum-block flag - 1 when a would-be block of exactly one item was
+   * suppressed (zero items stays the plain empty event). Present only on
+   * the novelty path, so off log lines stay byte-identical.
+   */
+  dropped_known?: number;
+  dropped_small?: number;
   query_chars?: number;
   partial?: number;
+  /**
+   * T18b (ADR-0013 decision 2): the recall holdout arm this run took.
+   * Present ONLY while a holdout share is configured (loadConfig default
+   * 0 -> recall.ts omits it), so today's log lines stay byte-identical.
+   */
+  arm?: "held" | "shown";
   /**
    * T16f (ADR-0012 decision 2): the outbox verification result for a peer
    * prompt in the user-prompt hook's single run event. Absent when no
    * lookup was attempted (no OPENRIG_URL) or the prompt was not a peer one.
+   * T22: "self" - the envelope named this seat and the daemon's own record
+   * (self to self, exact body, delivered now) backs it: a self-scheduled wake.
    */
-  verify?: "verified" | "unverified" | "unchecked";
+  verify?: "verified" | "unverified" | "unchecked" | "self";
+  /**
+   * T19b (ADR-0014 decision 1): the continuity digest ran at this start -
+   * the moment it is for, plus per-part COUNTS (X1: never content, never
+   * ids). Present only on the digest path, so old log lines stay identical.
+   */
+  moment?: string;
+  n_open?: number;
+  n_decisions?: number;
+  n_approvals?: number;
+  n_away?: number;
+  has_pointer?: boolean;
   bytes?: number;
   error_class?: string;
 }
@@ -89,9 +121,19 @@ export function logEvent(config: LogTarget, e: LogEvent): void {
     if (e.dropped_context !== undefined) line.dropped_context = e.dropped_context;
     if (e.dropped_dup !== undefined) line.dropped_dup = e.dropped_dup;
     if (e.dropped_trivia !== undefined) line.dropped_trivia = e.dropped_trivia;
+    if (e.dropped_known !== undefined) line.dropped_known = e.dropped_known;
+    if (e.dropped_small !== undefined) line.dropped_small = e.dropped_small;
     if (e.query_chars !== undefined) line.query_chars = e.query_chars;
     if (e.partial !== undefined) line.partial = e.partial;
+    if (e.arm !== undefined) line.arm = e.arm;
+    if (e.routine !== undefined) line.routine = e.routine;
     if (e.verify !== undefined) line.verify = e.verify;
+    if (e.moment !== undefined) line.moment = e.moment;
+    if (e.n_open !== undefined) line.n_open = e.n_open;
+    if (e.n_decisions !== undefined) line.n_decisions = e.n_decisions;
+    if (e.n_approvals !== undefined) line.n_approvals = e.n_approvals;
+    if (e.n_away !== undefined) line.n_away = e.n_away;
+    if (e.has_pointer !== undefined) line.has_pointer = e.has_pointer;
     if (e.bytes !== undefined) line.bytes = e.bytes;
     if (e.error_class !== undefined) line.error_class = e.error_class;
     appendFileSync(file, `${JSON.stringify(line)}\n`, { mode: 0o600 });

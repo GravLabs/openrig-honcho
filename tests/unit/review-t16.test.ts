@@ -439,6 +439,11 @@ const baseEnv = (
   HONCHO_URL: `http://127.0.0.1:${port}/v3`,
   HONCHO_WORKSPACE: ws,
   HONCHO_PEER: "build",
+  // T19c: the R1-R11 attacks pin the pre-T19c recall contract; the novelty
+  // filter defaults ON now, so they pin it off (off = today's behavior
+  // byte for byte). Novelty's own behavior is pinned in
+  // tests/unit/novelty-bin.test.ts.
+  HONCHO_RECALL_NOVELTY: "off",
   ...extra });
 
 async function runBin(

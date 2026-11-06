@@ -4,7 +4,7 @@ Shared memory for an OpenRig rig, as a Claude Code plugin that records who said
 what to whom into a self-hosted [Honcho](https://honcho.dev) server and gives it
 back at session start, when another seat writes, and on demand. This document explains how it works and why;
 each section links the decision record (ADR) that holds the detail. Version
-0.2.2. For setup and day-to-day use, start with the [README](../README.md); for
+0.2.2. For setup and day-to-day use, see the [user guide](USER-GUIDE.md); for
 what has been measured in real use, see [EVALUATION.md](EVALUATION.md).
 
 ## 1. Problem and goals
@@ -169,6 +169,12 @@ Details that matter:
   with a capture hook on Claude Code 2.1.316). A prompt wrapped as one whole
   `<pasted_content>` block is unwrapped first, which covers a person pasting a
   message by hand.
+- E5b (ADR-0005): a stored message whose whole text is routine status under
+  300 chars ("standing by", "T20 picked up", "awaiting the architect") is
+  written with `configuration.reasoning.enabled = false`, in both directions;
+  `HONCHO_SKIP_ROUTINE=off` restores E5-only behaviour byte for byte, and any
+  decision, result, number or finding keeps its deriver (strict allow-list,
+  bias toward keeping).
 - Only owner-classified prompts are also written to the profile workspace.
 - Replies are the assistant text of the turn, never tool calls, stamped with the
   transcript timestamp (so a reply can't sort before its prompt), and recorded
@@ -384,7 +390,7 @@ Decisions: [ADR-0003](adr/0003-attribution-and-redaction.md),
 - **Log**: one JSON line per hook run in `<state>/log/<workspace>.log` with
   outcome, duration, session and an error class (`connect`, `timeout`,
   `http_<status>`, ...); never content. Rotated at 5 MB, 3 kept. The full list
-  of events per hook is in the [README](../README.md#logs-and-status). Recall
+  of events per hook is in the [user guide](USER-GUIDE.md#logs-and-status). Recall
   logs one event per prompt (`injected`, `empty`, `not-peer`, `not-rig`,
   `terse`, `timeout`, `error`) with `considered` and the dropped counts. The
   writer adds `verify` (`verified`, `unverified`, `unchecked`) for a peer
@@ -401,8 +407,8 @@ Decision: [ADR-0006](adr/0006-quality-bar.md) O1-O4.
 ## 11. Configuration
 
 Everything comes from the seat's environment; see the
-[README settings table](../README.md#settings) for the full list and the
-[install section](../README.md#install) for a rig spec.
+[settings table](USER-GUIDE.md#settings) for the full list and the
+[install section](USER-GUIDE.md#install) for a rig spec.
 Required: `HONCHO_URL`, `HONCHO_WORKSPACE`; `HONCHO_PEER` defaults to the
 OpenRig session name before the `@`. The environment comes either from the rig
 spec (a new rig) or from the project's `.claude/settings.local.json`, written by
@@ -447,6 +453,9 @@ Decision: [ADR-0006](adr/0006-quality-bar.md), [ADR-0007](adr/0007-docs-and-publ
 | [0010](adr/0010-no-double-runs.md) | A seat never runs our hooks twice |
 | [0011](adr/0011-relevant-recall.md) | Recall what is relevant, not what is newest; the `search` tool |
 | [0012](adr/0012-openrig-structured-sources.md) | Check the sender against OpenRig's own records |
+| [0013](adr/0013-measuring-memory.md) | Measure memory by its effect: the use metric, randomized recall, a retrieval benchmark |
+| [0014](adr/0014-continuity-digest-and-decision-ledger.md) | A continuity digest at every restart, and a decision ledger with supersession (proposed) |
+| [0015](adr/0015-seat-identity-lessons-citations.md) | Seat identity stays the session name; lessons live in seat lore, read locally; citations show sources but are not a trust signal. |
 
 Known limits in v0.2.2:
 

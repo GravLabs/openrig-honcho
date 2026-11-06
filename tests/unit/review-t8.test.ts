@@ -272,11 +272,13 @@ describe("T8 review: remember is leader-only", () => {
     // leaderPeer=peer - this is what a leader's real config looks like.
     const l = await mk({ peer: LEADER, observeOthers: true });
     try {
-      // T16d adds the search tool (every seat), right after ask
+      // T16d adds the search tool (every seat), right after ask;
+      // T19a adds retire (leader-only), right after remember.
       expect(toolNames(await parse(frame(1, "tools/list"), l.deps))).toEqual([
         "ask",
         "search",
         "remember",
+        "retire",
         "mission",
         "status",
       ]);
@@ -384,8 +386,8 @@ describe("T8 review: ask", () => {
         observed_id: LEADER,
         session_id: "lead--slice-07--1",
         created_at: "2026-10-28T11:30:00.000Z" });
-      // must NOT appear: other mission, wrong observer, session that does not
-      // parse as this mission
+      // must NOT appear: other mission, wrong observer, a session of another
+      // peer (T19a keeps this: ledger entries live in the leader's own sessions)
       h.fake.addConclusion(WS, {
         content: "Other mission decision",
         observer_id: LEADER,
@@ -468,11 +470,15 @@ describe("T8 review: remember writes conclusion + attributed decision message", 
     try {
       const r = await parse(callLine(1, "remember", { fact: "Ship on Tuesday" }), h.deps);
       expect(r.result.isError).toBeUndefined();
-      expect(textOf(r)).toBe("remembered in lead--general--1");
+      // T19a fixed point 6: the reply names the new ledger id
+      const reply1 = textOf(r);
+      expect(reply1).toMatch(/^remembered in lead--general--1 \(d-[0-9a-f]{8}\)$/);
+      const id1 = /\((d-[0-9a-f]{8})\)/.exec(reply1)![1];
 
       const concl = h.fake.state.conclusions.get(WS) as Record<string, unknown>[];
       expect(concl.length).toBe(1);
-      expect(concl[0].content).toBe("Ship on Tuesday");
+      // T19a fixed point 1: the plain fact, led by its ledger header
+      expect(concl[0].content).toBe(`[decision ${id1} · scope mission] Ship on Tuesday`);
       expect(concl[0].observer_id).toBe(LEADER);
       expect(concl[0].observed_id).toBe(LEADER);
       expect(concl[0].session_id).toBe("lead--general--1");
@@ -498,7 +504,7 @@ describe("T8 review: remember writes conclusion + attributed decision message", 
         callLine(2, "remember", { fact: "rotate: API_KEY=sk-ant-RemFake0123456789abcdefGHIJK" }), // fake-secret
         h.deps,
       );
-      expect(textOf(r2)).toBe("remembered in lead--general--1");
+      expect(textOf(r2)).toMatch(/^remembered in lead--general--1 \(d-[0-9a-f]{8}\)$/);
       const concl2 = h.fake.state.conclusions.get(WS) as Record<string, unknown>[];
       expect(concl2.length).toBe(2);
       expect(String(concl2[1].content)).toContain("[REDACTED");
@@ -514,7 +520,9 @@ describe("T8 review: remember writes conclusion + attributed decision message", 
       h.fake.failPattern("/messages", { status: 500 });
       const r = await parse(callLine(1, "remember", { fact: "Decision under outage" }), h.deps);
       expect(r.result.isError).toBeUndefined();
-      expect(textOf(r)).toBe("remembered in lead--general--1 (decision message spooled)");
+      expect(textOf(r)).toMatch(
+        /^remembered in lead--general--1 \(d-[0-9a-f]{8}\) \(decision message spooled\)$/,
+      );
       const concl = h.fake.state.conclusions.get(WS) as unknown[];
       expect(concl.length).toBe(1);
       expect(existsSync(join(h.dir, WS, "spool", "lead.jsonl"))).toBe(true);
@@ -585,8 +593,8 @@ describe("T8 review: status", () => {
         peer: SELF,
         leader: null,
         profile_workspace: null });
-      // fake-3.4.0 endsWith "3.4.0" -> the expected-version check passes
-      expect(out.server).toEqual({ reachable: true, version: "fake-3.4.0" });
+      // fake-3.5.0 endsWith "3.5.0" -> the expected-version check passes
+      expect(out.server).toEqual({ reachable: true, version: "fake-3.5.0" });
       expect(out.session).toEqual({ mission: "general", session: null });
       // T8c-fix: SeatStats grew `sanitized` - strict toEqual, retargeted at
       // 95b1adb per qitem -20261028215021 (not loosened).

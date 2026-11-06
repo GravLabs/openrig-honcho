@@ -647,7 +647,7 @@ export async function startFakeHoncho(): Promise<FakeHoncho> {
     // the status tool reads the version from the ORIGIN's openapi.json, like
     // the real server serves it outside /v3 (probed 2026-10-28)
     if (u.pathname === "/openapi.json") {
-      return Response.json({ openapi: "3.1.0", info: { title: "fake-honcho", version: "fake-3.4.0" } });
+      return Response.json({ openapi: "3.1.0", info: { title: "fake-honcho", version: "fake-3.5.0" } });
     }
     if (!u.pathname.startsWith("/v3/")) return notFound();
     let segs: string[];

@@ -6,6 +6,18 @@ build next. This is analysis and a proposal, not a description of the current
 plugin. For that, see [DESIGN.md](DESIGN.md); for the measured results it builds
 on, see [EVALUATION.md](EVALUATION.md).
 
+## The goal
+
+**A shared memory layer for agent teams that allows recursive self-improvement.**
+Owner-approved 2026-11-05. The team acts, outcomes are recorded from outside the
+agent, lessons are proposed, a gate checks that they help, and only then do they
+reach the team. See [MEMORY-LANDSCAPE.md](MEMORY-LANDSCAPE.md) for the analysis
+behind this and the releases that follow v0.3.
+
+The loop may change lessons and tuning. It may never change the hard limits,
+authority rules, the tests that judge it, or its own gate. Reflection runs on the
+local model, so team content stays on the owner's machine.
+
 ## 1. Where we are
 
 Version 0.2.2 records every message under its real sender. It shows a memory
@@ -124,8 +136,10 @@ inputs to these.
 | O2 | **Decide once.** Decisions and owner approvals are followed and not re-asked. | Re-asks of the owner or leader for something already decided or approved; actions contradicting a decision in force. | Halve both, against the current baseline. |
 | O3 | **Learn once.** A recorded lesson's mistake does not recur. | Recurrences of failures that have a recorded lesson. | Zero recurrences in the scenario tests; a falling count in pilots. |
 | O4 | **Never mislead.** Memory does not introduce false, stale or unverified beliefs. | Precision of injected items (correct and still current, by review); acted-on instructions that OpenRig never delivered. | At least 90% precision; 0 acted-on undelivered instructions. |
-| O5 | **Pull its weight.** What memory shows changes behaviour. | Share of injected blocks whose new information shows up in the next action (the "new information used" count in EVALUATION.md). | At least 20%, from 0% today. |
+| O5 | **Pull its weight.** What memory shows changes behaviour. | Share of injected blocks whose new information shows up in the next action (the "new information used" count in EVALUATION.md), per moment and overall. | At least 50% overall, from 0% today: 70% for the continuity digest, 50% for work-claim context, 25% for per-message recall. |
 | O6 | **Stay cheap and safe.** Memory never becomes the bottleneck or a leak. | Median and 95th-percentile wait on the seat's critical path; tokens injected per turn; model-host calls; secret and cross-rig leaks. | p95 under 1 s; under 1 500 characters per turn on average; 0 leaks. |
+| O7 | **Improve from experience.** The team gets measurably better at repeated kinds of work. | Repeat-failure rate, review findings per item and time to first correct action, over time, from outcomes recorded outside the agent. | Baseline set in v0.4; targets follow from it. |
+| O8 | **Every change earns its place.** No lesson or tuning stays live without evidence, and all can be undone. | Share of live lessons with a passing comparison; rollback tested. | From v0.5: 100%. |
 
 ## 6. Tests
 
@@ -228,6 +242,22 @@ flowchart LR
 - Act on the sender check once self-sent reminders are understood: show "not
   delivered by OpenRig" next to an instruction that fails it.
 
+**After v0.3** the owner-approved plan supersedes phases 3 and 4 where they differ:
+- v0.4: outcome log, lessons as itemized lore updates, lessons shown before risky
+  actions, trust classes; a test run of other stores alongside.
+- v0.5: proposed lessons, a promotion gate with rollback, standing attack tests,
+  the store decision.
+- v0.6: self-tuning, only if O7 and O8 have held.
+
+**Later, not scheduled:**
+- Support for creating and deleting a rig's workspace, so setup and teardown need
+  no manual server steps. Deleting destroys a rig's memory, so it needs an explicit
+  confirmation. Server deletes also finish in the background, so the tool must
+  report that honestly.
+- Support for more agent harnesses, such as Codex, beyond Claude Code. Each harness
+  needs its own way to hook the moments memory is shown, and the core should stay
+  shared across them.
+
 **Throughout:**
 - Store state as links, not copies.
 - Keep the critical-path budget, and fix the recall slowdown seen on a busy rig
@@ -251,12 +281,17 @@ flowchart LR
 
 ## 9. Open questions
 
-- How much of the continuity digest can come from OpenRig's own compaction
-  restore packets, which already capture a seat's working map? If they cover
-  continuity well, memory should complement them, not duplicate them.
-- Where should lessons live: OpenRig's topology `LEARNED.md` files, Honcho, or
-  both, with one as the source of truth?
-- Is a stable seat id available from OpenRig to use as the peer id, instead of
-  the session name?
+- ~~How much of the continuity digest can come from OpenRig's own compaction
+  restore packets?~~ Answered 2026-11-04 (ADR-0014): the packets are thorough
+  but raw-transcript sized: hundreds of thousands of tokens on a busy seat. They
+  cover compaction only, privately. The digest complements them: about 2 500
+  characters, every restart kind, with a pointer to the seat's restore map.
+- ~~Where should lessons live?~~ Answered 2026-11-05 (ADR-0015): OpenRig's lore
+  convention is the source of truth, read locally. Lesson text does not go to
+  Honcho, because lore must not leave the rig by copy.
+- ~~Is a stable seat id available from OpenRig?~~ Answered 2026-11-05 (ADR-0015):
+  no better one than the session name. `nodeId` changed where the name held and
+  never outlived a rename. The session name stays the peer id, and a rename stays
+  a manual copy.
 - What share of a rig's messages is coordination chatter that should not feed
   the deriver at all?

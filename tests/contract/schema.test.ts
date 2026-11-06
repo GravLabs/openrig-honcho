@@ -8,7 +8,7 @@
 // path+method must exist in the live OpenAPI; every request body field we
 // send must exist in the request schema with a compatible type; every query
 // param we set must be declared; every response field we read must exist.
-// info.version must be 3.4.0 — that is the version the plugin is tested
+// info.version must be 3.5.0 — that is the version the plugin is tested
 // against, and a server upgrade that changes the version FAILS this gate by
 // design, so the drift is caught before users hit it.
 //
@@ -18,7 +18,7 @@
 import { describe, expect, test } from "bun:test";
 
 const SPEC_URL = (process.env.HONCHO_URL ?? process.env.HONCHO_TEST_URL ?? "http://localhost:8000/v3").replace(/\/v3\/?$/, "") + "/openapi.json";
-const EXPECTED_VERSION = "3.4.0";
+const EXPECTED_VERSION = "3.5.0";
 
 type Kind = "string" | "boolean" | "integer" | "number" | "object" | "array[string]" | "array[object]";
 
@@ -284,7 +284,7 @@ describe("contract: real server OpenAPI (read-only) vs plugin/src/honcho.ts", ()
     expect(calls.length).toBe(CALLS.length);
   });
 
-  t("info.version is the tested version 3.4.0 (drift fails the gate by design)", () => {
+  t("info.version is the tested version 3.5.0 (drift fails the gate by design)", () => {
     expect(spec?.info?.version).toBe(EXPECTED_VERSION);
   });
 

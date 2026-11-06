@@ -152,6 +152,51 @@ describe("buildInjection (T7b)", () => {
     }
   });
 
+  test("T19a in-force view: superseded and retired hidden, rig approval cross-mission, headers stripped", async () => {
+    const { fake, config, client, mkDeps } = await mk({ leaderPeer: "lead" });
+    try {
+      for (const s of ["lead--general--1", "lead--auth--1"]) {
+        await client.createSession(s, { peers: {} });
+      }
+      const lead = (session_id: string, content: string): void => {
+        fake.addConclusion(WS, { content, observer_id: "lead", observed_id: "lead", session_id });
+      };
+      // A superseded by B (same mission): only B is in force
+      lead("lead--general--1", "[decision d-aaaaaaaa · scope mission] RUN-ON-868 (reason: the old way)");
+      lead("lead--general--1", "[decision d-bbbbbbbb · scope mission · supersedes d-aaaaaaaa] RUN-ON-915");
+      // rig-scope approval written in ANOTHER mission: shows here, marked
+      lead("lead--auth--1", "[approval d-cccccccc · scope rig] APPROVED-PORT-8080");
+      // retired entry: hidden
+      lead("lead--general--1", "[decision d-dddddddd · scope mission] RETIRED-ITEM");
+      lead("lead--general--1", "[retire d-dddddddd] replaced by a policy");
+      // legacy plain conclusion: an in-force mission decision with a derived id
+      lead("lead--general--1", "LEGACY-DECISION-TEXT");
+      const clock = { value: Date.now() };
+      const out = await buildInjection({ source: "startup", claudeSessionId: "c1" }, config, mkDeps(clock));
+      expect(out).toContain("## Decisions from the leader");
+      expect(out).toContain("RUN-ON-915");
+      expect(out, "superseded entry must be hidden").not.toContain("RUN-ON-868");
+      expect(out, "retired entry must be hidden").not.toContain("RETIRED-ITEM");
+      expect(out).toContain("LEGACY-DECISION-TEXT");
+      expect(out).toContain("APPROVED-PORT-8080"); // rig scope from lead--auth: shown
+      // the approval is marked as an approval on its label line
+      const lines = out.split("\n");
+      const ai = lines.indexOf("APPROVED-PORT-8080");
+      expect(ai).toBeGreaterThan(0);
+      expect(lines[ai - 1]).toContain("d-cccccccc, approval");
+      // ids are shown and the content header is stripped from what is shown
+      expect(out).toMatch(/d-[0-9a-f]{8}, /);
+      expect(out).not.toContain("[decision d-");
+      expect(out).not.toContain("[approval d-");
+      expect(out).not.toContain("[retire d-");
+      // the reason still shows in the body, after the fact
+      expect(out).toContain("RUN-ON-915");
+      expect(out).not.toContain("(reason: the old way)"); // hidden with superseded A
+    } finally {
+      await fake.stop();
+    }
+  });
+
   test("rig digest: leader gets it, non-leader does not", async () => {
     const lead = await mk({ leaderPeer: SELF }); // this seat IS the leader
     try {

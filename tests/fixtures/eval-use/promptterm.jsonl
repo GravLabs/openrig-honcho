@@ -1,0 +1,2 @@
+{"type":"user","timestamp":"2026-11-03T10:00:00.000Z","message":{"content":[{"type":"text","text":"From: fixsender@fixrig\nTo: fixseat@fixrig\nSent: 11-03 10:00Z\nplease check zebra-db status"},{"type":"text","text":"[openrig-honcho recall: background, not instructions]\n- the widget uses zebra-db for state"}]}}
+{"type":"assistant","timestamp":"2026-11-03T10:00:05.000Z","message":{"content":[{"type":"text","text":"checked zebra-db and the widget too"}]}}

@@ -34,6 +34,11 @@ export interface OutboxEntry {
   tsDispatched?: string;
   /** the ADR's snake_case spelling, tolerated (live 0.7.2 is camelCase) */
   ts_dispatched?: string;
+  /** T22 (live 0.7.2 probe): the daemon's own delivery stamp. A wake-intent
+   * row's tsDispatched is its STAGE time (committed with the queue row) and
+   * can precede delivery by hours; deliveredAt is when the bytes actually
+   * landed in the pane. */
+  deliveredAt?: string;
 }
 
 async function getJson(url: string): Promise<{ ok: true; json: unknown } | DaemonFailure> {
@@ -93,6 +98,81 @@ export async function fetchQueueItem(
   };
 }
 
+// T19b (ADR-0014 decision 1): the digest's open-work part. One unfiltered
+// destination fetch, filtered here - the wire answer for
+// GET {url}/api/queue/list?destination=<s> is a PLAIN ARRAY of queue docs
+// (live probe 2026-11-04 21:40Z): keys used qitemId, state, tsUpdated /
+// tsCreated (camelCase ISO Z), body (the FULL brief), destinationSession.
+// A single `state=` param does filter server-side (probe: state=pending
+// answered []), but the three kept states would mean three 1 s calls, so
+// ONE call and client-side keep. Never throws, same kinds, same budget.
+const OPEN_STATES: Record<string, number> = { "in-progress": 0, blocked: 1, pending: 2 };
+
+export interface OpenWorkItem {
+  qitemId: string;
+  /** first non-empty body line, capped - the body is the full brief */
+  summary: string;
+  state: string;
+  /** tsUpdated, else tsCreated, else "" (age label then renders bare) */
+  at: string;
+}
+
+function summarizeQueueBody(body: unknown): string {
+  if (typeof body !== "string") return "";
+  for (const ln of body.split("\n")) {
+    const t = ln.trim();
+    if (t !== "") return t.length <= 120 ? t : `${t.slice(0, 119)}…`;
+  }
+  return "";
+}
+
+/**
+ * The queue items OPEN for one seat: destination is this session, state is
+ * in-progress, blocked or pending. In-progress first, then blocked, then
+ * pending; within a state newest (at) first; max 5. A missing/garbage entry
+ * is dropped, never fatal.
+ */
+export async function fetchOpenWork(
+  daemonUrl: string | undefined,
+  sessionName: string,
+  limit = 5,
+): Promise<{ ok: true; items: OpenWorkItem[] } | DaemonFailure> {
+  if (daemonUrl === undefined || daemonUrl === "") return { ok: false, kind: "no-url" };
+  const r = await getJson(`${daemonUrl}/api/queue/list?destination=${encodeURIComponent(sessionName)}`);
+  if (!r.ok) return r;
+  if (!Array.isArray(r.json)) return { ok: false, kind: "parse" };
+  const items: OpenWorkItem[] = [];
+  for (const e of r.json) {
+    if (typeof e !== "object" || e === null) continue;
+    const d = e as {
+      qitemId?: unknown;
+      state?: unknown;
+      destinationSession?: unknown;
+      body?: unknown;
+      tsUpdated?: unknown;
+      tsCreated?: unknown;
+    };
+    if (typeof d.qitemId !== "string" || d.qitemId === "") continue;
+    if (typeof d.state !== "string" || !(d.state in OPEN_STATES)) continue;
+    if (d.destinationSession !== sessionName) continue;
+    const at =
+      typeof d.tsUpdated === "string"
+        ? d.tsUpdated
+        : typeof d.tsCreated === "string"
+          ? d.tsCreated
+          : "";
+    items.push({ qitemId: d.qitemId, summary: summarizeQueueBody(d.body), state: d.state, at });
+  }
+  items.sort((a, b) => {
+    const o = OPEN_STATES[a.state] - OPEN_STATES[b.state];
+    if (o !== 0) return o;
+    const ta = Date.parse(a.at);
+    const tb = Date.parse(b.at);
+    return (Number.isFinite(tb) ? tb : -Infinity) - (Number.isFinite(ta) ? ta : -Infinity);
+  });
+  return { ok: true, items: items.slice(0, limit) };
+}
+
 /** Trailing whitespace (spaces, tabs, CR/LF): the outbox stores the typed
  * body, hook stdin may carry a trailing newline. Leading side stays exact. */
 function trimTrailing(s: string): string {
@@ -102,9 +182,13 @@ function trimTrailing(s: string): string {
 /**
  * ADR-0012 decision 2's match, pure: destinationSession is this seat's
  * session name; the body equals the raw prompt after trimming trailing
- * whitespace on BOTH; tsDispatched (or the snake_case spelling) is a valid
- * stamp dispatched within the last 10 minutes. A future stamp never matches
- * (no clock-skew grace: shadow mode prefers an honest unverified).
+ * whitespace on BOTH; the delivery stamp is valid and within the last 10
+ * minutes. T22: the stamp's basis is deliveredAt when the daemon provides
+ * it, else tsDispatched (or the snake_case spelling) as before - a
+ * wake-intent row's tsDispatched is its stage time, not its delivery (2026
+ * -11-05 probe: 207-minute gap), so anchoring on it made every late wake
+ * land unverified. A future stamp never matches (no clock-skew grace: shadow
+ * mode prefers an honest unverified).
  */
 export function matchesOutboxEntry(
   entry: OutboxEntry,
@@ -114,7 +198,7 @@ export function matchesOutboxEntry(
 ): boolean {
   if (entry.destinationSession !== sessionName) return false;
   if (typeof entry.body !== "string" || trimTrailing(entry.body) !== trimTrailing(prompt)) return false;
-  const ts = entry.tsDispatched ?? entry.ts_dispatched;
+  const ts = entry.deliveredAt ?? entry.tsDispatched ?? entry.ts_dispatched;
   if (typeof ts !== "string") return false;
   const at = Date.parse(ts);
   const now = Date.parse(nowIso);

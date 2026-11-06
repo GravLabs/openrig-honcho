@@ -11,11 +11,23 @@
 
 import type { Config } from "./env.ts";
 import type { Conclusion, HonchoClient, SearchMessage } from "./honcho.ts";
-import { ageLabel, x3 } from "./inject.ts";
+import { ageLabel, forScopeLabel, x3 } from "./inject.ts";
 import { logEvent } from "./log.ts";
 import { missionIdIsSecretShaped, normalizeMission, readRigMission, readSeatState, resolveSession, scopeFor, seatStatePath, setRigMission } from "./missions.ts";
 import { redact } from "./redact.ts";
 import { fetchMissionDecisions } from "./reader.ts";
+import {
+  currentLedger,
+  formatEntry,
+  formatRetire,
+  newDecisionId,
+  parseEntry,
+  supersededMap,
+  toEntries,
+  validId,
+  validScope,
+  type LedgerEntry,
+} from "./ledger.ts";
 import { collectStatus } from "./status.ts";
 import { ensureSession, freeN, recordBody } from "./writer.ts";
 
@@ -110,13 +122,35 @@ function toolList(deps: McpDeps): unknown[] {
     },
   ];
   if (isLeaderSeat(deps.config)) {
+    // T19a (ADR-0014 d2 + amendment): remember grows the ledger fields; a
+    // plain remember {fact} stays valid and is a mission decision.
     tools.push({
       name: "remember",
-      description: "Record an explicit decision (leader only) into shared memory.",
+      description:
+        "Record an explicit decision or owner approval (leader only) into shared memory. Optional: reason, scope (rig | mission | a qitem id; default mission), supersedes (an in-force d-id this replaces), kind (decision default | approval). The reply names the new decision id.",
       inputSchema: {
         type: "object",
-        properties: { fact: { type: "string" } },
+        properties: {
+          fact: { type: "string" },
+          reason: { type: "string" },
+          scope: { type: "string", description: "rig, mission (default), or a qitem id" },
+          supersedes: { type: "string", description: "d-xxxxxxxx of an entry in the current ledger" },
+          kind: { type: "string", enum: ["decision", "approval"] },
+        },
         required: ["fact"],
+      },
+    });
+    tools.push({
+      name: "retire",
+      description:
+        "Retire a decision or approval (leader only): it stays in memory for history but leaves every in-force view.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          decision_id: { type: "string", description: "d-xxxxxxxx of an entry in the current ledger" },
+          reason: { type: "string" },
+        },
+        required: ["decision_id", "reason"],
       },
     });
   }
@@ -181,7 +215,18 @@ async function callAsk(deps: McpDeps, args: Record<string, unknown>): Promise<To
         const now = (deps.now ?? (() => new Date().toISOString()))();
         const lines: string[] = ["Recorded decisions in this mission:"];
         for (const d of decisions) {
-          lines.push(`- ${ageLabel(now, d.at) ?? "undated"}`);
+          // T20c rule 4: this view has no open-item list, so it LABELS:
+          // approvals are marked as approvals and an item-scoped entry names
+          // its item (for qitem-...). Entries with no item scope read
+          // exactly as before.
+          const label = [
+            ageLabel(now, d.at) ?? "undated",
+            d.kind === "approval" ? "approval" : "",
+            forScopeLabel(d),
+          ]
+            .filter((x) => x !== "")
+            .join(", ");
+          lines.push(`- ${label}`);
           lines.push(...x3(d.content).split("\n"));
         }
         base = `${base}\n\n${lines.join("\n")}`;
@@ -191,6 +236,18 @@ async function callAsk(deps: McpDeps, args: Record<string, unknown>): Promise<To
     }
   }
   return textResult(base);
+}
+
+/** T19a (fixed point 4): the search marker for a superseded or retired
+ * ledger entry's content; "" for anything else (plain, retire entries
+ * themselves, unknown ids, no ledger knowledge). */
+function supersedeMarker(content: string, superseded: Map<string, string> | undefined): string {
+  if (superseded === undefined) return "";
+  const p = parseEntry(content);
+  if (p.kind === "plain" || p.kind === "retire") return "";
+  const by = superseded.get(p.id);
+  if (by === undefined) return "";
+  return by === "retired" ? " (retired)" : ` (superseded by ${by})`;
 }
 
 /** True when every job settled within `ms`; jobs swallow their own errors.
@@ -281,6 +338,27 @@ async function callSearch(deps: McpDeps, args: Record<string, unknown>): Promise
       }
     })(),
   );
+  // T19a (fixed point 4): search still shows superseded entries, MARKED. The
+  // replacement map comes from the leader's ledger list inside the same wall;
+  // late or failed means simply no marks, never a worse answer.
+  let superseded: Map<string, string> | undefined;
+  if (config.leaderPeer !== undefined) {
+    const leaderPeer = config.leaderPeer;
+    jobs.push(
+      (async () => {
+        try {
+          const r = await client.listConclusions({
+            filters: { observer_id: leaderPeer, observed_id: leaderPeer },
+            reverse: true,
+            size: 100,
+          });
+          if (r.ok) superseded = supersededMap(toEntries(r.data.items));
+        } catch {
+          // no marks
+        }
+      })(),
+    );
+  }
   const total = jobs.length;
   const wallHit = !(await settledWithin(jobs, SEARCH_WALL_MS));
   const finishedMem = mem.filter((m): m is Conclusion[] => m !== undefined);
@@ -304,7 +382,7 @@ async function callSearch(deps: McpDeps, args: Record<string, unknown>): Promise
   if (memories.length === 0) lines.push("(none)");
   for (const m of memories) {
     lines.push(`- ${ageLabel(now, String(m.created_at ?? "")) ?? "undated"}`);
-    lines.push(...x3(redact(m.content).text).split("\n"));
+    lines.push(...x3(redact(m.content).text + supersedeMarker(m.content, superseded)).split("\n"));
   }
   lines.push("Messages:");
   if (messages.length === 0) lines.push("(none)");
@@ -318,47 +396,124 @@ async function callSearch(deps: McpDeps, args: Record<string, unknown>): Promise
   return { res: textResult(text), refused: false, logExtra };
 }
 
+/**
+ * The CURRENT session, exactly the writer's lifecycle (free-n when state is
+ * missing, then ensure) - the server rejects conclusions for sessions that do
+ * not exist (probed 2026-10-28), so ensure must precede create. Shared by
+ * remember and retire (T19a); behavior identical to the old inline block.
+ */
+async function leaderSession(
+  client: HonchoClient,
+  config: Config,
+  now: string,
+): Promise<{ ok: true; session: string } | { ok: false; why: string }> {
+  const mission = normalizeMission(readRigMission(config.stateDir, config.workspace).mission);
+  const pre = readSeatState(seatStatePath(config.stateDir, config.workspace, config.peer));
+  let initialN: number | undefined;
+  let nFallback = false;
+  if (pre === null) {
+    const minted = await freeN(client, config.peer, mission);
+    if (minted !== null) {
+      initialN = minted;
+    } else {
+      const sec = Math.floor(Date.parse(now) / 1000);
+      initialN = Number.isFinite(sec) && sec >= 1 ? sec : Math.floor(Date.now() / 1000);
+      nFallback = true;
+    }
+  }
+  const resolved = await resolveSession(config.stateDir, config.workspace, config.peer, {
+    rigMission: mission,
+    now,
+    ...(initialN !== undefined ? { initialN } : {}),
+  });
+  const usedFallback = nFallback && initialN !== undefined && resolved.n === initialN;
+  const en = await ensureSession(client, config, resolved, pre, config.peer, usedFallback);
+  if (en.failed) return { ok: false, why: "could not ensure the session" };
+  return { ok: true, session: resolved.session };
+}
+
+/**
+ * The leader's own-observed conclusions, newest first up to 100 (fixed point
+ * 5: the ledger is computed over ALL of them - a superseder may live in
+ * another mission), as ledger entries. Any failure yields [] (view-side
+ * code treats that as "nothing known", never as "everything is current").
+ */
+async function ledgerFromServer(client: HonchoClient, leaderPeer: string): Promise<LedgerEntry[]> {
+  const r = await client.listConclusions({
+    filters: { observer_id: leaderPeer, observed_id: leaderPeer },
+    reverse: true,
+    size: 100,
+  });
+  return r.ok ? toEntries(r.data.items) : [];
+}
+
+const optStr = (v: unknown): string | undefined => (typeof v === "string" && v.trim() !== "" ? v : undefined);
+
+/** remember's optional fields; an invalid one is a usage error before any write. */
+function parseLedgerArgs(args: Record<string, unknown>):
+  | { ok: true; reason?: string; scope: string; supersedes?: string; kind: "decision" | "approval" }
+  | { ok: false; usage: string } {
+  const reason = optStr(args.reason);
+  if (args.reason !== undefined && reason === undefined)
+    return { ok: false, usage: "remember: reason must be a non-empty string" };
+  const scope = optStr(args.scope) ?? "mission";
+  if (!validScope(scope))
+    return {
+      ok: false,
+      usage: "remember: scope must be rig, mission, or a queue item id (qitem-<14 digits>-<hex>)",
+    };
+  const supersedes = optStr(args.supersedes);
+  if (args.supersedes !== undefined && (supersedes === undefined || !validId(supersedes)))
+    return { ok: false, usage: "remember: supersedes must be a decision id (d- plus 8 hex)" };
+  const kindWord = optStr(args.kind);
+  if (kindWord !== undefined && kindWord !== "decision" && kindWord !== "approval")
+    return { ok: false, usage: "remember: kind must be decision or approval" };
+  return {
+    ok: true,
+    ...(reason !== undefined ? { reason } : {}),
+    scope,
+    ...(supersedes !== undefined ? { supersedes } : {}),
+    kind: kindWord ?? "decision",
+  };
+}
+
 async function callRemember(deps: McpDeps, args: Record<string, unknown>): Promise<ToolResult> {
   const config = deps.config;
   const client = deps.client;
   if (config === null || client === null) return textResult("memory unavailable: disabled", true);
   if (!isLeaderSeat(config)) return textResult("remember is leader-only", true);
   if (typeof args.fact !== "string" || args.fact.trim() === "") {
-    return textResult("usage: remember {fact: string}", true);
+    return textResult("usage: remember {fact: string, reason?, scope?, supersedes?, kind?}", true);
   }
-  const content = redact(args.fact).text;
+  const led = parseLedgerArgs(args);
+  if (!led.ok) return textResult(led.usage, true);
+  const content0 = redact(args.fact).text;
+  const reason = led.reason !== undefined ? redact(led.reason).text : undefined;
   const now = (deps.now ?? (() => new Date().toISOString()))();
   try {
-    // the CURRENT session, exactly the writer's lifecycle (free-n when state
-    // is missing, then ensure) - the server rejects conclusions for sessions
-    // that do not exist (probed 2026-10-28), so ensure must precede create
-    const mission = normalizeMission(readRigMission(config.stateDir, config.workspace).mission);
-    const pre = readSeatState(seatStatePath(config.stateDir, config.workspace, config.peer));
-    let initialN: number | undefined;
-    let nFallback = false;
-    if (pre === null) {
-      const minted = await freeN(client, config.peer, mission);
-      if (minted !== null) {
-        initialN = minted;
-      } else {
-        const sec = Math.floor(Date.parse(now) / 1000);
-        initialN = Number.isFinite(sec) && sec >= 1 ? sec : Math.floor(Date.now() / 1000);
-        nFallback = true;
-      }
+    // supersedes must name an entry IN the current ledger; checked against
+    // the server BEFORE anything is written - a bad id writes nothing.
+    if (led.supersedes !== undefined) {
+      const cur = currentLedger(await ledgerFromServer(client, config.peer));
+      if (!cur.some((e) => e.id === led.supersedes))
+        return textResult(`remember: supersedes ${led.supersedes} is not in the current ledger`, true);
     }
-    const resolved = await resolveSession(config.stateDir, config.workspace, config.peer, {
-      rigMission: mission,
-      now,
-      ...(initialN !== undefined ? { initialN } : {}),
+    const id = newDecisionId(config.peer, now, content0);
+    const content = formatEntry({
+      kind: led.kind,
+      id,
+      scope: led.scope,
+      ...(led.supersedes !== undefined ? { supersedes: led.supersedes } : {}),
+      fact: content0,
+      ...(reason !== undefined ? { reason } : {}),
     });
-    const usedFallback = nFallback && initialN !== undefined && resolved.n === initialN;
-    const en = await ensureSession(client, config, resolved, pre, config.peer, usedFallback);
-    if (en.failed) return textResult("memory unavailable: could not ensure the session", true);
+    const sess = await leaderSession(client, config, now);
+    if (!sess.ok) return textResult(`memory unavailable: ${sess.why}`, true);
     const c = await client.createConclusion({
       content,
       observer_id: config.peer,
       observed_id: config.peer,
-      session_id: resolved.session,
+      session_id: sess.session,
     });
     if (!c.ok) return textResult(`memory unavailable: ${c.kind}`, true);
     // ADR-0004 amendment: a conclusion created via the API lands only in the
@@ -367,7 +522,8 @@ async function callRemember(deps: McpDeps, args: Record<string, unknown>): Promi
     // through the writer's normal path (its own resolve/ensure/send-or-spool)
     // as a "decision" message with reasoning forced on. If the server is
     // down that write spools like any other; the conclusion already succeeded,
-    // so the tool still reports success and only notes the spool.
+    // so the tool still reports success and only notes the spool. T19a: the
+    // message carries the ledger fields as metadata too (amendment).
     let note = "";
     try {
       const wr = await recordBody(
@@ -377,6 +533,13 @@ async function callRemember(deps: McpDeps, args: Record<string, unknown>): Promi
           kindTag: "decision",
           hookName: "mcp-remember",
           reasoningOverride: true,
+          extraMetadata: {
+            decision_id: id,
+            decision_kind: led.kind,
+            decision_scope: led.scope,
+            ...(led.supersedes !== undefined ? { decision_supersedes: led.supersedes } : {}),
+            ...(reason !== undefined ? { decision_reason: reason } : {}),
+          },
         },
         config,
         { client, now: deps.now ?? (() => new Date().toISOString()) },
@@ -385,7 +548,63 @@ async function callRemember(deps: McpDeps, args: Record<string, unknown>): Promi
     } catch {
       note = " (decision message not recorded)";
     }
-    return textResult(`remembered in ${resolved.session}${note}`);
+    return textResult(`remembered in ${sess.session} (${id})${note}`);
+  } catch {
+    return textResult("memory unavailable: unknown", true); // S1: never throw at the wire
+  }
+}
+
+/**
+ * T19a: retire {decision_id, reason} - leader-only, same refusal and logging
+ * shape as remember. The target must be in the current ledger; a retired
+ * entry stays in memory (history, search) but leaves in-force views. Writes
+ * a "[retire d-…]" conclusion plus the decision message.
+ */
+async function callRetire(deps: McpDeps, args: Record<string, unknown>): Promise<ToolResult> {
+  const config = deps.config;
+  const client = deps.client;
+  if (config === null || client === null) return textResult("memory unavailable: disabled", true);
+  if (!isLeaderSeat(config)) return textResult("retire is leader-only", true);
+  const target = optStr(args.decision_id);
+  const reason = optStr(args.reason);
+  if (target === undefined || reason === undefined)
+    return textResult("usage: retire {decision_id: d-xxxxxxxx, reason: string}", true);
+  if (!validId(target)) return textResult("retire: decision_id must be d- plus 8 hex", true);
+  const reasonR = redact(reason).text;
+  const now = (deps.now ?? (() => new Date().toISOString()))();
+  try {
+    const cur = currentLedger(await ledgerFromServer(client, config.peer));
+    if (!cur.some((e) => e.id === target))
+      return textResult(`retire: ${target} is not in the current ledger`, true);
+    const content = formatRetire(target, reasonR);
+    const sess = await leaderSession(client, config, now);
+    if (!sess.ok) return textResult(`memory unavailable: ${sess.why}`, true);
+    const c = await client.createConclusion({
+      content,
+      observer_id: config.peer,
+      observed_id: config.peer,
+      session_id: sess.session,
+    });
+    if (!c.ok) return textResult(`memory unavailable: ${c.kind}`, true);
+    let note = "";
+    try {
+      const wr = await recordBody(
+        {
+          content,
+          sender: config.peer,
+          kindTag: "decision",
+          hookName: "mcp-remember",
+          reasoningOverride: true,
+          extraMetadata: { decision_id: target, decision_op: "retire", decision_reason: reasonR },
+        },
+        config,
+        { client, now: deps.now ?? (() => new Date().toISOString()) },
+      );
+      if (wr.action === "spooled") note = " (decision message spooled)";
+    } catch {
+      note = " (decision message not recorded)";
+    }
+    return textResult(`retired ${target}${note}`);
   } catch {
     return textResult("memory unavailable: unknown", true); // S1: never throw at the wire
   }
@@ -458,6 +677,15 @@ async function handleCall(deps: McpDeps, params: unknown): Promise<CallOutcome> 
         return { res: textResult("remember is leader-only", true), refused: true };
       }
       return { res: await callRemember(deps, args), refused: false };
+    }
+    case "retire": {
+      // same shape as remember: off means off; a non-leader by name gets the
+      // explicit security refusal, logged as refused (T8d-1 item 0)
+      if (deps.config === null) return { res: textResult("unknown tool", true), refused: false };
+      if (!isLeaderSeat(deps.config)) {
+        return { res: textResult("retire is leader-only", true), refused: true };
+      }
+      return { res: await callRetire(deps, args), refused: false };
     }
     case "mission":
       return await callMission(deps, args);

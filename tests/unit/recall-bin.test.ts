@@ -85,6 +85,13 @@ const baseEnv = (
   HONCHO_URL: `http://127.0.0.1:${port}/v3`,
   HONCHO_WORKSPACE: ws,
   HONCHO_PEER: "build",
+  // T19c: this file pins the pre-T19c recall contract (seen list, partial
+  // matrix, gates). The novelty filter now defaults ON for production, so
+  // the fixtures that expect a one-item block or count items as shown must
+  // pin the switch off - "off is today's behavior byte for byte". The
+  // novelty paths (default on, off, window, holdout) are covered by
+  // tests/unit/novelty-bin.test.ts.
+  HONCHO_RECALL_NOVELTY: "off",
   ...extra });
 
 async function runBin(

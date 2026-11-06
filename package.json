@@ -11,6 +11,8 @@
   "type": "module",
   "scripts": {
     "test": "bun test",
-    "gate": "bun run scripts/gate.ts"
+    "gate": "bun run scripts/gate.ts",
+    "bench": "bun run scripts/bench.ts",
+    "scenario": "bun run scripts/scenario.ts"
   }
 }

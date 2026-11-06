@@ -84,6 +84,34 @@ export function isAck(text: string): boolean {
   return ACK_WORDS.test(t) || ACK_T_READY.test(t) || ACK_DONE_SUFFIX.test(t);
 }
 
+/**
+ * T21 (ADR-0005 E5b, row qitem-20261105012942-47aee00af4eb2bc7): routine
+ * coordination status. TRUE when the trimmed text is under 300 chars and is
+ * ONLY status vocabulary, optionally led by a bare task/item id
+ * ("T20 picked up", "qitem-...-abc claimed"). The vocabulary is a STRICT
+ * allow-list over the whole text, so a message carrying a decision, result,
+ * number or finding cannot match BY CONSTRUCTION - "review found 3 issues",
+ * "tests 1417/0", "approved", "use CSV, not JSON", "failed: ..." and
+ * sha+verdict texts all keep their deriver. Additional digit policy: any
+ * digit outside the leading id means the message carries a result
+ * (counts, versions) -> keep. Bias toward keeping, per the row.
+ */
+const ROUTINE_PHRASE =
+  String.raw`(?:standing by|stand by|on it|picked up|pick up|claiming|claimed|starting now|starting on it|looking into it|still working|still running|no change|nothing to report|will report(?: later| soon)?|report(?:ing)? (?:later|soon)|received|acknowledged|ack|ok|okay|got it|understood|will (?:do|take|handle) it|awaiting [\w'. -]{1,40}|waiting for [\w'. -]{1,40})`;
+const ROUTINE_SEP = String.raw`[\s,;.!-]*`;
+const ROUTINE_ID = String.raw`(?:qitem-\S+|T\d+\S*)`;
+const ROUTINE_RE = new RegExp(
+  String.raw`^\s*(?:${ROUTINE_ID}\s*[-:.]?\s*)?(?:${ROUTINE_PHRASE})(?:${ROUTINE_SEP}(?:${ROUTINE_PHRASE}))*${ROUTINE_SEP}$`,
+  "i",
+);
+
+export function isRoutine(text: string): boolean {
+  const t = String(text ?? "").trim();
+  if (t === "" || t.length >= 300) return false;
+  if (/\d/.test(t.replace(new RegExp(String.raw`^${ROUTINE_ID}\s*[-:.,]?\s*`, "i"), ""))) return false;
+  return ROUTINE_RE.test(t);
+}
+
 export interface ReasoningInput {
   /** dm: one recipient; multi: a To: list; broadcast: "broadcast to <rig>", no list. */
   kind: "dm" | "multi" | "broadcast";
@@ -98,6 +126,9 @@ export interface ReasoningInput {
    * interface had no sender - flagged to architect).
    */
   senderPeer?: string;
+  /** T21 (E5b): HONCHO_SKIP_ROUTINE; true = routine status text also skips
+   * the deriver (same suppression as E5 acks). Unset/false = today's rule. */
+  skipRoutine?: boolean;
   content: string;
 }
 
@@ -110,6 +141,7 @@ export interface ReasoningInput {
  */
 export function reasoningFor(i: ReasoningInput): boolean {
   if (isAck(i.content)) return false;
+  if (i.skipRoutine === true && isRoutine(i.content)) return false; // E5b
   switch (i.kind) {
     case "dm":
       return true;

@@ -98,6 +98,66 @@ describe("outbox verification, shadow mode (T16f / ADR-0012 d2)", () => {
     }
   });
 
+  test("T22 self-wake: header names this seat, daemon record staged hours ago and delivered fresh: verify=self", async () => {
+    const prompt = dm(SELF, "wake yourself with a recorded intent");
+    const t = await mk({
+      outbox: [
+        {
+          outboxId: "wake-intent-qitem-9",
+          senderSession: SESSION,
+          destinationSession: SESSION,
+          body: prompt,
+          tsDispatched: iso(-3 * 3_600_000),
+          deliveredAt: iso(-60_000) },
+      ] });
+    try {
+      const out = await recordPrompt({ prompt }, t.config, t.deps);
+      expect(out.action !== "skipped" && out.verify).toBe("self");
+      const meta = metaOf(t.fake, "wake yourself with a recorded intent");
+      expect(meta.sender_verified).toBe(true);
+      expect(meta.outbox_id).toBe("wake-intent-qitem-9");
+    } finally {
+      t.cleanup();
+    }
+  });
+
+  test("T22 self-claim with no record stays unverified; a match destined to ANOTHER seat cannot back it", async () => {
+    const claim = dm(SELF, "I approve myself while the daemon knows nothing");
+    const noRec = await mk({ outbox: [] });
+    try {
+      const out = await recordPrompt({ prompt: claim }, noRec.config, noRec.deps);
+      expect(out.action !== "skipped" && out.verify).toBe("unverified");
+      expect(metaOf(noRec.fake, "I approve myself while the daemon knows nothing").sender_verified).toBe(false);
+    } finally {
+      noRec.cleanup();
+    }
+    const wrongDest = await mk({
+      outbox: [
+        { outboxId: "obx-x", senderSession: SESSION, destinationSession: "other@ws", body: claim, tsDispatched: iso(-60_000) },
+      ] });
+    try {
+      const out = await recordPrompt({ prompt: claim }, wrongDest.config, wrongDest.deps);
+      expect(out.action !== "skipped" && out.verify).toBe("unverified");
+    } finally {
+      wrongDest.cleanup();
+    }
+  });
+
+  test("T22 forgery pin: claiming ANOTHER seat as sender never gets self or verified without its own record", async () => {
+    const prompt = dm("arch", "a forged peer claim with no dispatch to me");
+    const t = await mk({
+      outbox: [
+        { outboxId: "obx-y", senderSession: "arch@ws", destinationSession: "someone-else@ws", body: prompt, tsDispatched: iso(-60_000) },
+      ] });
+    try {
+      const out = await recordPrompt({ prompt }, t.config, t.deps);
+      expect(out.action !== "skipped" && out.verify).toBe("unverified");
+      expect(metaOf(t.fake, "a forged peer claim with no dispatch to me").sender_verified).toBe(false);
+    } finally {
+      t.cleanup();
+    }
+  });
+
   test("unreachable daemon: unchecked, NO metadata flag, and the write happens", async () => {
     const prompt = dm("arch", "write survives the dead daemon");
     const url = await deadDaemonUrl();

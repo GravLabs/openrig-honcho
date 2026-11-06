@@ -68,7 +68,26 @@ const mk = async (over: Partial<Config> = {}) => {
 const seatStats = (dir: string) =>
   statsFrom(readSeatState(seatStatePath(dir, WS, SELF)));
 
-const LOG_KEYS = new Set(["ts", "hook", "peer", "event", "ok", "ms", "session", "n_msgs", "bytes", "error_class"]);
+// T19b (ADR-0014 d1): the digest adds moment + the per-part COUNTS to the
+// session-start line - counts only, never content, same X1 discipline.
+const LOG_KEYS = new Set([
+  "ts",
+  "hook",
+  "peer",
+  "event",
+  "ok",
+  "ms",
+  "session",
+  "n_msgs",
+  "bytes",
+  "error_class",
+  "moment",
+  "n_open",
+  "n_decisions",
+  "n_approvals",
+  "n_away",
+  "has_pointer",
+]);
 
 const readLogLines = (dir: string, ws = WS): Record<string, unknown>[] => {
   const file = join(dir, "log", `${ws}.log`);
@@ -382,7 +401,7 @@ describe("status: MCP tool + bin (O3)", () => {
       expect(j.code).toBe(0);
       const st = JSON.parse(j.out) as Record<string, any>;
       expect(st.healthy).toBe(true);
-      expect(st.server).toEqual({ reachable: true, version: "fake-3.4.0" });
+      expect(st.server).toEqual({ reachable: true, version: "fake-3.5.0" });
       expect(st.counters.written).toBe(0);
       expect(st.problems).toEqual([]);
     } finally {
@@ -460,14 +479,14 @@ describe("status: MCP tool + bin (O3)", () => {
       const client = createClient({ url: config.url, workspace: WS, apiKey: "k", timeoutMs: 2000 });
       const st = await collectStatus(config, client);
       expect(st.healthy).toBe(false);
-      expect(st.problems.some((p) => p.includes("3.4.0"))).toBe(true);
+      expect(st.problems.some((p) => p.includes("3.5.0"))).toBe(true);
     } finally {
       bad.stop();
     }
   });
 
   test("collectStatus: live+replay spool past 8 MB is a problem", async () => {
-    const good = miniServer("3.4.0");
+    const good = miniServer("3.5.0");
     const dir = makeTempDir("obs-collect-");
     try {
       const spool = join(dir, WS, "spool");
@@ -481,7 +500,7 @@ describe("status: MCP tool + bin (O3)", () => {
       const st = await collectStatus(config, client);
       expect(st.healthy).toBe(false);
       expect(st.problems.some((p) => p.includes("8 MB"))).toBe(true);
-      expect(st.problems.some((p) => p.includes("3.4.0"))).toBe(false);
+      expect(st.problems.some((p) => p.includes("3.5.0"))).toBe(false);
     } finally {
       good.stop();
     }

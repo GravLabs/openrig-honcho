@@ -1,0 +1,962 @@
+[
+ {
+  "id": "m-001",
+  "sender": "builder",
+  "session": "lead--sensor-rig--1",
+  "mission": "sensor-rig",
+  "created_at": "2026-10-12T08:31:00Z",
+  "text": "morning: starting sensor driver bring-up today"
+ },
+ {
+  "id": "m-002",
+  "sender": "lead",
+  "session": "builder--sensor-rig--1",
+  "mission": "sensor-rig",
+  "created_at": "2026-10-12T08:36:00Z",
+  "text": "good - vendor header finally in the shared folder"
+ },
+ {
+  "id": "m-003",
+  "sender": "checker",
+  "session": "lead--sensor-rig--1",
+  "mission": "sensor-rig",
+  "created_at": "2026-10-12T09:02:00Z",
+  "text": "review slot freed after ten, send the driver diff there"
+ },
+ {
+  "id": "m-004",
+  "sender": "builder",
+  "session": "checker--sensor-rig--1",
+  "mission": "sensor-rig",
+  "created_at": "2026-10-12T10:41:00Z",
+  "text": "driver diff up, I2C scan looks clean now"
+ },
+ {
+  "id": "m-005",
+  "sender": "checker",
+  "session": "builder--sensor-rig--1",
+  "mission": "sensor-rig",
+  "created_at": "2026-10-12T11:20:00Z",
+  "text": "reviewed. one nit on the reset hold, otherwise good"
+ },
+ {
+  "id": "m-006",
+  "sender": "owner",
+  "session": "lead--sensor-rig--1",
+  "mission": "sensor-rig",
+  "created_at": "2026-10-12T12:05:00Z",
+  "text": "budget: can we afford the external antenna?"
+ },
+ {
+  "id": "m-007",
+  "sender": "lead",
+  "session": "owner--sensor-rig--1",
+  "mission": "sensor-rig",
+  "created_at": "2026-10-12T12:09:00Z",
+  "text": "yes, 2 credits more per node, I recommend it"
+ },
+ {
+  "id": "m-008",
+  "sender": "builder",
+  "session": "lead--power-core--1",
+  "mission": "power-core",
+  "created_at": "2026-10-12T14:55:00Z",
+  "text": "LiPo capacity in the cold test is worse than the datasheet"
+ },
+ {
+  "id": "m-009",
+  "sender": "lead",
+  "session": "builder--power-core--1",
+  "mission": "power-core",
+  "created_at": "2026-10-12T15:01:00Z",
+  "text": "switching to LiFePO4, I will ask owner today"
+ },
+ {
+  "id": "m-010",
+  "sender": "checker",
+  "session": "builder--sensor-rig--1",
+  "mission": "sensor-rig",
+  "created_at": "2026-10-12T16:12:00Z",
+  "text": "the second reflow lifted a pad - tape the sensor next time"
+ },
+ {
+  "id": "m-011",
+  "sender": "builder",
+  "session": "checker--sensor-rig--1",
+  "mission": "sensor-rig",
+  "created_at": "2026-10-13T16:18:00Z",
+  "text": "noted, reworked it. lesson logged"
+ },
+ {
+  "id": "m-012",
+  "sender": "lead",
+  "session": "checker--power-core--1",
+  "mission": "power-core",
+  "created_at": "2026-10-13T09:15:00Z",
+  "text": "watchdog branch merged, please sanity-check the boot path"
+ },
+ {
+  "id": "m-013",
+  "sender": "checker",
+  "session": "lead--power-core--1",
+  "mission": "power-core",
+  "created_at": "2026-10-13T10:10:00Z",
+  "text": "watchdog fired in factory sim - bootloader never pets the dog"
+ },
+ {
+  "id": "m-014",
+  "sender": "lead",
+  "session": "checker--power-core--1",
+  "mission": "power-core",
+  "created_at": "2026-10-13T10:18:00Z",
+  "text": "good catch. rule: every reset path services the dog"
+ },
+ {
+  "id": "m-015",
+  "sender": "builder",
+  "session": "checker--power-core--1",
+  "mission": "power-core",
+  "created_at": "2026-10-13T13:02:00Z",
+  "text": "UART idle current measured 2 mA from USB power"
+ },
+ {
+  "id": "m-016",
+  "sender": "checker",
+  "session": "builder--power-core--1",
+  "mission": "power-core",
+  "created_at": "2026-10-13T13:26:00Z",
+  "text": "float those pins or the whole wake budget is fiction"
+ },
+ {
+  "id": "m-017",
+  "sender": "owner",
+  "session": "lead--sensor-rig--1",
+  "mission": "sensor-rig",
+  "created_at": "2026-10-13T11:58:00Z",
+  "text": "approve the antenna and the spare boards, one line cost impact next time"
+ },
+ {
+  "id": "m-018",
+  "sender": "builder",
+  "session": "builder--sensor-rig--1",
+  "mission": "sensor-rig",
+  "created_at": "2026-10-13T15:20:00Z",
+  "text": "ring buffer soak started, will leave it over the weekend"
+ },
+ {
+  "id": "m-019",
+  "sender": "checker",
+  "session": "lead--power-core--1",
+  "mission": "power-core",
+  "created_at": "2026-10-13T16:40:00Z",
+  "text": "wake budget still 55 uA, over target, need one more pass"
+ },
+ {
+  "id": "m-020",
+  "sender": "lead",
+  "session": "checker--power-core--1",
+  "mission": "power-core",
+  "created_at": "2026-10-13T16:47:00Z",
+  "text": "what is still burning? UART? batteries?"
+ },
+ {
+  "id": "m-021",
+  "sender": "builder",
+  "session": "lead--sensor-rig--1",
+  "mission": "sensor-rig",
+  "created_at": "2026-10-14T09:20:00Z",
+  "text": "antenna sweep: ceramic at -3 dB mounted, external is clean"
+ },
+ {
+  "id": "m-022",
+  "sender": "lead",
+  "session": "builder--sensor-rig--1",
+  "mission": "sensor-rig",
+  "created_at": "2026-10-14T09:33:00Z",
+  "text": "external SMA then, I will write the decision today"
+ },
+ {
+  "id": "m-023",
+  "sender": "checker",
+  "session": "checker--sensor-rig--1",
+  "mission": "sensor-rig",
+  "created_at": "2026-10-14T12:11:00Z",
+  "text": "simulator nightly run green nine nights running"
+ },
+ {
+  "id": "m-024",
+  "sender": "builder",
+  "session": "checker--sensor-rig--1",
+  "mission": "sensor-rig",
+  "created_at": "2026-10-14T17:35:00Z",
+  "text": "sensor driver merged. moving to flash ring buffer"
+ },
+ {
+  "id": "m-025",
+  "sender": "owner",
+  "session": "lead--sensor-rig--1",
+  "mission": "sensor-rig",
+  "created_at": "2026-10-14T14:00:00Z",
+  "text": "can we do the roof pilot? permits are on me"
+ },
+ {
+  "id": "m-026",
+  "sender": "lead",
+  "session": "owner--sensor-rig--1",
+  "mission": "sensor-rig",
+  "created_at": "2026-10-14T14:12:00Z",
+  "text": "yes - 12 nodes, one weekend, I will brief the team"
+ },
+ {
+  "id": "m-027",
+  "sender": "builder",
+  "session": "builder--power-core--1",
+  "mission": "power-core",
+  "created_at": "2026-10-14T10:22:00Z",
+  "text": "LiFePO4 charger profile flashed, overnight cycle pending"
+ },
+ {
+  "id": "m-028",
+  "sender": "checker",
+  "session": "builder--power-core--1",
+  "mission": "power-core",
+  "created_at": "2026-10-14T11:34:00Z",
+  "text": "fuel gauge reads flat all day - that plateau lies, trust coulomb"
+ },
+ {
+  "id": "m-029",
+  "sender": "builder",
+  "session": "checker--power-core--1",
+  "mission": "power-core",
+  "created_at": "2026-10-14T11:41:00Z",
+  "text": "ugh, yes. switching the readout to coulomb counts"
+ },
+ {
+  "id": "m-030",
+  "sender": "lead",
+  "session": "builder--power-core--1",
+  "mission": "power-core",
+  "created_at": "2026-10-14T16:20:00Z",
+  "text": "any movement on the wake budget?"
+ },
+ {
+  "id": "m-031",
+  "sender": "checker",
+  "session": "lead--power-core--1",
+  "mission": "power-core",
+  "created_at": "2026-10-15T16:52:00Z",
+  "text": "38 uA warm after the pin fix. cold number pending freezer"
+ },
+ {
+  "id": "m-032",
+  "sender": "builder",
+  "session": "checker--sensor-rig--1",
+  "mission": "sensor-rig",
+  "created_at": "2026-10-15T09:50:00Z",
+  "text": "915 build boots, radio joins your test gateway"
+ },
+ {
+  "id": "m-033",
+  "sender": "checker",
+  "session": "builder--sensor-rig--1",
+  "mission": "sensor-rig",
+  "created_at": "2026-10-15T09:58:00Z",
+  "text": "seeing the joins, first duty-cycle window running"
+ },
+ {
+  "id": "m-034",
+  "sender": "owner",
+  "session": "lead--power-core--1",
+  "mission": "power-core",
+  "created_at": "2026-10-15T13:05:00Z",
+  "text": "approve OTA in v1 with the watchdog gate. earlier no still stands without it"
+ },
+ {
+  "id": "m-035",
+  "sender": "lead",
+  "session": "builder--power-core--1",
+  "mission": "power-core",
+  "created_at": "2026-10-15T13:18:00Z",
+  "text": "OTA is in v1 now. gate it behind the watchdog rule"
+ },
+ {
+  "id": "m-036",
+  "sender": "builder",
+  "session": "builder--sensor-rig--1",
+  "mission": "sensor-rig",
+  "created_at": "2026-10-15T10:01:00Z",
+  "text": "calibration tool scripted, chamber profile in, ten units clean"
+ },
+ {
+  "id": "m-037",
+  "sender": "checker",
+  "session": "lead--sensor-rig--1",
+  "mission": "sensor-rig",
+  "created_at": "2026-10-15T11:12:00Z",
+  "text": "dawn packet loss again - condensation on the mast, I am sure of it"
+ },
+ {
+  "id": "m-038",
+  "sender": "lead",
+  "session": "checker--sensor-rig--1",
+  "mission": "sensor-rig",
+  "created_at": "2026-10-15T11:19:00Z",
+  "text": "add the snorkel vent to the pilot checklist then"
+ },
+ {
+  "id": "m-039",
+  "sender": "builder",
+  "session": "checker--power-core--1",
+  "mission": "power-core",
+  "created_at": "2026-10-15T14:30:00Z",
+  "text": "battery-critical policy up for review: log on, transmit off"
+ },
+ {
+  "id": "m-040",
+  "sender": "checker",
+  "session": "builder--power-core--1",
+  "mission": "power-core",
+  "created_at": "2026-10-15T15:12:00Z",
+  "text": "reviewed, agrees. data beats reach for this product"
+ },
+ {
+  "id": "m-041",
+  "sender": "owner",
+  "session": "checker--power-core--1",
+  "mission": "power-core",
+  "created_at": "2026-10-16T17:00:00Z",
+  "text": "approve the freezer week - frost data convinced me"
+ },
+ {
+  "id": "m-042",
+  "sender": "checker",
+  "session": "owner--power-core--1",
+  "mission": "power-core",
+  "created_at": "2026-10-16T17:07:00Z",
+  "text": "thank you. Monday start, logbook in order"
+ },
+ {
+  "id": "m-043",
+  "sender": "builder",
+  "session": "lead--sensor-rig--1",
+  "mission": "sensor-rig",
+  "created_at": "2026-10-16T15:50:00Z",
+  "text": "915 duty retest 63 percent by noon, no violations"
+ },
+ {
+  "id": "m-044",
+  "sender": "lead",
+  "session": "builder--sensor-rig--1",
+  "mission": "sensor-rig",
+  "created_at": "2026-10-16T16:05:00Z",
+  "text": "excellent. refresh the docs page in the same PR please"
+ },
+ {
+  "id": "m-045",
+  "sender": "checker",
+  "session": "checker--sensor-rig--1",
+  "mission": "sensor-rig",
+  "created_at": "2026-10-16T14:10:00Z",
+  "text": "simulator: frost profile + dawn fog ramp added, twelve profiles"
+ },
+ {
+  "id": "m-046",
+  "sender": "builder",
+  "session": "builder--sensor-rig--1",
+  "mission": "sensor-rig",
+  "created_at": "2026-10-16T16:30:00Z",
+  "text": "nodes flashed for the pilot. antennas torqued, binder checklist printed"
+ },
+ {
+  "id": "m-047",
+  "sender": "lead",
+  "session": "checker--sensor-rig--1",
+  "mission": "sensor-rig",
+  "created_at": "2026-10-16T17:22:00Z",
+  "text": "pilot prepped. run the pre-flight sim tonight and we are done"
+ },
+ {
+  "id": "m-048",
+  "sender": "builder",
+  "session": "builder--power-core--1",
+  "mission": "power-core",
+  "created_at": "2026-10-12T18:30:00Z",
+  "text": "ack"
+ },
+ {
+  "id": "m-049",
+  "sender": "checker",
+  "session": "checker--sensor-rig--1",
+  "mission": "sensor-rig",
+  "created_at": "2026-10-13T19:31:00Z",
+  "text": "on it"
+ },
+ {
+  "id": "m-050",
+  "sender": "lead",
+  "session": "lead--power-core--1",
+  "mission": "power-core",
+  "created_at": "2026-10-14T10:32:00Z",
+  "text": "done, pushed"
+ },
+ {
+  "id": "m-051",
+  "sender": "builder",
+  "session": "builder--sensor-rig--1",
+  "mission": "sensor-rig",
+  "created_at": "2026-10-15T11:33:00Z",
+  "text": "will review after lunch"
+ },
+ {
+  "id": "m-052",
+  "sender": "checker",
+  "session": "checker--power-core--1",
+  "mission": "power-core",
+  "created_at": "2026-10-16T12:34:00Z",
+  "text": "bench free now"
+ },
+ {
+  "id": "m-053",
+  "sender": "lead",
+  "session": "lead--sensor-rig--1",
+  "mission": "sensor-rig",
+  "created_at": "2026-10-12T13:35:00Z",
+  "text": "noted"
+ },
+ {
+  "id": "m-054",
+  "sender": "builder",
+  "session": "builder--power-core--1",
+  "mission": "power-core",
+  "created_at": "2026-10-13T14:36:00Z",
+  "text": "thanks for the catch"
+ },
+ {
+  "id": "m-055",
+  "sender": "checker",
+  "session": "checker--sensor-rig--1",
+  "mission": "sensor-rig",
+  "created_at": "2026-10-14T15:37:00Z",
+  "text": "same here"
+ },
+ {
+  "id": "m-056",
+  "sender": "lead",
+  "session": "lead--power-core--1",
+  "mission": "power-core",
+  "created_at": "2026-10-15T16:38:00Z",
+  "text": "holding until the gate passes"
+ },
+ {
+  "id": "m-057",
+  "sender": "builder",
+  "session": "builder--sensor-rig--1",
+  "mission": "sensor-rig",
+  "created_at": "2026-10-16T17:39:00Z",
+  "text": "logbook updated"
+ },
+ {
+  "id": "m-058",
+  "sender": "checker",
+  "session": "checker--power-core--1",
+  "mission": "power-core",
+  "created_at": "2026-10-12T18:40:00Z",
+  "text": "ack"
+ },
+ {
+  "id": "m-059",
+  "sender": "lead",
+  "session": "lead--sensor-rig--1",
+  "mission": "sensor-rig",
+  "created_at": "2026-10-13T19:41:00Z",
+  "text": "on it"
+ },
+ {
+  "id": "m-060",
+  "sender": "builder",
+  "session": "builder--power-core--1",
+  "mission": "power-core",
+  "created_at": "2026-10-14T10:42:00Z",
+  "text": "done, pushed"
+ },
+ {
+  "id": "m-061",
+  "sender": "checker",
+  "session": "checker--sensor-rig--1",
+  "mission": "sensor-rig",
+  "created_at": "2026-10-15T11:43:00Z",
+  "text": "will review after lunch"
+ },
+ {
+  "id": "m-062",
+  "sender": "lead",
+  "session": "lead--power-core--1",
+  "mission": "power-core",
+  "created_at": "2026-10-16T12:44:00Z",
+  "text": "bench free now"
+ },
+ {
+  "id": "m-063",
+  "sender": "builder",
+  "session": "builder--sensor-rig--1",
+  "mission": "sensor-rig",
+  "created_at": "2026-10-12T13:45:00Z",
+  "text": "noted"
+ },
+ {
+  "id": "m-064",
+  "sender": "checker",
+  "session": "checker--power-core--1",
+  "mission": "power-core",
+  "created_at": "2026-10-13T14:46:00Z",
+  "text": "thanks for the catch"
+ },
+ {
+  "id": "m-065",
+  "sender": "lead",
+  "session": "lead--sensor-rig--1",
+  "mission": "sensor-rig",
+  "created_at": "2026-10-14T15:47:00Z",
+  "text": "same here"
+ },
+ {
+  "id": "m-066",
+  "sender": "builder",
+  "session": "builder--power-core--1",
+  "mission": "power-core",
+  "created_at": "2026-10-15T16:48:00Z",
+  "text": "holding until the gate passes"
+ },
+ {
+  "id": "m-067",
+  "sender": "checker",
+  "session": "checker--sensor-rig--1",
+  "mission": "sensor-rig",
+  "created_at": "2026-10-16T17:49:00Z",
+  "text": "logbook updated"
+ },
+ {
+  "id": "m-068",
+  "sender": "lead",
+  "session": "lead--power-core--1",
+  "mission": "power-core",
+  "created_at": "2026-10-12T18:50:00Z",
+  "text": "ack"
+ },
+ {
+  "id": "m-069",
+  "sender": "builder",
+  "session": "builder--sensor-rig--1",
+  "mission": "sensor-rig",
+  "created_at": "2026-10-13T19:51:00Z",
+  "text": "on it"
+ },
+ {
+  "id": "m-070",
+  "sender": "checker",
+  "session": "checker--power-core--1",
+  "mission": "power-core",
+  "created_at": "2026-10-14T10:52:00Z",
+  "text": "done, pushed"
+ },
+ {
+  "id": "m-071",
+  "sender": "lead",
+  "session": "lead--sensor-rig--1",
+  "mission": "sensor-rig",
+  "created_at": "2026-10-15T11:53:00Z",
+  "text": "will review after lunch"
+ },
+ {
+  "id": "m-072",
+  "sender": "builder",
+  "session": "builder--power-core--1",
+  "mission": "power-core",
+  "created_at": "2026-10-16T12:54:00Z",
+  "text": "bench free now"
+ },
+ {
+  "id": "m-073",
+  "sender": "checker",
+  "session": "checker--sensor-rig--1",
+  "mission": "sensor-rig",
+  "created_at": "2026-10-12T13:55:00Z",
+  "text": "noted"
+ },
+ {
+  "id": "m-074",
+  "sender": "lead",
+  "session": "lead--power-core--1",
+  "mission": "power-core",
+  "created_at": "2026-10-13T14:56:00Z",
+  "text": "thanks for the catch"
+ },
+ {
+  "id": "m-075",
+  "sender": "builder",
+  "session": "builder--sensor-rig--1",
+  "mission": "sensor-rig",
+  "created_at": "2026-10-14T15:57:00Z",
+  "text": "same here"
+ },
+ {
+  "id": "m-076",
+  "sender": "checker",
+  "session": "checker--power-core--1",
+  "mission": "power-core",
+  "created_at": "2026-10-15T16:58:00Z",
+  "text": "holding until the gate passes"
+ },
+ {
+  "id": "m-077",
+  "sender": "lead",
+  "session": "lead--sensor-rig--1",
+  "mission": "sensor-rig",
+  "created_at": "2026-10-16T17:59:00Z",
+  "text": "logbook updated"
+ },
+ {
+  "id": "m-078",
+  "sender": "builder",
+  "session": "builder--power-core--1",
+  "mission": "power-core",
+  "created_at": "2026-10-12T18:30:00Z",
+  "text": "ack"
+ },
+ {
+  "id": "m-079",
+  "sender": "checker",
+  "session": "checker--sensor-rig--1",
+  "mission": "sensor-rig",
+  "created_at": "2026-10-13T19:31:00Z",
+  "text": "on it"
+ },
+ {
+  "id": "m-080",
+  "sender": "lead",
+  "session": "lead--power-core--1",
+  "mission": "power-core",
+  "created_at": "2026-10-14T10:32:00Z",
+  "text": "done, pushed"
+ },
+ {
+  "id": "m-081",
+  "sender": "builder",
+  "session": "builder--sensor-rig--1",
+  "mission": "sensor-rig",
+  "created_at": "2026-10-15T11:33:00Z",
+  "text": "will review after lunch"
+ },
+ {
+  "id": "m-082",
+  "sender": "checker",
+  "session": "checker--power-core--1",
+  "mission": "power-core",
+  "created_at": "2026-10-16T12:34:00Z",
+  "text": "bench free now"
+ },
+ {
+  "id": "m-083",
+  "sender": "lead",
+  "session": "lead--sensor-rig--1",
+  "mission": "sensor-rig",
+  "created_at": "2026-10-12T13:35:00Z",
+  "text": "noted"
+ },
+ {
+  "id": "m-084",
+  "sender": "builder",
+  "session": "builder--power-core--1",
+  "mission": "power-core",
+  "created_at": "2026-10-13T14:36:00Z",
+  "text": "thanks for the catch"
+ },
+ {
+  "id": "m-085",
+  "sender": "checker",
+  "session": "checker--sensor-rig--1",
+  "mission": "sensor-rig",
+  "created_at": "2026-10-14T15:37:00Z",
+  "text": "same here"
+ },
+ {
+  "id": "m-086",
+  "sender": "lead",
+  "session": "lead--power-core--1",
+  "mission": "power-core",
+  "created_at": "2026-10-15T16:38:00Z",
+  "text": "holding until the gate passes"
+ },
+ {
+  "id": "m-087",
+  "sender": "builder",
+  "session": "builder--sensor-rig--1",
+  "mission": "sensor-rig",
+  "created_at": "2026-10-16T17:39:00Z",
+  "text": "logbook updated"
+ },
+ {
+  "id": "m-088",
+  "sender": "checker",
+  "session": "checker--power-core--1",
+  "mission": "power-core",
+  "created_at": "2026-10-12T18:40:00Z",
+  "text": "ack"
+ },
+ {
+  "id": "m-089",
+  "sender": "lead",
+  "session": "lead--sensor-rig--1",
+  "mission": "sensor-rig",
+  "created_at": "2026-10-13T19:41:00Z",
+  "text": "on it"
+ },
+ {
+  "id": "m-090",
+  "sender": "builder",
+  "session": "builder--power-core--1",
+  "mission": "power-core",
+  "created_at": "2026-10-14T10:42:00Z",
+  "text": "done, pushed"
+ },
+ {
+  "id": "m-091",
+  "sender": "checker",
+  "session": "checker--sensor-rig--1",
+  "mission": "sensor-rig",
+  "created_at": "2026-10-15T11:43:00Z",
+  "text": "will review after lunch"
+ },
+ {
+  "id": "m-092",
+  "sender": "lead",
+  "session": "lead--power-core--1",
+  "mission": "power-core",
+  "created_at": "2026-10-16T12:44:00Z",
+  "text": "bench free now"
+ },
+ {
+  "id": "m-093",
+  "sender": "builder",
+  "session": "builder--sensor-rig--1",
+  "mission": "sensor-rig",
+  "created_at": "2026-10-12T13:45:00Z",
+  "text": "noted"
+ },
+ {
+  "id": "m-094",
+  "sender": "checker",
+  "session": "checker--power-core--1",
+  "mission": "power-core",
+  "created_at": "2026-10-13T14:46:00Z",
+  "text": "thanks for the catch"
+ },
+ {
+  "id": "m-095",
+  "sender": "lead",
+  "session": "lead--sensor-rig--1",
+  "mission": "sensor-rig",
+  "created_at": "2026-10-14T15:47:00Z",
+  "text": "same here"
+ },
+ {
+  "id": "m-096",
+  "sender": "builder",
+  "session": "builder--power-core--1",
+  "mission": "power-core",
+  "created_at": "2026-10-15T16:48:00Z",
+  "text": "holding until the gate passes"
+ },
+ {
+  "id": "m-097",
+  "sender": "checker",
+  "session": "checker--sensor-rig--1",
+  "mission": "sensor-rig",
+  "created_at": "2026-10-16T17:49:00Z",
+  "text": "logbook updated"
+ },
+ {
+  "id": "m-098",
+  "sender": "lead",
+  "session": "lead--power-core--1",
+  "mission": "power-core",
+  "created_at": "2026-10-12T18:50:00Z",
+  "text": "ack"
+ },
+ {
+  "id": "m-099",
+  "sender": "builder",
+  "session": "builder--sensor-rig--1",
+  "mission": "sensor-rig",
+  "created_at": "2026-10-13T19:51:00Z",
+  "text": "on it"
+ },
+ {
+  "id": "m-100",
+  "sender": "checker",
+  "session": "checker--power-core--1",
+  "mission": "power-core",
+  "created_at": "2026-10-14T10:52:00Z",
+  "text": "done, pushed"
+ },
+ {
+  "id": "m-101",
+  "sender": "lead",
+  "session": "lead--sensor-rig--1",
+  "mission": "sensor-rig",
+  "created_at": "2026-10-15T11:53:00Z",
+  "text": "will review after lunch"
+ },
+ {
+  "id": "m-102",
+  "sender": "builder",
+  "session": "builder--power-core--1",
+  "mission": "power-core",
+  "created_at": "2026-10-16T12:54:00Z",
+  "text": "bench free now"
+ },
+ {
+  "id": "m-103",
+  "sender": "checker",
+  "session": "checker--sensor-rig--1",
+  "mission": "sensor-rig",
+  "created_at": "2026-10-12T13:55:00Z",
+  "text": "noted"
+ },
+ {
+  "id": "m-104",
+  "sender": "lead",
+  "session": "lead--power-core--1",
+  "mission": "power-core",
+  "created_at": "2026-10-13T14:56:00Z",
+  "text": "thanks for the catch"
+ },
+ {
+  "id": "m-105",
+  "sender": "builder",
+  "session": "builder--sensor-rig--1",
+  "mission": "sensor-rig",
+  "created_at": "2026-10-14T15:57:00Z",
+  "text": "same here"
+ },
+ {
+  "id": "m-106",
+  "sender": "checker",
+  "session": "checker--power-core--1",
+  "mission": "power-core",
+  "created_at": "2026-10-15T16:58:00Z",
+  "text": "holding until the gate passes"
+ },
+ {
+  "id": "m-107",
+  "sender": "lead",
+  "session": "lead--sensor-rig--1",
+  "mission": "sensor-rig",
+  "created_at": "2026-10-16T17:59:00Z",
+  "text": "logbook updated"
+ },
+ {
+  "id": "m-108",
+  "sender": "builder",
+  "session": "builder--power-core--1",
+  "mission": "power-core",
+  "created_at": "2026-10-12T18:30:00Z",
+  "text": "ack"
+ },
+ {
+  "id": "m-109",
+  "sender": "checker",
+  "session": "checker--sensor-rig--1",
+  "mission": "sensor-rig",
+  "created_at": "2026-10-13T19:31:00Z",
+  "text": "on it"
+ },
+ {
+  "id": "m-110",
+  "sender": "lead",
+  "session": "lead--power-core--1",
+  "mission": "power-core",
+  "created_at": "2026-10-14T10:32:00Z",
+  "text": "done, pushed"
+ },
+ {
+  "id": "m-111",
+  "sender": "builder",
+  "session": "builder--sensor-rig--1",
+  "mission": "sensor-rig",
+  "created_at": "2026-10-15T11:33:00Z",
+  "text": "will review after lunch"
+ },
+ {
+  "id": "m-112",
+  "sender": "checker",
+  "session": "checker--power-core--1",
+  "mission": "power-core",
+  "created_at": "2026-10-16T12:34:00Z",
+  "text": "bench free now"
+ },
+ {
+  "id": "m-113",
+  "sender": "lead",
+  "session": "lead--sensor-rig--1",
+  "mission": "sensor-rig",
+  "created_at": "2026-10-12T13:35:00Z",
+  "text": "noted"
+ },
+ {
+  "id": "m-114",
+  "sender": "builder",
+  "session": "builder--power-core--1",
+  "mission": "power-core",
+  "created_at": "2026-10-13T14:36:00Z",
+  "text": "thanks for the catch"
+ },
+ {
+  "id": "m-115",
+  "sender": "checker",
+  "session": "checker--sensor-rig--1",
+  "mission": "sensor-rig",
+  "created_at": "2026-10-14T15:37:00Z",
+  "text": "same here"
+ },
+ {
+  "id": "m-116",
+  "sender": "lead",
+  "session": "lead--power-core--1",
+  "mission": "power-core",
+  "created_at": "2026-10-15T16:38:00Z",
+  "text": "holding until the gate passes"
+ },
+ {
+  "id": "m-117",
+  "sender": "builder",
+  "session": "builder--sensor-rig--1",
+  "mission": "sensor-rig",
+  "created_at": "2026-10-16T17:39:00Z",
+  "text": "logbook updated"
+ },
+ {
+  "id": "m-118",
+  "sender": "checker",
+  "session": "checker--power-core--1",
+  "mission": "power-core",
+  "created_at": "2026-10-12T18:40:00Z",
+  "text": "ack"
+ },
+ {
+  "id": "m-119",
+  "sender": "lead",
+  "session": "lead--sensor-rig--1",
+  "mission": "sensor-rig",
+  "created_at": "2026-10-13T19:41:00Z",
+  "text": "on it"
+ },
+ {
+  "id": "m-120",
+  "sender": "builder",
+  "session": "builder--power-core--1",
+  "mission": "power-core",
+  "created_at": "2026-10-14T10:42:00Z",
+  "text": "done, pushed"
+ }
+]

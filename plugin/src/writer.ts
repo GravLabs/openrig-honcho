@@ -45,7 +45,7 @@ import {
 } from "./missions.ts";
 import { redact } from "./redact.ts";
 import { applyQueueMissionHint, qitemIdFromNudge } from "./nudge.ts";
-import { chunk, clientId, reasoningFor } from "./shape.ts";
+import { chunk, clientId, isRoutine, reasoningFor } from "./shape.ts";
 import { updateStats } from "./stats.ts";
 import {
   replay,
@@ -80,13 +80,17 @@ export type WriterOutcome =
       n_msgs: number;
       /** present on spooled: the O1 failure class (architect fix 19:50Z #2) */
       error_class?: string;
+      /** T21 (E5b): present-when-true: the routine rule suppressed the
+       * deriver for this write; the hook bins fold it into the run's single
+       * event as routine: 1. */
+      routine?: boolean;
       /**
        * T16f (ADR-0012 decision 2): the outbox verification result for a
        * peer-prompt write. Absent = no lookup attempted (no OPENRIG_URL -
        * deliberate, see promptSteps). The hook bin folds it into the run's
        * single event as the `verify` field (O1).
        */
-      verify?: "verified" | "unverified" | "unchecked";
+      verify?: "verified" | "unverified" | "unchecked" | "self";
     };
 
 const REPLAY_MAX = 50;
@@ -276,6 +280,15 @@ export interface RecordOpts {
   senderVerified?: boolean;
   /** the matching outbox entry's id (metadata outbox_id), verified only */
   outboxId?: string;
+  /**
+   * T19a (ADR-0014 amendment): extra metadata for this write, spread after
+   * the fixed keys (a key here wins, by design - only callers that know what
+   * they are doing pass one). The remember/retire tools pass the ledger
+   * fields (decision_id, decision_kind, ...) so the decision message carries
+   * what the conclusion header carries. Absent: metadata stays exactly as
+   * before for every existing caller.
+   */
+  extraMetadata?: Record<string, string | number | boolean>;
 }
 
 export async function recordBody(
@@ -371,6 +384,10 @@ export async function recordBody(
       rKind = "broadcast";
     }
   }
+  // T21 (E5b): the routine rule FIRED = switch on and the text is routine
+  // status (an ack that is also routine still counts as fired - both rules
+  // suppress the same way). Rides the run's single event as routine: 1.
+  const routineApplied = config.skipRoutine !== false && isRoutine(content);
   const reasoning =
     opts.reasoningOverride === true
       ? true
@@ -380,6 +397,7 @@ export async function recordBody(
           selfPeer: config.peer,
           senderPeer: sender,
           leaderPeer: config.leaderPeer,
+          skipRoutine: config.skipRoutine !== false,
           content,
         });
   const messages: MessageInput[] = chunks.map((c, i) => ({
@@ -396,6 +414,7 @@ export async function recordBody(
       // (unchecked / no lookup) leaves the metadata exactly pre-T16f.
       ...(opts.senderVerified !== undefined ? { sender_verified: opts.senderVerified } : {}),
       ...(opts.outboxId !== undefined ? { outbox_id: opts.outboxId } : {}),
+      ...(opts.extraMetadata ?? {}),
     },
     // T8d-3 (ADR-0006 a2abdbd): a message configuration is sent ONLY to
     // suppress (acks, extra broadcast copies). When reasoning would be true,
@@ -427,6 +446,7 @@ export async function recordBody(
       peer: sender,
       n_msgs: messages.length,
       error_class: errorClassFrom(ensureFailedKind ?? "unknown", ensureFailedStatus),
+      ...(routineApplied ? { routine: true } : {}),
     };
   }
   const out = await sendOrSpool(paths, deps.client, session, messages, ensure);
@@ -453,6 +473,7 @@ export async function recordBody(
     ...(out.result === "spooled"
       ? { error_class: errorClassFrom(out.kind, out.status) }
       : {}),
+    ...(routineApplied ? { routine: true } : {}),
   };
 }
 
@@ -510,6 +531,7 @@ async function profileWrite(content: string, config: Config, deps: WriterDeps): 
       to: [],
       selfPeer: config.peer,
       senderPeer: config.ownerPeer,
+      skipRoutine: config.skipRoutine !== false, // T21 (E5b)
       content: red,
     });
     const messages: MessageInput[] = chunks.map((ch) => ({
@@ -654,7 +676,7 @@ async function promptSteps(
   // call inside the budget. NO daemonUrl = no lookup AND no verify field:
   // an absent daemon must not restate itself on every peer prompt (flagged
   // to the architect as a wording deviation from "log sender-unchecked").
-  let verify: "verified" | "unverified" | "unchecked" | undefined;
+  let verify: "verified" | "unverified" | "unchecked" | "self" | undefined;
   let outboxId: string | undefined;
   if (eff.kind === "peer" && config.daemonUrl !== undefined) {
     const headerFrom = parseEnvelope(stripLeadingReminders(input.prompt ?? ""))?.from;
@@ -668,7 +690,18 @@ async function promptSteps(
           const hit = res.entries.find((e) =>
             matchesOutboxEntry(e, sessionName, input.prompt ?? "", deps.now()),
           );
-          verify = hit !== undefined ? "verified" : "unverified";
+          // T22: an envelope naming THIS seat is its own scheduled wake, not
+          // a peer write - classify it "self" instead of blending it into
+          // "verified". It still takes a matching daemon record (self to self,
+          // exact body, fresh delivery): a claimed-from-myself prompt with no
+          // record stays unverified, and a claim naming any OTHER seat runs
+          // the ordinary path untouched.
+          verify =
+            hit === undefined
+              ? "unverified"
+              : headerFrom === config.sessionName
+                ? "self"
+                : "verified";
           if (hit !== undefined) outboxId = hit.outboxId;
         } else {
           verify = "unchecked";
@@ -685,7 +718,7 @@ async function promptSteps(
       ...(eff.to !== undefined ? { to: eff.to } : {}),
       ...(eff.fanout !== undefined ? { fanout: eff.fanout } : {}),
       ...(input.claudeSessionId !== undefined ? { claudeSessionId: input.claudeSessionId } : {}),
-      ...(verify === "verified"
+      ...(verify === "verified" || verify === "self"
         ? { senderVerified: true, ...(outboxId !== undefined ? { outboxId } : {}) }
         : verify === "unverified"
           ? { senderVerified: false }

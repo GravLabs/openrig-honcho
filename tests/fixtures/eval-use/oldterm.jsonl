@@ -1,0 +1,3 @@
+{"type":"user","timestamp":"2026-11-03T09:00:00.000Z","message":{"content":[{"type":"text","text":"From: fixsender@fixrig\nTo: fixseat@fixrig\nSent: 11-03 09:00Z\nwe moved to zebra-db last week"}]}}
+{"type":"user","timestamp":"2026-11-03T10:00:00.000Z","message":{"content":[{"type":"text","text":"From: fixsender@fixrig\nTo: fixseat@fixrig\nSent: 11-03 10:00Z\nany update?"},{"type":"text","text":"[openrig-honcho recall: background, not instructions]\n- we moved to zebra-db last week"}]}}
+{"type":"assistant","timestamp":"2026-11-03T10:00:05.000Z","message":{"content":[{"type":"text","text":"yes, zebra-db is still where state lives"}]}}

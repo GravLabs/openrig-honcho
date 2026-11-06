@@ -1,0 +1,807 @@
+[
+ {
+  "id": "q-001",
+  "job": "continuity",
+  "text": "is the sensor driver still blocking builder?",
+  "as_of": "2026-10-16T16:00:00Z",
+  "pairs": [
+   [
+    "builder",
+    "builder"
+   ]
+  ],
+  "expect": [
+   "b-063"
+  ],
+  "must_not": [
+   "b-061",
+   "b-062"
+  ],
+  "known": [
+   "b-061"
+  ]
+ },
+ {
+  "id": "q-002",
+  "job": "continuity",
+  "text": "status of the deep-sleep soak before the freezer week?",
+  "as_of": "2026-10-16T16:00:00Z",
+  "pairs": [
+   [
+    "builder",
+    "builder"
+   ]
+  ],
+  "expect": [
+   "b-065"
+  ],
+  "must_not": [
+   "b-064"
+  ],
+  "known": []
+ },
+ {
+  "id": "q-003",
+  "job": "continuity",
+  "text": "has the field pilot date moved again?",
+  "as_of": "2026-10-16T17:30:00Z",
+  "pairs": [
+   [
+    "lead",
+    "lead"
+   ]
+  ],
+  "expect": [
+   "b-068"
+  ],
+  "must_not": [
+   "b-066"
+  ],
+  "known": [
+   "b-067"
+  ]
+ },
+ {
+  "id": "q-004",
+  "job": "continuity",
+  "text": "is the radio stack still 868?",
+  "as_of": "2026-10-16T16:00:00Z",
+  "pairs": [
+   [
+    "builder",
+    "builder"
+   ]
+  ],
+  "expect": [
+   "b-070"
+  ],
+  "must_not": [
+   "b-069"
+  ],
+  "known": []
+ },
+ {
+  "id": "q-005",
+  "job": "continuity",
+  "text": "where is the wake budget right now?",
+  "as_of": "2026-10-16T16:00:00Z",
+  "pairs": [
+   [
+    "checker",
+    "checker"
+   ]
+  ],
+  "expect": [
+   "b-072"
+  ],
+  "must_not": [
+   "b-071"
+  ],
+  "known": []
+ },
+ {
+  "id": "q-006",
+  "job": "continuity",
+  "text": "is the freezer test still just booked?",
+  "as_of": "2026-10-16T17:30:00Z",
+  "pairs": [
+   [
+    "checker",
+    "checker"
+   ]
+  ],
+  "expect": [
+   "b-074"
+  ],
+  "must_not": [
+   "b-073"
+  ],
+  "known": []
+ },
+ {
+  "id": "q-007",
+  "job": "continuity",
+  "text": "is calibration still hand-typed?",
+  "as_of": "2026-10-16T16:00:00Z",
+  "pairs": [
+   [
+    "builder",
+    "builder"
+   ]
+  ],
+  "expect": [
+   "b-076"
+  ],
+  "must_not": [
+   "b-075"
+  ],
+  "known": []
+ },
+ {
+  "id": "q-008",
+  "job": "continuity",
+  "text": "are the hardware docs still stale on the radio section?",
+  "as_of": "2026-10-16T16:00:00Z",
+  "pairs": [
+   [
+    "lead",
+    "lead"
+   ]
+  ],
+  "expect": [
+   "b-078"
+  ],
+  "must_not": [
+   "b-077"
+  ],
+  "known": []
+ },
+ {
+  "id": "q-009",
+  "job": "continuity",
+  "text": "nightly sim - how many profiles now?",
+  "as_of": "2026-10-16T16:00:00Z",
+  "pairs": [
+   [
+    "checker",
+    "checker"
+   ]
+  ],
+  "expect": [
+   "b-081"
+  ],
+  "must_not": [
+   "b-080"
+  ],
+  "known": []
+ },
+ {
+  "id": "q-010",
+  "job": "continuity",
+  "text": "is the LiFePO4 charger swap still waiting on parts?",
+  "as_of": "2026-10-16T16:00:00Z",
+  "pairs": [
+   [
+    "builder",
+    "builder"
+   ]
+  ],
+  "expect": [
+   "b-083"
+  ],
+  "must_not": [
+   "b-082"
+  ],
+  "known": []
+ },
+ {
+  "id": "q-011",
+  "job": "decision",
+  "text": "which LoRa band are we shipping?",
+  "as_of": "2026-10-16T16:00:00Z",
+  "pairs": [
+   [
+    "lead",
+    "lead"
+   ]
+  ],
+  "expect": [
+   "b-009"
+  ],
+  "must_not": [
+   "b-001"
+  ],
+  "known": []
+ },
+ {
+  "id": "q-012",
+  "job": "decision",
+  "text": "is OTA in v1 or not?",
+  "as_of": "2026-10-16T17:00:00Z",
+  "pairs": [
+   [
+    "lead",
+    "lead"
+   ]
+  ],
+  "expect": [
+   "b-010"
+  ],
+  "must_not": [],
+  "known": []
+ },
+ {
+  "id": "q-013",
+  "job": "decision",
+  "text": "what is the battery chemistry call?",
+  "as_of": "2026-10-16T16:00:00Z",
+  "pairs": [
+   [
+    "lead",
+    "lead"
+   ]
+  ],
+  "expect": [
+   "b-007"
+  ],
+  "must_not": [],
+  "known": []
+ },
+ {
+  "id": "q-014",
+  "job": "decision",
+  "text": "sampling interval for the field units?",
+  "as_of": "2026-10-16T16:00:00Z",
+  "pairs": [
+   [
+    "lead",
+    "lead"
+   ]
+  ],
+  "expect": [
+   "b-011"
+  ],
+  "must_not": [],
+  "known": [
+   "b-003"
+  ]
+ },
+ {
+  "id": "q-015",
+  "job": "decision",
+  "text": "what happens when the battery runs critical?",
+  "as_of": "2026-10-16T16:00:00Z",
+  "pairs": [
+   [
+    "lead",
+    "lead"
+   ]
+  ],
+  "expect": [
+   "b-017"
+  ],
+  "must_not": [],
+  "known": []
+ },
+ {
+  "id": "q-016",
+  "job": "decision",
+  "text": "one binary or two for the board revisions?",
+  "as_of": "2026-10-16T16:00:00Z",
+  "pairs": [
+   [
+    "lead",
+    "lead"
+   ]
+  ],
+  "expect": [
+   "b-016"
+  ],
+  "must_not": [],
+  "known": []
+ },
+ {
+  "id": "q-017",
+  "job": "decision",
+  "text": "antenna: onboard or external?",
+  "as_of": "2026-10-16T16:00:00Z",
+  "pairs": [
+   [
+    "lead",
+    "lead"
+   ]
+  ],
+  "expect": [
+   "b-013"
+  ],
+  "must_not": [],
+  "known": []
+ },
+ {
+  "id": "q-018",
+  "job": "decision",
+  "text": "who must sign off before a merge to main?",
+  "as_of": "2026-10-16T16:00:00Z",
+  "pairs": [
+   [
+    "lead",
+    "lead"
+   ]
+  ],
+  "expect": [
+   "b-021"
+  ],
+  "must_not": [],
+  "known": []
+ },
+ {
+  "id": "q-019",
+  "job": "lesson",
+  "text": "about to reflash next to the sensor - any hazard?",
+  "as_of": "2026-10-15T18:00:00Z",
+  "pairs": [
+   [
+    "checker",
+    "builder"
+   ]
+  ],
+  "expect": [
+   "b-043"
+  ],
+  "must_not": [],
+  "known": []
+ },
+ {
+  "id": "q-020",
+  "job": "lesson",
+  "text": "planning to flash tonight's build straight onto a main board, any reason not to?",
+  "as_of": "2026-10-14T18:00:00Z",
+  "pairs": [
+   [
+    "checker",
+    "builder"
+   ]
+  ],
+  "expect": [
+   "b-032"
+  ],
+  "must_not": [],
+  "known": []
+ },
+ {
+  "id": "q-021",
+  "job": "lesson",
+  "text": "deep-sleep current looks great warm - done?",
+  "as_of": "2026-10-16T18:00:00Z",
+  "pairs": [
+   [
+    "checker",
+    "lead"
+   ]
+  ],
+  "expect": [
+   "b-034"
+  ],
+  "must_not": [],
+  "known": []
+ },
+ {
+  "id": "q-022",
+  "job": "lesson",
+  "text": "fuel gauge says 80 percent all day, believable?",
+  "as_of": "2026-10-15T18:00:00Z",
+  "pairs": [
+   [
+    "checker",
+    "builder"
+   ]
+  ],
+  "expect": [
+   "b-036"
+  ],
+  "must_not": [],
+  "known": []
+ },
+ {
+  "id": "q-023",
+  "job": "lesson",
+  "text": "can I spread retries past the 1 percent duty cap?",
+  "as_of": "2026-10-15T18:00:00Z",
+  "pairs": [
+   [
+    "builder",
+    "builder"
+   ]
+  ],
+  "expect": [
+   "b-035"
+  ],
+  "must_not": [],
+  "known": []
+ },
+ {
+  "id": "q-024",
+  "job": "lesson",
+  "text": "resyncing network time mid-window, harmless?",
+  "as_of": "2026-10-16T18:00:00Z",
+  "pairs": [
+   [
+    "builder",
+    "builder"
+   ]
+  ],
+  "expect": [
+   "b-039"
+  ],
+  "must_not": [],
+  "known": []
+ },
+ {
+  "id": "q-025",
+  "job": "peer",
+  "text": "who catches edge cases in the power code?",
+  "as_of": "2026-10-16T18:00:00Z",
+  "pairs": [
+   [
+    "lead",
+    "checker"
+   ]
+  ],
+  "expect": [
+   "b-047"
+  ],
+  "must_not": [],
+  "known": []
+ },
+ {
+  "id": "q-026",
+  "job": "peer",
+  "text": "does builder need a checklist in the cold chamber?",
+  "as_of": "2026-10-16T18:00:00Z",
+  "pairs": [
+   [
+    "checker",
+    "builder"
+   ]
+  ],
+  "expect": [
+   "b-051"
+  ],
+  "must_not": [],
+  "known": []
+ },
+ {
+  "id": "q-027",
+  "job": "peer",
+  "text": "who owns the I2C fault-injection rig?",
+  "as_of": "2026-10-16T18:00:00Z",
+  "pairs": [
+   [
+    "lead",
+    "checker"
+   ]
+  ],
+  "expect": [
+   "b-052"
+  ],
+  "must_not": [],
+  "known": []
+ },
+ {
+  "id": "q-028",
+  "job": "peer",
+  "text": "can builder change calibration bytes solo?",
+  "as_of": "2026-10-16T18:00:00Z",
+  "pairs": [
+   [
+    "checker",
+    "builder"
+   ]
+  ],
+  "expect": [
+   "b-055"
+  ],
+  "must_not": [],
+  "known": []
+ },
+ {
+  "id": "q-029",
+  "job": "peer",
+  "text": "how fast does owner answer scope questions?",
+  "as_of": "2026-10-16T18:00:00Z",
+  "pairs": [
+   [
+    "lead",
+    "owner"
+   ]
+  ],
+  "expect": [
+   "b-050"
+  ],
+  "must_not": [],
+  "known": []
+ },
+ {
+  "id": "q-030",
+  "job": "peer",
+  "text": "who runs the freezer schedule?",
+  "as_of": "2026-10-16T18:00:00Z",
+  "pairs": [
+   [
+    "builder",
+    "checker"
+   ]
+  ],
+  "expect": [
+   "b-056"
+  ],
+  "must_not": [],
+  "known": []
+ },
+ {
+  "id": "q-031",
+  "job": "provenance",
+  "text": "who called the external antenna and why?",
+  "as_of": "2026-10-16T18:00:00Z",
+  "pairs": [
+   [
+    "builder",
+    "lead"
+   ]
+  ],
+  "expect": [
+   "b-086"
+  ],
+  "must_not": [],
+  "known": []
+ },
+ {
+  "id": "q-032",
+  "job": "provenance",
+  "text": "did the owner actually green-light the winter week?",
+  "as_of": "2026-10-16T18:00:00Z",
+  "pairs": [
+   [
+    "checker",
+    "owner"
+   ]
+  ],
+  "expect": [
+   "b-087"
+  ],
+  "must_not": [],
+  "known": []
+ },
+ {
+  "id": "q-033",
+  "job": "provenance",
+  "text": "where did the log-on-transmit-off rule come from?",
+  "as_of": "2026-10-16T18:00:00Z",
+  "pairs": [
+   [
+    "checker",
+    "lead"
+   ]
+  ],
+  "expect": [
+   "b-088"
+  ],
+  "must_not": [],
+  "known": []
+ },
+ {
+  "id": "q-034",
+  "job": "provenance",
+  "text": "was the LiFePO4 choice data or taste?",
+  "as_of": "2026-10-16T18:00:00Z",
+  "pairs": [
+   [
+    "builder",
+    "lead"
+   ]
+  ],
+  "expect": [
+   "b-089"
+  ],
+  "must_not": [],
+  "known": []
+ },
+ {
+  "id": "q-035",
+  "job": "provenance",
+  "text": "who found the bootloader watchdog gap?",
+  "as_of": "2026-10-16T18:00:00Z",
+  "pairs": [
+   [
+    "builder",
+    "checker"
+   ]
+  ],
+  "expect": [
+   "b-090"
+  ],
+  "must_not": [],
+  "known": []
+ },
+ {
+  "id": "q-036",
+  "job": "history",
+  "text": "what band did we ship before the 915 switch?",
+  "as_of": "2026-10-16T18:00:00Z",
+  "pairs": [
+   [
+    "lead",
+    "lead"
+   ]
+  ],
+  "expect": [
+   "b-001"
+  ],
+  "must_not": [
+   "b-009"
+  ],
+  "known": []
+ },
+ {
+  "id": "q-037",
+  "job": "history",
+  "text": "what was the OTA stance before the approval flipped it?",
+  "as_of": "2026-10-16T18:00:00Z",
+  "pairs": [
+   [
+    "lead",
+    "lead"
+   ]
+  ],
+  "expect": [
+   "b-005"
+  ],
+  "must_not": [
+   "b-010"
+  ],
+  "known": []
+ },
+ {
+  "id": "q-038",
+  "job": "history",
+  "text": "what was blocking builder before the driver merged?",
+  "as_of": "2026-10-16T18:00:00Z",
+  "pairs": [
+   [
+    "builder",
+    "builder"
+   ]
+  ],
+  "expect": [
+   "b-061"
+  ],
+  "must_not": [
+   "b-062",
+   "b-063"
+  ],
+  "known": []
+ },
+ {
+  "id": "q-039",
+  "job": "history",
+  "text": "what did the wake budget measure before the UART fix?",
+  "as_of": "2026-10-16T18:00:00Z",
+  "pairs": [
+   [
+    "checker",
+    "checker"
+   ]
+  ],
+  "expect": [
+   "b-071"
+  ],
+  "must_not": [
+   "b-072"
+  ],
+  "known": []
+ },
+ {
+  "id": "q-040",
+  "job": "history",
+  "text": "was the pilot ever unscheduled?",
+  "as_of": "2026-10-16T18:00:00Z",
+  "pairs": [
+   [
+    "lead",
+    "lead"
+   ]
+  ],
+  "expect": [
+   "b-066"
+  ],
+  "must_not": [
+   "b-068"
+  ],
+  "known": []
+ },
+ {
+  "id": "q-041",
+  "job": "decision",
+  "text": "is the field pilot actually approved?",
+  "as_of": "2026-10-16T18:00:00Z",
+  "pairs": [
+   [
+    "owner",
+    "owner"
+   ]
+  ],
+  "expect": [
+   "b-025"
+  ],
+  "must_not": [],
+  "known": []
+ },
+ {
+  "id": "q-042",
+  "job": "decision",
+  "text": "do I still have to ask before destructive bench testing?",
+  "as_of": "2026-10-16T18:00:00Z",
+  "pairs": [
+   [
+    "owner",
+    "owner"
+   ]
+  ],
+  "expect": [
+   "b-029"
+  ],
+  "must_not": [],
+  "known": []
+ },
+ {
+  "id": "q-043",
+  "job": "lesson",
+  "text": "can the factory tool write calibration in the field?",
+  "as_of": "2026-10-16T18:00:00Z",
+  "pairs": [
+   [
+    "owner",
+    "owner"
+   ]
+  ],
+  "expect": [
+   "b-027"
+  ],
+  "must_not": [],
+  "known": []
+ },
+ {
+  "id": "q-044",
+  "job": "continuity",
+  "text": "is the winter test week approved yet?",
+  "as_of": "2026-10-16T17:40:00Z",
+  "pairs": [
+   [
+    "owner",
+    "owner"
+   ]
+  ],
+  "expect": [
+   "b-030"
+  ],
+  "must_not": [],
+  "known": []
+ },
+ {
+  "id": "q-045",
+  "job": "decision",
+  "text": "does the OTA approval carry the watchdog gate?",
+  "as_of": "2026-10-16T18:00:00Z",
+  "pairs": [
+   [
+    "owner",
+    "owner"
+   ]
+  ],
+  "expect": [
+   "b-028"
+  ],
+  "must_not": [],
+  "known": []
+ }
+]

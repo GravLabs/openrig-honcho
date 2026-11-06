@@ -88,6 +88,7 @@ async function main(): Promise<void> {
         ok: out.action === "sent",
         ms: Date.now() - t0,
         ...(out.action !== "skipped" ? { session: out.session, n_msgs: out.n_msgs } : {}),
+        ...("routine" in out && out.routine === true ? { routine: 1 } : {}), // T21 (E5b)
         ...(out.action === "spooled" && out.error_class !== undefined
           ? { error_class: out.error_class }
           : {}),

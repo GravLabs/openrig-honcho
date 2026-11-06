@@ -13,6 +13,7 @@ import type { Attribution } from "./attribute.ts";
 import { UNKNOWN_SENDER_PEER } from "./attribute.ts";
 import { ageLabel, x3 } from "./inject.ts";
 import { scopeFor } from "./missions.ts";
+import { GENERIC, tokensOf } from "./terms.ts";
 
 /** ADR-0009 decision 2: the block's own header, wrapped like the
  * session-start block. */
@@ -122,12 +123,20 @@ export interface RecallItem {
   at: string;
 }
 
-/** ADR-0011 decision 7: counts only, never content. */
+/** ADR-0011 decision 7: counts only, never content. The T19c pair is
+ * present ONLY when the novelty path ran (knownTerms / novel input), so a
+ * hand-built render keeps exactly today's counts shape. */
 export interface RecallCounts {
   considered: number;
   dropped_context: number;
   dropped_dup: number;
   dropped_trivia: number;
+  /** T19c (ADR-0014 decision 4): items whose distinctive terms were ALL
+   * already known from the seat's transcript tail (+ the message itself). */
+  dropped_known?: number;
+  /** T19c: 1 when a would-be block of fewer than 2 shown items was
+   * suppressed (only ever 0 < shown < 2; zero items stays plain empty). */
+  dropped_small?: number;
 }
 
 const zeroCounts = (): RecallCounts => ({
@@ -198,6 +207,18 @@ interface RecallRenderInput {
    * it are dropped. With none, items younger than 30 min are dropped. */
   contextStart?: string;
   now: string;
+  /**
+   * T19c (ADR-0014 decision 4): the seat's known terms - the terms of the
+   * user/assistant text in the last 1 MB (TAIL_BYTES) of the session transcript plus
+   * the incoming message's own terms (terms.ts builds it). An item whose
+   * distinctive terms (terms minus GENERIC) are ALL in here is dropped as
+   * dropped_known; an item with no distinctive terms is left to the trivia
+   * rule. Absent (= filter off) keeps today's behavior byte for byte.
+   */
+  knownTerms?: Set<string>;
+  /** T19c: minimum block - after all filters, a block that would show
+   * fewer than 2 items is not shown (dropped_small = 1). Absent = off. */
+  novel?: boolean;
 }
 
 /**
@@ -239,11 +260,17 @@ function render(input: RecallRenderInput): RecallView {
       ? Date.parse(input.contextStart)
       : undefined;
   const nowMs = Date.parse(now);
+  const known = input.knownTerms instanceof Set ? input.knownTerms : undefined;
   const counts = zeroCounts();
   const kept: [RecallItem[], RecallItem[]] = [[], []];
   const keptHashes: [string[], string[]] = [[], []];
   const takenIds = new Set<string>();
   const shownNorm = new Set<string>();
+  // T19c: norms of items the KNOWN filter dropped - a second copy of the
+  // same conclusion (it arrives from several pairs) then falls into
+  // dropped_dup as an ordinary duplicate, so dropped_known counts each
+  // distinct content exactly once.
+  const knownDroppedNorm = new Set<string>();
 
   const lists: [RecallItem[], RecallItem[]] = [aboutSender, aboutSelf];
   for (let li = 0; li < 2; li++) {
@@ -280,9 +307,32 @@ function render(input: RecallRenderInput): RecallView {
       }
       const norm = normText(it.content);
       const h = shortHash(norm);
-      if (seenHashes.has(h) || shownNorm.has(norm)) {
+      if (seenHashes.has(h) || shownNorm.has(norm) || knownDroppedNorm.has(norm)) {
         counts.dropped_dup++;
         continue;
+      }
+      // T19c (ADR-0014 decision 4): known novelty filter, AFTER the trivia
+      // rule and AFTER the duplicate check - an item with no distinctive
+      // terms (every term GENERIC) is the trivia rule's business, not
+      // here's, and stays; and one conclusion recalled by several pairs is
+      // counted once (the copies go to dropped_dup, as today). Only runs
+      // when the caller passed a known set.
+      if (known !== undefined) {
+        let distinctive = false;
+        let allKnown = true;
+        for (const term of tokensOf(it.content)) {
+          if (GENERIC.has(term)) continue;
+          distinctive = true;
+          if (!known.has(term)) {
+            allKnown = false;
+            break;
+          }
+        }
+        if (distinctive && allKnown) {
+          knownDroppedNorm.add(norm);
+          counts.dropped_known = (counts.dropped_known ?? 0) + 1;
+          continue;
+        }
       }
       takenIds.add(it.id);
       shownNorm.add(norm);
@@ -315,6 +365,17 @@ function render(input: RecallRenderInput): RecallView {
     if (li === 0) aboutLen += block.length;
     else selfLen += block.length;
     shown[li].push(i);
+  }
+
+  // T19c minimum block (ADR-0014 decision 4; architect ruling 23:52Z: the
+  // check is on the FINAL shown set after the cap fill, and only
+  // 0 < shown < 2 counts as dropped_small - zero items stays the plain
+  // empty path below). The shown block is the one that costs context.
+  if (input.novel === true) {
+    const shownTotal = shown[0].length + shown[1].length;
+    if (shownTotal > 0 && shownTotal < 2) {
+      return { text: "", ids: [], hashes: [], counts: { ...counts, dropped_small: 1 } };
+    }
   }
 
   const ids: string[] = [];

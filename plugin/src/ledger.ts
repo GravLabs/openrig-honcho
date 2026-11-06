@@ -1,0 +1,200 @@
+// T19a (ADR-0014 decision 2 + 2026-11-04 amendment): the decision ledger.
+// PURE module - no network, no files. The v3 server gives conclusions no
+// metadata field, so a ledger entry is one conclusion whose content starts
+// with a one-line header:
+//
+//   [decision d-1a2b3c4d · scope mission] <decision> (reason: <reason>)
+//   [approval d-… · scope qitem-… · supersedes d-…] <text>
+//   [retire d-…] <reason>
+//
+// The current ledger is every entry that no other entry supersedes and no
+// retire entry names; supersession is transitive (A superseded by B, B by C,
+// leaves only C). A plain conclusion from before the ledger (no header) is a
+// mission decision whose id derives from its server conclusion id, so old
+// entries stay addressable for supersede/retire. Hidden in "in force" views
+// only (session start, ask); search still shows superseded entries, marked.
+
+import { createHash } from "node:crypto";
+
+export type LedgerKind = "decision" | "approval";
+
+/** An entry as parsed/stored; retire entries carry their target, nothing else. */
+export type ParsedEntry =
+  | { kind: "plain"; fact: string }
+  | { kind: LedgerKind; id: string; scope: string; supersedes?: string; fact: string; reason?: string }
+  | { kind: "retire"; target: string };
+
+/** A ledger entry with its derived storage context (mission, time). */
+export type LedgerEntry = {
+  id: string;
+  kind: LedgerKind | "retire";
+  scope: string;
+  supersedes?: string;
+  /** the mission parsed from the session the conclusion lives in ("unknown" if untagged) */
+  mission: string;
+  fact: string;
+  reason?: string;
+  target?: string; // retire entries: the id they retire
+  at: string;
+};
+
+/** d- + 8 lowercase hex. */
+export const ID_RE = /^d-[0-9a-f]{8}$/;
+/** the queue-item scope grammar (fixed point 5) */
+const QITEM_RE = /^qitem-\d{14}-[0-9a-f]+$/;
+
+export const validScope = (s: string): boolean =>
+  s === "rig" || s === "mission" || QITEM_RE.test(s);
+
+export const validId = (s: string): boolean => ID_RE.test(s);
+
+const sha8 = (s: string): string =>
+  createHash("sha256").update(s, "utf8").digest("hex").slice(0, 8);
+
+/** A new entry's id: hash of peer, time and text (fixed point 2). */
+export const newDecisionId = (peer: string, at: string, fact: string): string =>
+  `d-${sha8(JSON.stringify([peer, at, fact]))}`;
+
+/** A pre-ledger plain conclusion's addressable id: hash of its server id. */
+export const derivedId = (conclusionId: string): string => `d-${sha8(conclusionId)}`;
+
+// The header grammar. Fields after kind+id are optional but canonical in
+// order (scope, then supersedes); format() always writes scope, so parse and
+// format round-trip what the plugin itself wrote. Anything else stays plain.
+const HEADER_RE =
+  /^\[(decision|approval|retire) (d-[0-9a-f]{8})(?: · scope ([^\s·\]]+))?(?: · supersedes (d-[0-9a-f]{8}))?\][ \t]*([\s\S]*)$/;
+
+/** " <fact>" plus " (reason: <r>)" - the body that follows the header. */
+function formatBody(fact: string, reason?: string): string {
+  return reason !== undefined && reason !== "" ? `${fact} (reason: ${reason})` : fact;
+}
+
+/** "[decision d-… · scope mission[ · supersedes d-…]] <fact>[ (reason: …)]" */
+export function formatEntry(e: {
+  kind: LedgerKind;
+  id: string;
+  scope: string;
+  supersedes?: string;
+  fact: string;
+  reason?: string;
+}): string {
+  return (
+    `[${e.kind} ${e.id} · scope ${e.scope}` +
+    (e.supersedes !== undefined ? ` · supersedes ${e.supersedes}` : "") +
+    `] ${formatBody(e.fact, e.reason)}`
+  );
+}
+
+/** "[retire d-…] <reason>" */
+export const formatRetire = (target: string, reason: string): string =>
+  `[retire ${target}] ${reason}`;
+
+/**
+ * Parse a conclusion's content. A valid header yields the entry; everything
+ * else - no header, a malformed one, unknown kind words, bad ids - is plain
+ * (the amendment: old and odd content stays readable, never an error).
+ * A trailing " (reason: …)" is read back as the reason; a fact that merely
+ * ENDS in that shape round-trips as reason (documented, accepted).
+ */
+export function parseEntry(content: string): ParsedEntry {
+  const m = HEADER_RE.exec(content);
+  if (m === null) return { kind: "plain", fact: content };
+  const [, kindWord, id, scope, supersedes, rest] = m as unknown as (string | undefined)[];
+  const body = rest ?? "";
+  if (kindWord === "retire") return { kind: "retire", target: id as string };
+  let fact = body;
+  let reason: string | undefined;
+  const ri = body.lastIndexOf(" (reason: ");
+  if (ri >= 0 && body.endsWith(")")) {
+    const cand = body.slice(ri + " (reason: ".length, -1);
+    if (cand !== "") {
+      fact = body.slice(0, ri);
+      reason = cand;
+    }
+  }
+  return {
+    kind: kindWord as LedgerKind,
+    id: id as string,
+    scope: scope ?? "mission",
+    ...(supersedes !== undefined ? { supersedes } : {}),
+    fact,
+    ...(reason !== undefined ? { reason } : {}),
+  };
+}
+
+/** `<peer>--<mission>--<n>` mission part; "unknown" for ids we did not mint. */
+function missionOf(sessionId: string): string {
+  const m = /^(.*)--(.*)--\d+$/.exec(sessionId);
+  return m === null ? "unknown" : m[2];
+}
+
+/**
+ * Conclusions (newest first, as listed) to ledger entries. Plain content
+ * becomes a legacy mission decision with a derived id; its fact is the whole
+ * content as stored.
+ */
+export function toEntries(
+  items: { id: string; content: string; session_id?: string; created_at?: string }[],
+): LedgerEntry[] {
+  return items.map((c) => {
+    const p = parseEntry(c.content);
+    const at = typeof c.created_at === "string" ? c.created_at : "";
+    const mission = missionOf(typeof c.session_id === "string" ? c.session_id : "");
+    if (p.kind === "plain")
+      return { id: derivedId(c.id), kind: "decision", scope: "mission", mission, fact: p.fact, at };
+    if (p.kind === "retire")
+      return { id: c.id, kind: "retire", scope: "mission", mission, fact: "", target: p.target, at };
+    return {
+      id: p.id,
+      kind: p.kind,
+      scope: p.scope,
+      ...(p.supersedes !== undefined ? { supersedes: p.supersedes } : {}),
+      mission,
+      fact: p.fact,
+      ...(p.reason !== undefined ? { reason: p.reason } : {}),
+      at,
+    };
+  });
+}
+
+/**
+ * The current ledger: every non-retire entry that is not named by another
+ * entry's supersedes or by a retire - directly named is enough, which makes
+ * the closure transitive (A→B→C: A and B are both named, only C stands).
+ * Input order (newest first) is preserved.
+ */
+export function currentLedger(entries: LedgerEntry[]): LedgerEntry[] {
+  const replaced = new Set<string>();
+  for (const e of entries) {
+    if (e.kind === "retire" && e.target !== undefined) replaced.add(e.target);
+    if (e.supersedes !== undefined) replaced.add(e.supersedes);
+  }
+  return entries.filter((e) => e.kind !== "retire" && !replaced.has(e.id));
+}
+
+/**
+ * id -> the (newest) entry that replaced it, for the search marker. Scan a
+ * newest-first list and keep the FIRST replacer seen. Entries replaced by a
+ * retire say so with the retire's own conclusion id (never a fake d-).
+ */
+export function supersededMap(entries: LedgerEntry[]): Map<string, string> {
+  const out = new Map<string, string>();
+  for (const e of entries) {
+    if (e.kind === "retire" && e.target !== undefined && !out.has(e.target)) out.set(e.target, "retired");
+    if (e.supersedes !== undefined && !out.has(e.supersedes)) out.set(e.supersedes, e.id);
+  }
+  return out;
+}
+
+/**
+ * The in-force view for one mission: current entries scoped rig (every
+ * mission sees them) plus entries WRITTEN in this mission - mission- and
+ * item-scoped both show in their writing mission (fixed point 5). Newest
+ * first, as fetched.
+ */
+export function inForceFor(entries: LedgerEntry[], mission: string): LedgerEntry[] {
+  return currentLedger(entries).filter((e) => e.scope === "rig" || e.mission === mission);
+}
+
+/** The body an in-force view shows: the fact, plus its reason if any. */
+export const entryBody = (e: LedgerEntry): string => formatBody(e.fact, e.reason);

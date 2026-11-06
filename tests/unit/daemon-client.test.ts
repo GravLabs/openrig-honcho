@@ -176,4 +176,28 @@ describe("matchesOutboxEntry (pure)", () => {
     ).toBe(false);
     expect(matchesOutboxEntry(entry({ tsDispatched: "yesterday" }), "dev-build@rig-x", "hello there", NOW)).toBe(false);
   });
+
+  test("T22: deliveredAt is the window anchor when present; the stage stamp is not", () => {
+    // A wake committed hours ago (stage time) and delivered just now: the
+    // only honest match - tsDispatched alone would call every late wake
+    // unverified (live probe 2026-11-05: a 207-minute stage-to-delivery gap).
+    expect(
+      matchesOutboxEntry(
+        { ...entry(), tsDispatched: iso(-3 * 3_600_000), deliveredAt: iso(-60_000) },
+        "dev-build@rig-x", "hello there", NOW,
+      ),
+    ).toBe(true);
+    // A fresh send whose same bytes are re-typed an hour later (a repeated
+    // delivery): the stale deliveredAt fails even though tsDispatched is new.
+    expect(
+      matchesOutboxEntry(
+        { ...entry(), deliveredAt: iso(-60 * 60_000) },
+        "dev-build@rig-x", "hello there", NOW,
+      ),
+    ).toBe(false);
+    // A future deliveredAt never matches (no clock-skew grace), and garbage
+    // in the anchor fails like a garbage stamp - it never falls back.
+    expect(matchesOutboxEntry(entry({ deliveredAt: iso(+1) }), "dev-build@rig-x", "hello there", NOW)).toBe(false);
+    expect(matchesOutboxEntry(entry({ deliveredAt: "yesterday" }), "dev-build@rig-x", "hello there", NOW)).toBe(false);
+  });
 });

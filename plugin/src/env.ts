@@ -30,6 +30,14 @@ export interface Config {
    */
   recallMaxDistance?: number;
   /**
+   * T18b (ADR-0013 decision 2): the share of eligible recall blocks that
+   * is computed, logged (arm "held") and marked seen but NOT injected -
+   * HONCHO_RECALL_HOLDOUT, a number 0 to 0.9, default 0. loadConfig always
+   * sets it; the field is optional only so the hand-built test Config
+   * fixtures keep compiling and behaving (use sites do `?? 0`).
+   */
+  recallHoldout?: number;
+  /**
    * T16b (ADR-0011 decision 3, item 6): THIS seat's RIG name - the part
    * after the last @ of OPENRIG_SESSION_NAME when it carries a valid id,
    * else the workspace (the pre-T16b behaviour; correct on pilot where
@@ -52,6 +60,29 @@ export interface Config {
    * destination, so it reports unchecked.
    */
   sessionName?: string;
+  /**
+   * T19b (ADR-0014 decision 1): the session-start block is the continuity
+   * digest; HONCHO_DIGEST=off gives the old block. loadConfig always sets
+   * it true unless switched off; the field is optional only so the
+   * hand-built test Config fixtures keep compiling AND keep the old block
+   * (undefined = old, byte for byte - the with/without comparison).
+   */
+  digest?: boolean;
+  /**
+   * T19c (ADR-0014 decision 4): the recall novelty filter and its minimum
+   * block are on; HONCHO_RECALL_NOVELTY=off gives today's behavior byte for
+   * byte (no known filter, no dropped_small, no new log keys). Same trick
+   * as digest: loadConfig always sets it true unless switched off; the
+   * field is optional so the hand-built test Config fixtures keep today's
+   * recall behavior (undefined = off).
+   */
+  novel?: boolean;
+  /**
+   * T21 (ADR-0005 E5b): routine status messages (isRoutine) are stored but
+   * skip the deriver, exactly as E5 acks do. On by default;
+   * HONCHO_SKIP_ROUTINE=off restores today's behaviour byte for byte.
+   */
+  skipRoutine?: boolean;
 }
 
 export interface Disabled {
@@ -212,6 +243,18 @@ export function loadConfig(
     recallMaxDistance = Number(raw);
   }
 
+  // T18b (ADR-0013 decision 2): the recall holdout share. A plain decimal
+  // 0..0.9; anything else disables the plugin with the reason (same rule
+  // as the distance gate - never silently narrow).
+  let recallHoldout = 0;
+  if (env.HONCHO_RECALL_HOLDOUT !== undefined && env.HONCHO_RECALL_HOLDOUT.trim() !== "") {
+    const raw = env.HONCHO_RECALL_HOLDOUT.trim();
+    if (!/^\d+(?:\.\d+)?$/.test(raw) || Number(raw) < 0 || Number(raw) > 0.9) {
+      return disabled("HONCHO_RECALL_HOLDOUT must be a number between 0 and 0.9");
+    }
+    recallHoldout = Number(raw);
+  }
+
   // T16b (ADR-0011 decision 3): this seat's rig from its session name, so
   // same-rig attribution does not depend on the workspace carrying the rig
   // name. Last @ (peerIdFromSession's rule); the part must be a valid id,
@@ -258,8 +301,14 @@ export function loadConfig(
     stateDir,
     timeoutMs,
     recallMaxDistance,
+    recallHoldout,
     ...(rig !== undefined ? { rig } : {}),
     ...(daemonUrl !== undefined ? { daemonUrl } : {}),
     ...(sessionName !== "" ? { sessionName } : {}),
+    // T19b: on by default; HONCHO_DIGEST=off/false/0/no gives the old block.
+    digest: readBool(env.HONCHO_DIGEST, true),
+    novel: readBool(env.HONCHO_RECALL_NOVELTY, true),
+    // T21: on by default; HONCHO_SKIP_ROUTINE=off/false/0/no = today.
+    skipRoutine: readBool(env.HONCHO_SKIP_ROUTINE, true),
   };
 }

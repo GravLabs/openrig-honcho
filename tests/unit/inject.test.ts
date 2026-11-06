@@ -148,6 +148,32 @@ describe("renderInjection (T7a)", () => {
     expect(b).toContain("1 h ago");
   });
 
+  test("T19a: decision labels carry the ledger id, approvals are marked, no-id stays age-only", () => {
+    const out = renderInjection(
+      base({
+        decisions: [
+          { content: "D-ID", at: ago(2 * HOUR), id: "d-1a2b3c4d", kind: "decision" },
+          { content: "A-ID", at: ago(HOUR), id: "d-eeeeeeee", kind: "approval" },
+          { content: "P-PLAIN", at: ago(5 * MIN) },
+          { content: "U-BADDATE", at: "not-a-date", id: "d-abababab", kind: "decision" },
+        ],
+      }),
+    );
+    const lines = out.split("\n");
+    const labelBefore = (content: string): string => {
+      const i = lines.indexOf(content);
+      expect(i, `missing ${content}`).toBeGreaterThan(0);
+      return lines[i - 1];
+    };
+    // id first, then the approval mark, then the age (fixed point 7)
+    expect(labelBefore("D-ID")).toBe("d-1a2b3c4d, 2 h ago");
+    expect(labelBefore("A-ID")).toBe("d-eeeeeeee, approval, 1 h ago");
+    // pre-ledger caller: byte-identical to the old age-only label
+    expect(labelBefore("P-PLAIN")).toBe("5 min ago");
+    // unparseable date: no age segment, never a trailing comma
+    expect(labelBefore("U-BADDATE")).toBe("d-abababab");
+  });
+
   test("greedy cap fill: an oversized middle section is truncated, later sections still get in", () => {
     // realistic memory: many wrapped lines (~1.6k each), so line-boundary truncation has lines to keep
     const big = (marker: string): string =>

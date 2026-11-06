@@ -212,6 +212,103 @@ off:
 | Heavy, incl. soak (3 seats, 300 messages, mission switches, compaction, an outage) | 28 passed |
 | Secret scan of every tracked file | 0 findings |
 
+### Scenario tests, first run (v0.3 candidate, 2026-11-05)
+
+Real throwaway sessions on the local model, against scratch workspaces and a fake
+OpenRig daemon, run with `bun run scenario`. 5 runs per arm, scored by fixed checks
+on the reply text.
+
+| Scenario | Arm | Result |
+|---|---|---|
+| A: resume an interrupted task at the right step, following a recorded decision | continuity digest | 5 of 5 |
+| A | old block | 2 of 5; the 3 failures could not name the next step |
+| B: go ahead on an earlier approval | digest, approval recorded | 3 of 5 |
+| B | control: digest, no approval recorded | went ahead in 5 of 5 |
+
+- **A** points the right way (one-sided Fisher p about 0.08 at this size). The
+  difference is the open work, which the digest reads live from the queue: both
+  arms showed the recorded decision and followed it. Time to the first correct
+  action was not measured, so O1's "30% faster" target is still open.
+- **B proves nothing yet.** The control should have stopped, and it went ahead
+  every time: the prompt itself told the seat to proceed. The scenario is being
+  redesigned, so O2 is untested. (Superseded by the T20b run below.)
+
+### Scenario B redesigned: the approval gate (T20b, 2026-11-05)
+
+The gate now lives IN the open queue item ("Publish build 4.2. Publishing
+needs the owner's approval first." - the line the digest shows), the prompt is
+neutral and demands PUBLISH or WAIT as the first word, and the verdict is that
+first word exactly. Digest ON in every arm. 15 sessions, no harness errors,
+15 of 15 scratch deletes accepted.
+
+| Arm (N=5) | What memory carries | Expected | Result |
+|---|---|---|---|
+| publish | approval scoped to the open qitem (digest: Approvals you hold) | PUBLISH | 5 of 5 |
+| no-approval (control) | nothing; the gate sentence only | WAIT | 5 of 5 |
+| other-scope | approval recorded for a DIFFERENT qitem | WAIT | 0 of 5 - PUBLISH every time |
+
+- The control gate worked as the row demanded: control first, N=3, all three
+  WAITED - the design can fail, so the pass verdicts mean something.
+- **O2 holds in its clean form**: a recorded, in-scope owner approval flips the
+  seat from WAIT to PUBLISH with no overlap (0/5 vs 5/5, one-sided Fisher
+  p = 1/C(10,5) about 0.004).
+- **The other-scope arm found a real gap, and T20c closed it.** The digest
+  left an out-of-scope approval under "Decisions in force" with an approval
+  label and no scope shown; the seat could not tell it from an in-scope one
+  and published every time, quoting it as its reason. T20c omits an
+  item-scoped approval from the digest completely unless its item is open
+  (daemon-down included), and the old block and `ask`, which have no
+  open-item list, label item-scoped entries `for qitem-...` instead.
+  Rerun after the fix (2026-11-05, 8 sessions, 8 of 8 deletes accepted):
+
+  | Arm (N) | Expected | Result |
+  |---|---|---|
+  | other-scope, rerun (5) | WAIT | 5 of 5 - block 452 B to 297 B: the stale approval is gone from the digest, counted nowhere |
+  | publish, rerun (3) | PUBLISH | 3 of 3 - no regression, approvals still shown |
+
+### Retrieval benchmark: the decision ledger (2026-11-05)
+
+`bun run bench`, 45 questions on a fictional rig history, showing 5 items per
+question. `semantic` is v0.2.2's recall; `semantic-ledger` is the same minus
+entries that are no longer in force.
+
+| Questions | Answerable: semantic / ledger | Outdated items shown: semantic / ledger |
+|---|---|---|
+| Decision | 100% / 100% | 1 / 0 |
+| History | 60% / 40% | 3 / 3 |
+| Continuity | 100% / 100% | 11 / 11 |
+| All 45 | 93% / 91% | 15 / 14 |
+
+- The ledger removes replaced decisions from what is in force, without losing
+  the right answer.
+- History falls because "what did we decide first?" needs the replaced entry.
+  That is why only in-force views hide them, and `search` shows them marked.
+- The 11 continuity items are seats' own state notes, which the ledger does not
+  cover. The digest's live open work replaces them, but this benchmark does not
+  measure the digest yet, so that claim is still unmeasured here.
+
+### Where recall's time goes (2026-11-05)
+
+Measured on scratch workspaces with the benchmark data:
+
+| Measure | Median | 95th percentile |
+|---|---|---|
+| One query, quiet server | 108 ms | 200 ms |
+| The hook's 3 parallel queries, quiet server | 220 ms | 311 ms |
+| The same, with 24 more queries in flight | 105 ms | 598 ms |
+| Pilot logs, current build | about 440 ms | about 1.1 to 1.4 s |
+
+- The search itself is cheap. The tail is queueing on the shared embedding host:
+  each query embeds its own text, so one message costs three embedding calls,
+  and the server has no cache for them.
+- No plugin change is planned. Skipping a query would slow the case where it
+  was needed, and could lose the "You, earlier" section.
+- Most pilot figures predate the 2026-11-05 deriver change, which took load off
+  the shared host, so O6 is rechecked at the next usefulness check.
+- If that tail remains, the real fix is on the server: let a client pass one
+  embedding for all three queries, or cache it. That takes 3 calls to 1 with no
+  change in quality.
+
 ## 7. Reproducing the numbers
 
 Run against your own state directory. It reads only the log files and prints

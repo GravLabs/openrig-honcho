@@ -122,8 +122,9 @@ describe("bin/mcp.ts rig_memory (T8)", () => {
     try {
       await h.init();
       const list = await h.rpc(2, "tools/list");
-      // T16d adds search (every seat) right after ask
-    expect(toolNames(list)).toEqual(["ask", "search", "remember", "mission", "status"]);
+      // T16d adds search (every seat) right after ask; T19a adds retire
+      // (leader-only) right after remember
+    expect(toolNames(list)).toEqual(["ask", "search", "remember", "retire", "mission", "status"]);
     } finally {
       const c = await h.close();
       expect(c.err).toBe("");
@@ -160,10 +161,15 @@ describe("bin/mcp.ts rig_memory (T8)", () => {
         name: "remember",
         arguments: { fact: "ship gate is sk-ant-FAKETHISISNOTAREALSECRET01 only" }, // fake-secret
       });
-      expect(textOf(r)).toBe("remembered in build--general--1");
+      // T19a: the reply names the new ledger id
+      expect(textOf(r)).toMatch(/^remembered in build--general--1 \(d-[0-9a-f]{8}\)$/);
       const concl = fake.state.conclusions.get(WS) ?? [];
       expect(concl.length).toBe(1);
       const c0 = concl[0] as Record<string, unknown>;
+      // T19a: plain remember gains the ledger header (fixed point 6)
+      expect(String(c0.content)).toMatch(
+        /^\[decision d-[0-9a-f]{8} · scope mission\] ship gate is /,
+      );
       expect(String(c0.content)).toContain("[REDACTED");
       expect(String(c0.content)).not.toContain("FAKETHISIS");
       expect(c0.observer_id).toBe(SELF);
@@ -194,7 +200,7 @@ describe("bin/mcp.ts rig_memory (T8)", () => {
       const r = await h.rpc(3, "tools/call", {
         name: "remember",
         arguments: { fact: "ship gate: redaction before chunking" } });
-      expect(textOf(r)).toBe("remembered in build--auth--1");
+      expect(textOf(r)).toMatch(/^remembered in build--auth--1 \(d-[0-9a-f]{8}\)$/);
       // exactly one conclusion AND exactly one message
       const concl = fake.state.conclusions.get(WS) ?? [];
       expect(concl.length).toBe(1);
@@ -202,10 +208,169 @@ describe("bin/mcp.ts rig_memory (T8)", () => {
       expect(msgs.length).toBe(1);
       expect(msgs[0].peer_id).toBe(SELF);
       expect((msgs[0].metadata as Record<string, unknown>).kind).toBe("decision");
+      // T19a (amendment): the decision message carries the ledger fields,
+      // and its id is the one the reply named and the header carries
+      const md = msgs[0].metadata as Record<string, unknown>;
+      const id = /\((d-[0-9a-f]{8})\)$/.exec(textOf(r))![1];
+      expect(md.decision_id).toBe(id);
+      expect(md.decision_kind).toBe("decision");
+      expect(md.decision_scope).toBe("mission");
+      expect(String(concl[0].content)).toContain(`[decision ${id} · scope mission] ship gate`);
+      expect(String(msgs[0].content)).toContain(`[decision ${id} · scope mission] ship gate`);
       // T8d-3 (ADR-0006 a2abdbd): reasoning true sends NO message
       // configuration at all (the workspace default decides); only
       // suppressions carry {reasoning:{enabled:false}}.
       expect(msgs[0].configuration).toBeUndefined();
+    } finally {
+      const c = await h.close();
+      expect(c.err).toBe("");
+      await fake.stop();
+    }
+  });
+
+  // --- T19a (ADR-0014 d2 + amendment): the decision ledger tools ----------
+
+  test("remember ledger fields: kind approval, scope rig, supersedes, redacted reason", async () => {
+    const fake = await startFakeHoncho();
+    const dir = makeTempDir("mcp-test-");
+    const h = start(baseEnv(dir, fake, { HONCHO_OBSERVE_OTHERS: "true" }));
+    try {
+      await h.init();
+      const a = await h.rpc(2, "tools/call", { name: "remember", arguments: { fact: "run on 868" } });
+      const idA = /\((d-[0-9a-f]{8})\)$/.exec(textOf(a))![1];
+      const b = await h.rpc(3, "tools/call", {
+        name: "remember",
+        arguments: {
+          fact: "run on 915",
+          reason: "owner approved sk-ant-FAKETHISISNOTAREALSECRET02", // fake-secret
+          supersedes: idA,
+          scope: "rig",
+          kind: "approval",
+        },
+      });
+      expect(b.result.isError).toBeUndefined();
+      const idB = /\((d-[0-9a-f]{8})\)$/.exec(textOf(b))![1];
+      const concl = fake.state.conclusions.get(WS) ?? [];
+      expect(concl.length).toBe(2);
+      const c1 = String((concl[1] as Record<string, unknown>).content);
+      expect(
+        c1.startsWith(`[approval ${idB} · scope rig · supersedes ${idA}] run on 915 (reason: owner approved [REDACTED`),
+      ).toBe(true);
+      expect(c1).not.toContain("FAKETHISIS");
+      const msgs = fake.state.messages.get(`${WS}/build--general--1`) ?? [];
+      expect(msgs.length).toBe(2);
+      const md = msgs[1].metadata as Record<string, unknown>;
+      expect(md).toMatchObject({
+        decision_id: idB,
+        decision_kind: "approval",
+        decision_scope: "rig",
+        decision_supersedes: idA,
+      });
+      expect(String(md.decision_reason)).toContain("[REDACTED");
+      expect(String(md.decision_reason)).not.toContain("FAKETHISIS");
+    } finally {
+      const c = await h.close();
+      expect(c.err).toBe("");
+      await fake.stop();
+    }
+  });
+
+  test("supersedes an unknown or malformed id is refused; nothing is written", async () => {
+    const fake = await startFakeHoncho();
+    const dir = makeTempDir("mcp-test-");
+    const h = start(baseEnv(dir, fake, { HONCHO_OBSERVE_OTHERS: "true" }));
+    try {
+      await h.init();
+      const r1 = await h.rpc(2, "tools/call", {
+        name: "remember",
+        arguments: { fact: "x", supersedes: "d-deadbeef" },
+      });
+      expect(r1.result.isError).toBe(true);
+      expect(textOf(r1)).toContain("supersedes d-deadbeef is not in the current ledger");
+      const r2 = await h.rpc(3, "tools/call", {
+        name: "remember",
+        arguments: { fact: "x", supersedes: "old-1" },
+      });
+      expect(r2.result.isError).toBe(true);
+      expect(textOf(r2)).toContain("supersedes must be a decision id");
+      expect((fake.state.conclusions.get(WS) ?? []).length).toBe(0);
+      expect(fake.state.messages.get(`${WS}/build--general--1`) ?? []).toHaveLength(0);
+    } finally {
+      const c = await h.close();
+      expect(c.err).toBe("");
+      await fake.stop();
+    }
+  });
+
+  test("scope: rig, mission and qitem ids pass; anything else is a usage error", async () => {
+    const fake = await startFakeHoncho();
+    const dir = makeTempDir("mcp-test-");
+    const h = start(baseEnv(dir, fake, { HONCHO_OBSERVE_OTHERS: "true" }));
+    try {
+      await h.init();
+      const bad = await h.rpc(2, "tools/call", { name: "remember", arguments: { fact: "x", scope: "global" } });
+      expect(bad.result.isError).toBe(true);
+      expect(textOf(bad)).toContain("scope must be rig, mission, or a queue item id");
+      expect((fake.state.conclusions.get(WS) ?? []).length).toBe(0);
+      const ok = await h.rpc(3, "tools/call", {
+        name: "remember",
+        arguments: { fact: "go", scope: "qitem-20261103024649-e25e8b91965dce3a" },
+      });
+      expect(ok.result.isError).toBeUndefined();
+      const id = /\((d-[0-9a-f]{8})\)$/.exec(textOf(ok))![1];
+      const concl = fake.state.conclusions.get(WS) ?? [];
+      expect(String((concl[0] as Record<string, unknown>).content)).toContain(
+        `[decision ${id} · scope qitem-20261103024649-e25e8b91965dce3a] go`,
+      );
+    } finally {
+      const c = await h.close();
+      expect(c.err).toBe("");
+      await fake.stop();
+    }
+  });
+
+  test("retire: unknown id refused, in-force id writes the retire entry and the message", async () => {
+    const fake = await startFakeHoncho();
+    const dir = makeTempDir("mcp-test-");
+    const h = start(baseEnv(dir, fake, { HONCHO_OBSERVE_OTHERS: "true" }));
+    try {
+      await h.init();
+      const a = await h.rpc(2, "tools/call", { name: "remember", arguments: { fact: "use LoRa" } });
+      const idA = /\((d-[0-9a-f]{8})\)$/.exec(textOf(a))![1];
+      const bad = await h.rpc(3, "tools/call", { name: "retire", arguments: { decision_id: "d-00000000", reason: "never was" } });
+      expect(bad.result.isError).toBe(true);
+      expect(textOf(bad)).toContain("d-00000000 is not in the current ledger");
+      expect((fake.state.conclusions.get(WS) ?? []).length).toBe(1); // still only A
+      const usage = await h.rpc(4, "tools/call", { name: "retire", arguments: { decision_id: "d-11111111" } });
+      expect(usage.result.isError).toBe(true);
+      expect(textOf(usage)).toContain("usage: retire");
+      const r = await h.rpc(5, "tools/call", { name: "retire", arguments: { decision_id: idA, reason: "replaced by hand" } });
+      expect(r.result.isError).toBeUndefined();
+      expect(textOf(r)).toBe(`retired ${idA}`);
+      const concl = fake.state.conclusions.get(WS) ?? [];
+      expect(concl.length).toBe(2);
+      expect(String((concl[1] as Record<string, unknown>).content)).toBe(`[retire ${idA}] replaced by hand`);
+      const msgs = fake.state.messages.get(`${WS}/build--general--1`) ?? [];
+      expect(msgs.length).toBe(2);
+      const md = msgs[1].metadata as Record<string, unknown>;
+      expect(md).toMatchObject({ decision_id: idA, decision_op: "retire", decision_reason: "replaced by hand" });
+    } finally {
+      const c = await h.close();
+      expect(c.err).toBe("");
+      await fake.stop();
+    }
+  });
+
+  test("retire from a non-leader is the explicit refusal, not unknown tool", async () => {
+    const fake = await startFakeHoncho();
+    const dir = makeTempDir("mcp-test-");
+    const h = start(baseEnv(dir, fake));
+    try {
+      await h.init();
+      const r = await h.rpc(2, "tools/call", { name: "retire", arguments: { decision_id: "d-1a2b3c4d", reason: "x" } });
+      expect(r.result.isError).toBe(true);
+      expect(textOf(r)).toBe("retire is leader-only");
+      expect((fake.state.conclusions.get(WS) ?? []).length).toBe(0);
     } finally {
       const c = await h.close();
       expect(c.err).toBe("");
@@ -228,6 +393,33 @@ describe("bin/mcp.ts rig_memory (T8)", () => {
       expect(text).toContain("Recorded decisions in this mission:");
       expect(text).toContain("auth is delegated to the gateway");
       expect(text).toContain("- just now"); // age label line (E9 format)
+    } finally {
+      const c = await h.close();
+      expect(c.err).toBe("");
+      await fake.stop();
+    }
+  });
+
+  test("ask labels item scope and approvals (T20c rule 4); a mission decision's line is unchanged", async () => {
+    const fake = await startFakeHoncho();
+    const dir = makeTempDir("mcp-test-");
+    const h = start(baseEnv(dir, fake, { HONCHO_OBSERVE_OTHERS: "true" }));
+    try {
+      await h.init();
+      await h.rpc(2, "tools/call", { name: "mission", arguments: { id: "auth" } });
+      await h.rpc(3, "tools/call", { name: "remember", arguments: { fact: "auth is delegated to the gateway" } });
+      await h.rpc(5, "tools/call", {
+        name: "remember",
+        arguments: { fact: "publish build 4.2", kind: "approval", scope: "qitem-20260101000000-1234567890abcdef" },
+      });
+      const r = await h.rpc(4, "tools/call", { name: "ask", arguments: { question: "anything", mission: "auth" } });
+      expect(r.result.isError).toBeUndefined();
+      const text = textOf(r);
+      // approval: marked AND named to its item (label, never filter here)
+      expect(text).toContain("- just now, approval, for qitem-20260101000000-1234567890abcdef");
+      // mission decision: the pre-T20c line exactly
+      const labelLines = text.split("\n").filter((l) => l.startsWith("- "));
+      expect(labelLines).toContain("- just now");
     } finally {
       const c = await h.close();
       expect(c.err).toBe("");
@@ -414,7 +606,7 @@ describe("bin/mcp.ts rig_memory (T8)", () => {
         peer: SELF,
         leader: null,
         profile_workspace: null });
-      expect(st.server).toEqual({ reachable: true, version: "fake-3.4.0" });
+      expect(st.server).toEqual({ reachable: true, version: "fake-3.5.0" });
       expect(st.session.session).toBeNull(); // no hook has run in this state dir yet
       expect(st.spool.live).toEqual({ bytes: 0, lines: 0 });
       expect(st.queue).toMatchObject({ total_work_units: 0 });

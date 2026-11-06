@@ -359,6 +359,29 @@ describe("HONCHO_RECALL_MAX_DISTANCE (T16b, ADR-0011 decision 1)", () => {
   }
 });
 
+describe("HONCHO_RECALL_HOLDOUT (T18b, ADR-0013 decision 2)", () => {
+  test("default 0; unset, empty or blank keeps it", () => {
+    expect(full().recallHoldout).toBe(0);
+    expect(full({ HONCHO_RECALL_HOLDOUT: "" }).recallHoldout).toBe(0);
+    expect(full({ HONCHO_RECALL_HOLDOUT: "  " }).recallHoldout).toBe(0);
+  });
+
+  for (const v of ["0", "0.1", "0.5", " 0.7 ", "0.9", "0.90"]) {
+    test(`"${v}" is accepted as a number`, () => {
+      expect(full({ HONCHO_RECALL_HOLDOUT: v }).recallHoldout).toBe(Number(v.trim()));
+    });
+  }
+
+  for (const v of ["0.95", "1", "-0.1", "2", "abc", "0.5.5", "nan"]) {
+    test(`"${v}" disables the plugin with the named reason`, () => {
+      const r = reason({ HONCHO_RECALL_HOLDOUT: v });
+      expect(r).toContain("HONCHO_RECALL_HOLDOUT");
+      // reason names the variable, never the value
+      if (v.trim().length >= 3) expect(r).not.toContain(v.trim());
+    });
+  }
+});
+
 describe("HONCHO_OBSERVE_OTHERS leader default (ADR-0008, T12a)", () => {
   test("leader peer set to the resolved seat + unset observe -> true", () => {
     const c = full({ HONCHO_LEADER_PEER: "dev-build" });

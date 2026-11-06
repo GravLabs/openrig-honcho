@@ -1,5 +1,6 @@
-.claude/settings.local.json
 node_modules/
+.claude/settings.local.json
+pods/.claude/settings.local.json
 reference/
 .env
 *.log
@@ -7,3 +8,5 @@ reference/
 gate-report.json
 gate-deletes.jsonl
 .serena/
+bench-report.json
+scenario-report.json

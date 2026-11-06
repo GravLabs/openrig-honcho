@@ -22,6 +22,7 @@
 import { attribute } from "../src/attribute.ts";
 import type { Config } from "../src/env.ts";
 import { isKillSwitch, loadConfig } from "../src/env.ts";
+import { appendHeld, heldPath } from "../src/held.ts";
 import { createClient } from "../src/honcho.ts";
 import { errorClassFrom, logConfigProblem, logEvent } from "../src/log.ts";
 import { normalizeMission, readRigMission, readSeatState, seatStatePath } from "../src/missions.ts";
@@ -36,6 +37,8 @@ import {
   renderRecall,
   type RecallItem,
 } from "../src/recall.ts";
+import { knownTermsFromTranscript, readTranscriptTail } from "../src/terms.ts";
+import { createHash } from "node:crypto";
 import { closeSync, existsSync, mkdirSync, openSync, readFileSync, renameSync, writeSync } from "node:fs";
 import { dirname } from "node:path";
 
@@ -141,7 +144,7 @@ async function main(): Promise<void> {
       logEvent(cfg, { hook: "recall", event: "duplicate-run", ok: true, ms: Date.now() - t0 });
       process.exit(0);
     }
-    let input: { prompt?: unknown; session_id?: unknown } = {};
+    let input: { prompt?: unknown; session_id?: unknown; transcript_path?: unknown } = {};
     try {
       input = JSON.parse(raw) as typeof input;
     } catch {
@@ -222,6 +225,19 @@ async function main(): Promise<void> {
         });
       }),
     );
+    // T19c (ADR-0014 decision 4): the novelty filter's known set, built
+    // while the three queries above are already in flight (the row: the
+    // read+scan stays out of the network path). The LAST 1 MB (TAIL_BYTES) of the
+    // transcript only, from the end; a missing, unreadable or absent
+    // transcript_path gives an empty known set - which can never drop an
+    // item (every drop needs >= 1 distinctive term in it), i.e. no filter.
+    // The minimum block stays on regardless: it is the switch's rule.
+    let knownTerms: Set<string> | undefined;
+    if (cfg.novel === true) {
+      const tp = typeof input.transcript_path === "string" ? input.transcript_path : "";
+      const tail = tp !== "" ? readTranscriptTail(tp) : undefined;
+      knownTerms = knownTermsFromTranscript(tail ?? "", attr.content);
+    }
     const raced = await Promise.race([
       allDone,
       new Promise<typeof BUDGET>((resolve) => {
@@ -276,6 +292,9 @@ async function main(): Promise<void> {
       seenIds: sameSession ? (prev.ids as string[]) : [],
       seenHashes: sameSession ? prev.hashes : [],
       ...(contextStart !== undefined ? { contextStart } : {}),
+      // T19c: switch on -> the filter runs against the known set (which
+      // exists whenever the switch is on) AND the minimum block applies.
+      ...(knownTerms !== undefined ? { knownTerms, novel: true } : {}),
       now: new Date().toISOString(),
     });
     // decision 7: filter counts on every terminal event, never content.
@@ -284,6 +303,16 @@ async function main(): Promise<void> {
       dropped_context: view.counts.dropped_context,
       dropped_dup: view.counts.dropped_dup,
       dropped_trivia: view.counts.dropped_trivia,
+      // T19c: the two new counts ride ONLY the novelty path - with the
+      // switch off the log lines keep today's exact shape. dropped_small
+      // appears only on the run that actually suppressed a block (the
+      // event is then "empty", bytes 0: nothing was injected).
+      ...(cfg.novel === true
+        ? {
+            dropped_known: view.counts.dropped_known ?? 0,
+            ...(view.counts.dropped_small !== undefined ? { dropped_small: view.counts.dropped_small } : {}),
+          }
+        : {}),
       query_chars: queryChars,
       ...(partial > 0 ? { partial } : {}),
       ...(wallHit ? { error_class: "timeout" } : {}), // T16g: the wall flag on the render event
@@ -293,11 +322,45 @@ async function main(): Promise<void> {
       logEvent(cfg, { hook: "recall", event: "empty", ok: true, ms: Date.now() - t0, bytes: 0, n_items: 0, ...counts });
       process.exit(0);
     }
-    process.stdout.write(
-      `${JSON.stringify({
-        hookSpecificOutput: { hookEventName: "UserPromptSubmit", additionalContext: view.text },
-      })}\n`,
-    );
+    // T18b (ADR-0013 decision 2): the deterministic arm. sha256 over the
+    // Claude session id and the raw prompt, mapped to [0,1) via the first
+    // 8 hex digits / 2^32, compared to the holdout share: the same session
+    // and prompt always take the same arm, so a hook rerun cannot switch
+    // groups. With the default share 0 NO arm field is added anywhere and
+    // stdout is written exactly as before - today's logs stay
+    // byte-identical.
+    const holdout = cfg.recallHoldout ?? 0;
+    const promptText = typeof input.prompt === "string" ? input.prompt : "";
+    let arm: "shown" | "held" = "shown";
+    if (holdout > 0) {
+      const h = createHash("sha256").update(session + String.fromCharCode(0) + promptText, "utf8").digest("hex");
+      arm = Number.parseInt(h.slice(0, 8), 16) / 0x1_0000_0000 < holdout ? "held" : "shown";
+    }
+    if (arm === "shown") {
+      process.stdout.write(
+        `${JSON.stringify({
+          hookSpecificOutput: { hookEventName: "UserPromptSubmit", additionalContext: view.text },
+        })}\n`,
+      );
+    } else {
+      // Ruling 15:27Z (option c): the held text goes to the PRIVATE state
+      // dir (0600, capped) for eval-use's baseline - never to stdout,
+      // never to the log, never to the server. Measurement is
+      // best-effort: a failed write loses baseline history, not silence.
+      try {
+        appendHeld(heldPath(cfg.stateDir, cfg.workspace, cfg.peer), {
+          ts: new Date().toISOString(),
+          session,
+          prompt_sha256: createHash("sha256").update(promptText, "utf8").digest("hex"),
+          n_items: view.ids.length,
+          text: view.text,
+        });
+      } catch {
+        // keep silence either way
+      }
+    }
+    // A held block is marked seen exactly as a shown one: a withheld item
+    // must not resurface on a later prompt of the same session (brief).
     try {
       writeSeen(seenPath(cfg), nextSeen(prev, session, { ids: view.ids, hashes: view.hashes }));
     } catch {
@@ -311,6 +374,7 @@ async function main(): Promise<void> {
       bytes: Buffer.byteLength(view.text),
       n_items: view.ids.length,
       ...counts,
+      ...(holdout > 0 ? { arm } : {}),
     });
   } catch {
     if (cfg !== null) {

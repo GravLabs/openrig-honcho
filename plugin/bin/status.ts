@@ -2,7 +2,7 @@
 //   plugin/bin/status.ts [--json]
 // Prints counters + the last structured log lines (projections only, never
 // raw lines or secrets - F-T8-4). Exit code: 1 when unhealthy - config
-// disabled, server unreachable, server version not the expected 3.4.0, or
+// disabled, server unreachable, server version not the expected 3.5.0, or
 // live+replay spool past 80% of its 10 MB budget; 0 otherwise. Unlike the
 // hooks this bin DOES print (it is run by a human or an agent on purpose),
 // but never the kill-switch reason and never the API key.

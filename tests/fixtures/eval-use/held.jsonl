@@ -1,0 +1,2 @@
+{"type":"user","timestamp":"2026-11-03T10:00:00.000Z","sessionId":"fix-sess","message":{"content":[{"type":"text","text":"From: fixsender@fixrig\nTo: fixseat@fixrig\nSent: 11-03 10:00Z\nhow is the blorx going?"}]}}
+{"type":"assistant","timestamp":"2026-11-03T10:00:05.000Z","message":{"content":[{"type":"text","text":"looking now, the widget reads zebra-db so blorx is fine"}]}}

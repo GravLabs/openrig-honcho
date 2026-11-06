@@ -1,0 +1,1354 @@
+[
+ {
+  "id": "b-001",
+  "observer": "lead",
+  "observed": "lead",
+  "session": "lead--sensor-rig--1",
+  "mission": "sensor-rig",
+  "created_at": "2026-10-12T09:12:00Z",
+  "content": "Decision: the uplink radio runs LoRa at 868 MHz because the first customer sites are in the EU."
+ },
+ {
+  "id": "b-002",
+  "observer": "lead",
+  "observed": "lead",
+  "session": "lead--sensor-rig--1",
+  "mission": "sensor-rig",
+  "created_at": "2026-10-12T09:31:00Z",
+  "content": "Decision: sensor board talks to the MCU over I2C bus 1, not SPI, to keep SPI free for the flash chip."
+ },
+ {
+  "id": "b-003",
+  "observer": "lead",
+  "observed": "lead",
+  "session": "lead--sensor-rig--1",
+  "mission": "sensor-rig",
+  "created_at": "2026-10-12T11:05:00Z",
+  "content": "Decision: readings log to SPI flash in a ring buffer, 7 days at 1-minute sampling."
+ },
+ {
+  "id": "b-004",
+  "observer": "lead",
+  "observed": "lead",
+  "session": "lead--power-core--1",
+  "mission": "power-core",
+  "created_at": "2026-10-13T10:02:00Z",
+  "content": "Decision: keep the stock MCU bootloader; a custom bootloader is out of scope for v1."
+ },
+ {
+  "id": "b-005",
+  "observer": "lead",
+  "observed": "lead",
+  "session": "lead--power-core--1",
+  "mission": "power-core",
+  "created_at": "2026-10-13T10:06:00Z",
+  "content": "Decision: no OTA in v1; field flashing by hand stays simpler and the update risk is not worth it."
+ },
+ {
+  "id": "b-006",
+  "observer": "lead",
+  "observed": "lead",
+  "session": "lead--power-core--1",
+  "mission": "power-core",
+  "created_at": "2026-10-13T10:40:00Z",
+  "content": "Decision: enable the hardware watchdog at 8 s; a stuck loop must reset into the logger, not hang."
+ },
+ {
+  "id": "b-007",
+  "observer": "lead",
+  "observed": "lead",
+  "session": "lead--power-core--1",
+  "mission": "power-core",
+  "created_at": "2026-10-13T14:22:00Z",
+  "content": "Decision: LiFePO4 cells, not LiPo - the winter temperature range kills LiPo capacity."
+ },
+ {
+  "id": "b-008",
+  "observer": "lead",
+  "observed": "lead",
+  "session": "lead--power-core--1",
+  "mission": "power-core",
+  "created_at": "2026-10-14T09:18:00Z",
+  "content": "Decision: the node deep-sleeps between samples; wake budget 40 uA average."
+ },
+ {
+  "id": "b-009",
+  "observer": "lead",
+  "observed": "lead",
+  "session": "lead--sensor-rig--1",
+  "mission": "sensor-rig",
+  "supersedes": "b-001",
+  "created_at": "2026-10-16T10:15:00Z",
+  "content": "Decision: the uplink radio runs LoRa at 915 MHz after all - the second customer batch ships to the US, and 868 MHz is retired for this product."
+ },
+ {
+  "id": "b-010",
+  "observer": "lead",
+  "observed": "lead",
+  "session": "lead--power-core--1",
+  "mission": "power-core",
+  "supersedes": "b-005",
+  "created_at": "2026-10-16T11:40:00Z",
+  "content": "Decision: OTA updates ship in v1 after all, gated behind the watchdog rule; earlier no-OTA note is retired."
+ },
+ {
+  "id": "b-011",
+  "observer": "lead",
+  "observed": "lead",
+  "session": "lead--sensor-rig--1",
+  "mission": "sensor-rig",
+  "created_at": "2026-10-15T16:02:00Z",
+  "content": "Decision: field sampling stays at 1 minute; 5-minute sampling was too coarse for frost events."
+ },
+ {
+  "id": "b-012",
+  "observer": "lead",
+  "observed": "lead",
+  "session": "lead--sensor-rig--1",
+  "mission": "sensor-rig",
+  "created_at": "2026-10-14T13:35:00Z",
+  "content": "Decision: enclosure is UV-stable ASA printed, not ABS - ABS went chalky in the summer test."
+ },
+ {
+  "id": "b-013",
+  "observer": "lead",
+  "observed": "lead",
+  "session": "lead--sensor-rig--1",
+  "mission": "sensor-rig",
+  "created_at": "2026-10-15T09:26:00Z",
+  "content": "Decision: external SMA antenna, not the onboard ceramic; the mast mount shielded the ceramic one."
+ },
+ {
+  "id": "b-014",
+  "observer": "lead",
+  "observed": "lead",
+  "session": "lead--sensor-rig--1",
+  "mission": "sensor-rig",
+  "created_at": "2026-10-13T15:48:00Z",
+  "content": "Decision: timestamps come from the RTC disciplined by LoRa network time, never from a phone app."
+ },
+ {
+  "id": "b-015",
+  "observer": "lead",
+  "observed": "lead",
+  "session": "lead--sensor-rig--1",
+  "mission": "sensor-rig",
+  "created_at": "2026-10-14T15:12:00Z",
+  "content": "Decision: two-point calibration per unit at factory, offset stored in flash, not baked into firmware."
+ },
+ {
+  "id": "b-016",
+  "observer": "lead",
+  "observed": "lead",
+  "session": "lead--power-core--1",
+  "mission": "power-core",
+  "created_at": "2026-10-15T10:44:00Z",
+  "content": "Decision: one firmware binary for both board revisions, revision detected at boot from the ID resistor."
+ },
+ {
+  "id": "b-017",
+  "observer": "lead",
+  "observed": "lead",
+  "session": "lead--power-core--1",
+  "mission": "power-core",
+  "created_at": "2026-10-16T15:30:00Z",
+  "content": "Decision: on battery-critical the node keeps logging and stops transmitting; data beats reach for this product."
+ },
+ {
+  "id": "b-018",
+  "observer": "lead",
+  "observed": "lead",
+  "session": "lead--power-core--1",
+  "mission": "power-core",
+  "created_at": "2026-10-14T11:58:00Z",
+  "content": "Decision: uplink retries burn at most 2 percent of the daily power budget, then wait for the next window."
+ },
+ {
+  "id": "b-019",
+  "observer": "lead",
+  "observed": "lead",
+  "session": "lead--sensor-rig--1",
+  "mission": "sensor-rig",
+  "created_at": "2026-10-12T16:40:00Z",
+  "content": "Decision: BOM ceiling 61 credits per node; anything above goes to the lead first."
+ },
+ {
+  "id": "b-020",
+  "observer": "lead",
+  "observed": "lead",
+  "session": "lead--power-core--1",
+  "mission": "power-core",
+  "created_at": "2026-10-12T17:20:00Z",
+  "content": "Decision: certification effort starts only after the field-pilot data review, not before."
+ },
+ {
+  "id": "b-021",
+  "observer": "lead",
+  "observed": "lead",
+  "session": "lead--sensor-rig--1",
+  "mission": "sensor-rig",
+  "created_at": "2026-10-13T08:55:00Z",
+  "content": "Decision: main branch stays always-flashable; work lands on topic branches and merges after the checker signs off."
+ },
+ {
+  "id": "b-022",
+  "observer": "lead",
+  "observed": "lead",
+  "session": "lead--power-core--1",
+  "mission": "power-core",
+  "created_at": "2026-10-14T16:26:00Z",
+  "content": "Decision: the bench keeps one storm-chaser simulator running nightly so cold-path timing is never untested for a week."
+ },
+ {
+  "id": "b-023",
+  "observer": "lead",
+  "observed": "lead",
+  "session": "lead--sensor-rig--1",
+  "mission": "sensor-rig",
+  "created_at": "2026-10-16T16:12:00Z",
+  "content": "Decision: serial log level drops to warn for field units; the verbose build stays for the bench only."
+ },
+ {
+  "id": "b-024",
+  "observer": "owner",
+  "observed": "owner",
+  "session": "owner--sensor-rig--1",
+  "mission": "sensor-rig",
+  "created_at": "2026-10-13T12:10:00Z",
+  "content": "Owner approved the 61-credit BOM ceiling and the antenna upgrade in the same breath."
+ },
+ {
+  "id": "b-025",
+  "observer": "owner",
+  "observed": "owner",
+  "session": "owner--sensor-rig--1",
+  "mission": "sensor-rig",
+  "created_at": "2026-10-15T14:05:00Z",
+  "content": "Owner approved the 12-node field pilot on the mill roof, two weekends, weather permit filed."
+ },
+ {
+  "id": "b-026",
+  "observer": "owner",
+  "observed": "owner",
+  "session": "owner--power-core--1",
+  "mission": "power-core",
+  "created_at": "2026-10-14T09:55:00Z",
+  "content": "Owner approved the LiFePO4 cell change including the charger swap cost."
+ },
+ {
+  "id": "b-027",
+  "observer": "owner",
+  "observed": "owner",
+  "session": "owner--sensor-rig--1",
+  "mission": "sensor-rig",
+  "created_at": "2026-10-14T17:40:00Z",
+  "content": "Owner approved the rule that no firmware ever edits calibration bytes in the field; factory tool only."
+ },
+ {
+  "id": "b-028",
+  "observer": "owner",
+  "observed": "owner",
+  "session": "owner--power-core--1",
+  "mission": "power-core",
+  "created_at": "2026-10-16T13:12:00Z",
+  "content": "Owner approved shipping OTA in v1 with the watchdog gate, overriding the earlier no-OTA stance."
+ },
+ {
+  "id": "b-029",
+  "observer": "owner",
+  "observed": "owner",
+  "session": "owner--sensor-rig--1",
+  "mission": "sensor-rig",
+  "created_at": "2026-10-12T13:26:00Z",
+  "content": "Owner approved buying three spare board sets for destructive bench testing."
+ },
+ {
+  "id": "b-030",
+  "observer": "owner",
+  "observed": "owner",
+  "session": "owner--power-core--1",
+  "mission": "power-core",
+  "created_at": "2026-10-16T17:05:00Z",
+  "content": "Owner approved the freezer winter test week after the first frost data came in."
+ },
+ {
+  "id": "b-031",
+  "observer": "owner",
+  "observed": "owner",
+  "session": "owner--sensor-rig--1",
+  "mission": "sensor-rig",
+  "created_at": "2026-10-15T10:30:00Z",
+  "content": "Owner approved open-sourcing the enclosure CAD after the pilot, license MIT."
+ },
+ {
+  "id": "b-032",
+  "observer": "checker",
+  "observed": "builder",
+  "session": "checker--sensor-rig--1",
+  "mission": "sensor-rig",
+  "created_at": "2026-10-13T11:26:00Z",
+  "content": "Lesson: new firmware builds must be flashed on a spare board first, because a bad power setting cooked two main boards last month."
+ },
+ {
+  "id": "b-033",
+  "observer": "checker",
+  "observed": "builder",
+  "session": "checker--sensor-rig--1",
+  "mission": "sensor-rig",
+  "created_at": "2026-10-12T15:02:00Z",
+  "content": "Lesson: the sensor board ships with 4.7k pull-ups fitted; a bare I2C bus looks dead at 100 kHz and burns a day of guessing."
+ },
+ {
+  "id": "b-034",
+  "observer": "checker",
+  "observed": "lead",
+  "session": "checker--power-core--1",
+  "mission": "power-core",
+  "created_at": "2026-10-15T11:31:00Z",
+  "content": "Lesson: deep-sleep current measured fine warm but doubled under 0 C; the sleep pin leak only shows up cold."
+ },
+ {
+  "id": "b-035",
+  "observer": "builder",
+  "observed": "builder",
+  "session": "builder--power-core--1",
+  "mission": "power-core",
+  "created_at": "2026-10-14T12:44:00Z",
+  "content": "Lesson: the 1 percent duty limit applies per channel; spreading retries across three channels tripled the retry budget honestly."
+ },
+ {
+  "id": "b-036",
+  "observer": "checker",
+  "observed": "builder",
+  "session": "checker--power-core--1",
+  "mission": "power-core",
+  "created_at": "2026-10-15T13:20:00Z",
+  "content": "Lesson: the fuel-gauge chip lies flat at the LiFePO4 plateau; trust coulomb counting, not the voltage curve."
+ },
+ {
+  "id": "b-037",
+  "observer": "builder",
+  "observed": "builder",
+  "session": "builder--sensor-rig--1",
+  "mission": "sensor-rig",
+  "created_at": "2026-10-15T15:07:00Z",
+  "content": "Lesson: sweep the antenna before ordering the enclosure, not after - the first printed box detuned it 3 dB."
+ },
+ {
+  "id": "b-038",
+  "observer": "checker",
+  "observed": "builder",
+  "session": "checker--sensor-rig--1",
+  "mission": "sensor-rig",
+  "created_at": "2026-10-16T09:40:00Z",
+  "content": "Lesson: the flash datasheet wear figure assumed 25 C; the sunny enclosure hits 60 C and halved the write endurance in the bake test."
+ },
+ {
+  "id": "b-039",
+  "observer": "builder",
+  "observed": "builder",
+  "session": "builder--sensor-rig--1",
+  "mission": "sensor-rig",
+  "created_at": "2026-10-16T12:55:00Z",
+  "content": "Lesson: a network-time resync mid-window rewrote earlier readings timestamps; discipline the RTC, never snap it."
+ },
+ {
+  "id": "b-040",
+  "observer": "checker",
+  "observed": "lead",
+  "session": "checker--power-core--1",
+  "mission": "power-core",
+  "created_at": "2026-10-14T10:16:00Z",
+  "content": "Lesson: the watchdog fired during factory test because the bootloader did not pet it; every reset path must service the dog."
+ },
+ {
+  "id": "b-041",
+  "observer": "builder",
+  "observed": "builder",
+  "session": "builder--sensor-rig--1",
+  "mission": "sensor-rig",
+  "created_at": "2026-10-13T16:52:00Z",
+  "content": "Lesson: the storm-chaser simulator needs humidity alongside wind; without it the sensor fusion bug hid for nine days."
+ },
+ {
+  "id": "b-042",
+  "observer": "builder",
+  "observed": "builder",
+  "session": "builder--power-core--1",
+  "mission": "power-core",
+  "created_at": "2026-10-13T13:08:00Z",
+  "content": "Lesson: the debug UART holds 2 mA at idle when unpowered from USB; float the pins or the wake budget is fiction."
+ },
+ {
+  "id": "b-043",
+  "observer": "checker",
+  "observed": "builder",
+  "session": "checker--sensor-rig--1",
+  "mission": "sensor-rig",
+  "created_at": "2026-10-14T14:58:00Z",
+  "content": "Lesson: second reflow pass lifted the sensor pad; cover it with tape before reflashing nearby parts."
+ },
+ {
+  "id": "b-044",
+  "observer": "builder",
+  "observed": "lead",
+  "session": "builder--power-core--1",
+  "mission": "power-core",
+  "created_at": "2026-10-16T14:18:00Z",
+  "content": "Lesson: uplink packet loss clustered at dawn; condensation on the mast antenna, not interference."
+ },
+ {
+  "id": "b-045",
+  "observer": "lead",
+  "observed": "lead",
+  "session": "lead--sensor-rig--1",
+  "mission": "sensor-rig",
+  "created_at": "2026-10-16T10:52:00Z",
+  "content": "Lesson: the wiring doc still said 868 MHz a day after the 915 decision; every radio decision needs a doc edit in the same commit."
+ },
+ {
+  "id": "b-046",
+  "observer": "lead",
+  "observed": "builder",
+  "session": "lead--sensor-rig--1",
+  "mission": "sensor-rig",
+  "created_at": "2026-10-12T10:20:00Z",
+  "content": "Builder works fast on firmware but skips bench notes until pushed."
+ },
+ {
+  "id": "b-047",
+  "observer": "lead",
+  "observed": "checker",
+  "session": "lead--power-core--1",
+  "mission": "power-core",
+  "created_at": "2026-10-12T10:24:00Z",
+  "content": "Checker is thorough on power-management code and catches edge cases there."
+ },
+ {
+  "id": "b-048",
+  "observer": "builder",
+  "observed": "checker",
+  "session": "builder--sensor-rig--1",
+  "mission": "sensor-rig",
+  "created_at": "2026-10-13T09:44:00Z",
+  "content": "Checker leaves terse review notes but always flags solder-heat risks."
+ },
+ {
+  "id": "b-049",
+  "observer": "builder",
+  "observed": "lead",
+  "session": "builder--sensor-rig--1",
+  "mission": "sensor-rig",
+  "created_at": "2026-10-14T10:50:00Z",
+  "content": "Lead has the deepest LoRa experience on the team and owns every radio call."
+ },
+ {
+  "id": "b-050",
+  "observer": "lead",
+  "observed": "owner",
+  "session": "lead--sensor-rig--1",
+  "mission": "sensor-rig",
+  "created_at": "2026-10-13T12:15:00Z",
+  "content": "Owner answers scope questions the same day but wants cost impacts in the first line."
+ },
+ {
+  "id": "b-051",
+  "observer": "checker",
+  "observed": "builder",
+  "session": "checker--power-core--1",
+  "mission": "power-core",
+  "created_at": "2026-10-15T12:02:00Z",
+  "content": "Builder has the cold-chamber procedure fully memorized and needs no checklist."
+ },
+ {
+  "id": "b-052",
+  "observer": "lead",
+  "observed": "checker",
+  "session": "lead--sensor-rig--1",
+  "mission": "sensor-rig",
+  "created_at": "2026-10-14T11:12:00Z",
+  "content": "Checker owns the I2C bus test rig and its fault-injection configs."
+ },
+ {
+  "id": "b-053",
+  "observer": "builder",
+  "observed": "lead",
+  "session": "builder--power-core--1",
+  "mission": "power-core",
+  "created_at": "2026-10-15T09:48:00Z",
+  "content": "Lead keeps the power budget sheet and updates it after every wake change."
+ },
+ {
+  "id": "b-054",
+  "observer": "lead",
+  "observed": "owner",
+  "session": "lead--sensor-rig--1",
+  "mission": "sensor-rig",
+  "created_at": "2026-10-15T14:20:00Z",
+  "content": "Owner handles the field-site permits personally; pilot dates go through them."
+ },
+ {
+  "id": "b-055",
+  "observer": "checker",
+  "observed": "builder",
+  "session": "checker--sensor-rig--1",
+  "mission": "sensor-rig",
+  "created_at": "2026-10-16T09:12:00Z",
+  "content": "Builder is the only seat allowed to run the factory calibration tool."
+ },
+ {
+  "id": "b-056",
+  "observer": "builder",
+  "observed": "checker",
+  "session": "builder--power-core--1",
+  "mission": "power-core",
+  "created_at": "2026-10-16T11:26:00Z",
+  "content": "Checker runs the freezer test schedule and tracks every run in a logbook."
+ },
+ {
+  "id": "b-057",
+  "observer": "builder",
+  "observed": "lead",
+  "session": "builder--sensor-rig--1",
+  "mission": "sensor-rig",
+  "created_at": "2026-10-12T08:58:00Z",
+  "content": "Lead comes from a LoRaWAN gateway background; EU band habits run deep."
+ },
+ {
+  "id": "b-058",
+  "observer": "checker",
+  "observed": "builder",
+  "session": "checker--sensor-rig--1",
+  "mission": "sensor-rig",
+  "created_at": "2026-10-14T15:44:00Z",
+  "content": "Builder reworks solder joints patiently but rushes harness assembly."
+ },
+ {
+  "id": "b-059",
+  "observer": "checker",
+  "observed": "owner",
+  "session": "checker--sensor-rig--1",
+  "mission": "sensor-rig",
+  "created_at": "2026-10-14T16:50:00Z",
+  "content": "Owner approves hardware spend fast when the BOM delta is under 5 credits."
+ },
+ {
+  "id": "b-060",
+  "observer": "lead",
+  "observed": "checker",
+  "session": "lead--sensor-rig--1",
+  "mission": "sensor-rig",
+  "created_at": "2026-10-16T13:40:00Z",
+  "content": "Checker extended the storm-chaser simulator with a frost profile this week."
+ },
+ {
+  "id": "b-061",
+  "observer": "builder",
+  "observed": "builder",
+  "session": "builder--sensor-rig--1",
+  "mission": "sensor-rig",
+  "created_at": "2026-10-12T09:40:00Z",
+  "content": "Builder is waiting on the sensor driver bring-up; the vendor header is missing."
+ },
+ {
+  "id": "b-062",
+  "observer": "builder",
+  "observed": "builder",
+  "session": "builder--sensor-rig--1",
+  "mission": "sensor-rig",
+  "created_at": "2026-10-14T17:30:00Z",
+  "content": "Sensor driver merged yesterday; builder moved on to the flash ring buffer."
+ },
+ {
+  "id": "b-063",
+  "observer": "builder",
+  "observed": "builder",
+  "session": "builder--sensor-rig--1",
+  "mission": "sensor-rig",
+  "created_at": "2026-10-16T15:44:00Z",
+  "content": "Builder is on the calibration tool now; ring buffer passed soak."
+ },
+ {
+  "id": "b-064",
+  "observer": "builder",
+  "observed": "builder",
+  "session": "builder--power-core--1",
+  "mission": "power-core",
+  "created_at": "2026-10-13T10:55:00Z",
+  "content": "Deep-sleep branch builds clean but has no field soak yet."
+ },
+ {
+  "id": "b-065",
+  "observer": "builder",
+  "observed": "builder",
+  "session": "builder--power-core--1",
+  "mission": "power-core",
+  "created_at": "2026-10-15T17:15:00Z",
+  "content": "Deep-sleep branch soaked 72 h warm; the cold soak is next week in the freezer."
+ },
+ {
+  "id": "b-066",
+  "observer": "lead",
+  "observed": "lead",
+  "session": "lead--sensor-rig--1",
+  "mission": "sensor-rig",
+  "created_at": "2026-10-14T09:30:00Z",
+  "content": "Field pilot not scheduled; still waiting on the roof permit."
+ },
+ {
+  "id": "b-067",
+  "observer": "lead",
+  "observed": "lead",
+  "session": "lead--sensor-rig--1",
+  "mission": "sensor-rig",
+  "created_at": "2026-10-15T14:25:00Z",
+  "content": "Field pilot set: 12 nodes on the mill roof, first weekend of the coming month."
+ },
+ {
+  "id": "b-068",
+  "observer": "lead",
+  "observed": "lead",
+  "session": "lead--sensor-rig--1",
+  "mission": "sensor-rig",
+  "created_at": "2026-10-16T17:25:00Z",
+  "content": "Field pilot prepped: nodes flashed, antennas mounted, checklist in the pilot binder."
+ },
+ {
+  "id": "b-069",
+  "observer": "builder",
+  "observed": "builder",
+  "session": "builder--sensor-rig--1",
+  "mission": "sensor-rig",
+  "created_at": "2026-10-12T14:10:00Z",
+  "content": "Radio stack runs 868 MHz and passed the EU duty-cycle test bench."
+ },
+ {
+  "id": "b-070",
+  "observer": "builder",
+  "observed": "builder",
+  "session": "builder--sensor-rig--1",
+  "mission": "sensor-rig",
+  "created_at": "2026-10-16T11:02:00Z",
+  "content": "Radio stack rebuilt for 915 MHz; duty-cycle retest is running on the bench."
+ },
+ {
+  "id": "b-071",
+  "observer": "checker",
+  "observed": "checker",
+  "session": "checker--power-core--1",
+  "mission": "power-core",
+  "created_at": "2026-10-13T15:20:00Z",
+  "content": "Wake budget measured at 55 uA average, over the 40 uA target."
+ },
+ {
+  "id": "b-072",
+  "observer": "checker",
+  "observed": "checker",
+  "session": "checker--power-core--1",
+  "mission": "power-core",
+  "created_at": "2026-10-15T16:48:00Z",
+  "content": "Wake budget now 38 uA warm after the UART pin fix; cold number pending."
+ },
+ {
+  "id": "b-073",
+  "observer": "checker",
+  "observed": "checker",
+  "session": "checker--power-core--1",
+  "mission": "power-core",
+  "created_at": "2026-10-15T11:40:00Z",
+  "content": "Freezer test pending - booked the chamber for next week."
+ },
+ {
+  "id": "b-074",
+  "observer": "checker",
+  "observed": "checker",
+  "session": "checker--power-core--1",
+  "mission": "power-core",
+  "created_at": "2026-10-16T17:12:00Z",
+  "content": "Freezer test starts Monday, checker holds the chamber key and the logbook."
+ },
+ {
+  "id": "b-075",
+  "observer": "builder",
+  "observed": "builder",
+  "session": "builder--sensor-rig--1",
+  "mission": "sensor-rig",
+  "created_at": "2026-10-14T15:30:00Z",
+  "content": "Factory calibration tool still manual, two points typed by hand."
+ },
+ {
+  "id": "b-076",
+  "observer": "builder",
+  "observed": "builder",
+  "session": "builder--sensor-rig--1",
+  "mission": "sensor-rig",
+  "created_at": "2026-10-16T10:05:00Z",
+  "content": "Calibration tool now scripted from the chamber profile; ten units done error-free."
+ },
+ {
+  "id": "b-077",
+  "observer": "lead",
+  "observed": "lead",
+  "session": "lead--sensor-rig--1",
+  "mission": "sensor-rig",
+  "created_at": "2026-10-15T17:50:00Z",
+  "content": "The hardware doc bundle is half stale, radio section says 868 MHz."
+ },
+ {
+  "id": "b-078",
+  "observer": "lead",
+  "observed": "lead",
+  "session": "lead--sensor-rig--1",
+  "mission": "sensor-rig",
+  "created_at": "2026-10-16T11:00:00Z",
+  "content": "Doc bundle refreshed after the band decision; radio, antenna and BOM pages current again."
+ },
+ {
+  "id": "b-079",
+  "observer": "lead",
+  "observed": "lead",
+  "session": "lead--power-core--1",
+  "mission": "power-core",
+  "created_at": "2026-10-14T08:40:00Z",
+  "content": "Certification paperwork untouched, deliberately parked until pilot data."
+ },
+ {
+  "id": "b-080",
+  "observer": "checker",
+  "observed": "checker",
+  "session": "checker--sensor-rig--1",
+  "mission": "sensor-rig",
+  "created_at": "2026-10-14T12:15:00Z",
+  "content": "Storm-chaser simulator runs nightly; nine open scenario profiles."
+ },
+ {
+  "id": "b-081",
+  "observer": "checker",
+  "observed": "checker",
+  "session": "checker--sensor-rig--1",
+  "mission": "sensor-rig",
+  "created_at": "2026-10-16T14:02:00Z",
+  "content": "Simulator grew a frost profile and a dawn-fog humidity ramp; twelve profiles nightly."
+ },
+ {
+  "id": "b-082",
+  "observer": "builder",
+  "observed": "builder",
+  "session": "builder--power-core--1",
+  "mission": "power-core",
+  "created_at": "2026-10-13T14:50:00Z",
+  "content": "LiFePO4 pack bench: charger still the old LiPo profile, swap blocked on parts."
+ },
+ {
+  "id": "b-083",
+  "observer": "builder",
+  "observed": "builder",
+  "session": "builder--power-core--1",
+  "mission": "power-core",
+  "created_at": "2026-10-15T10:10:00Z",
+  "content": "LiFePO4 charger profile flashed, pack holds plateau through the overnight cycle."
+ },
+ {
+  "id": "b-084",
+  "observer": "builder",
+  "observed": "builder",
+  "session": "builder--sensor-rig--1",
+  "mission": "sensor-rig",
+  "created_at": "2026-10-16T11:48:00Z",
+  "content": "915 duty-cycle retest at 63 percent through the morning window; no violations yet."
+ },
+ {
+  "id": "b-085",
+  "observer": "builder",
+  "observed": "builder",
+  "session": "builder--sensor-rig--1",
+  "mission": "sensor-rig",
+  "created_at": "2026-10-13T11:40:00Z",
+  "content": "Two main boards dead from a bad power setting; spare board rule now in force."
+ },
+ {
+  "id": "b-086",
+  "observer": "builder",
+  "observed": "lead",
+  "session": "builder--sensor-rig--1",
+  "mission": "sensor-rig",
+  "created_at": "2026-10-15T09:30:00Z",
+  "content": "Lead chose the external SMA antenna after the mast shielding measured -3 dB on ceramic."
+ },
+ {
+  "id": "b-087",
+  "observer": "checker",
+  "observed": "owner",
+  "session": "checker--power-core--1",
+  "mission": "power-core",
+  "created_at": "2026-10-16T17:08:00Z",
+  "content": "Owner gave the winter-test green light right after the dawn packet-loss data."
+ },
+ {
+  "id": "b-088",
+  "observer": "checker",
+  "observed": "lead",
+  "session": "checker--power-core--1",
+  "mission": "power-core",
+  "created_at": "2026-10-16T15:35:00Z",
+  "content": "The keep-logging-stop-transmitting policy came from lead after the frost outage."
+ },
+ {
+  "id": "b-089",
+  "observer": "builder",
+  "observed": "lead",
+  "session": "builder--power-core--1",
+  "mission": "power-core",
+  "created_at": "2026-10-13T14:30:00Z",
+  "content": "Lead picked LiFePO4 after the winter capacity table, not from taste."
+ },
+ {
+  "id": "b-090",
+  "observer": "builder",
+  "observed": "checker",
+  "session": "builder--power-core--1",
+  "mission": "power-core",
+  "created_at": "2026-10-14T10:22:00Z",
+  "content": "The every-reset-path watchdog rule came out of the checker factory-test finding."
+ },
+ {
+  "id": "b-091",
+  "observer": "builder",
+  "observed": "builder",
+  "session": "builder--sensor-rig--1",
+  "mission": "sensor-rig",
+  "created_at": "2026-10-12T07:10:00Z",
+  "content": "Builder used the make tool for the nightly build."
+ },
+ {
+  "id": "b-092",
+  "observer": "builder",
+  "observed": "builder",
+  "session": "builder--sensor-rig--1",
+  "mission": "sensor-rig",
+  "created_at": "2026-10-13T08:11:00Z",
+  "content": "Builder acknowledged the checklist update."
+ },
+ {
+  "id": "b-093",
+  "observer": "checker",
+  "observed": "checker",
+  "session": "checker--sensor-rig--1",
+  "mission": "sensor-rig",
+  "created_at": "2026-10-14T09:12:00Z",
+  "content": "Checker acknowledged the review request."
+ },
+ {
+  "id": "b-094",
+  "observer": "builder",
+  "observed": "builder",
+  "session": "builder--power-core--1",
+  "mission": "power-core",
+  "created_at": "2026-10-15T10:13:00Z",
+  "content": "Builder flashed the bench board again today."
+ },
+ {
+  "id": "b-095",
+  "observer": "checker",
+  "observed": "checker",
+  "session": "checker--power-core--1",
+  "mission": "power-core",
+  "created_at": "2026-10-16T11:14:00Z",
+  "content": "Checker ran the bench board again today."
+ },
+ {
+  "id": "b-096",
+  "observer": "builder",
+  "observed": "builder",
+  "session": "builder--sensor-rig--1",
+  "mission": "sensor-rig",
+  "created_at": "2026-10-12T12:15:00Z",
+  "content": "Builder formatted the flash card once more."
+ },
+ {
+  "id": "b-097",
+  "observer": "checker",
+  "observed": "checker",
+  "session": "checker--sensor-rig--1",
+  "mission": "sensor-rig",
+  "created_at": "2026-10-13T13:16:00Z",
+  "content": "Checker restarted the sensor simulator again."
+ },
+ {
+  "id": "b-098",
+  "observer": "builder",
+  "observed": "builder",
+  "session": "builder--power-core--1",
+  "mission": "power-core",
+  "created_at": "2026-10-14T14:17:00Z",
+  "content": "Builder topped up the bench coffee supply."
+ },
+ {
+  "id": "b-099",
+  "observer": "checker",
+  "observed": "checker",
+  "session": "checker--power-core--1",
+  "mission": "power-core",
+  "created_at": "2026-10-15T15:18:00Z",
+  "content": "Checker labeled the spare board bin."
+ },
+ {
+  "id": "b-100",
+  "observer": "builder",
+  "observed": "builder",
+  "session": "builder--sensor-rig--1",
+  "mission": "sensor-rig",
+  "created_at": "2026-10-16T16:19:00Z",
+  "content": "Builder closed the stale ticket about the fan noise."
+ },
+ {
+  "id": "b-101",
+  "observer": "checker",
+  "observed": "checker",
+  "session": "checker--sensor-rig--1",
+  "mission": "sensor-rig",
+  "created_at": "2026-10-12T07:20:00Z",
+  "content": "Checker closed the stale ticket about the label smudge."
+ },
+ {
+  "id": "b-102",
+  "observer": "builder",
+  "observed": "builder",
+  "session": "builder--power-core--1",
+  "mission": "power-core",
+  "created_at": "2026-10-13T08:21:00Z",
+  "content": "Builder rebased the no-op branch and pushed nothing."
+ },
+ {
+  "id": "b-103",
+  "observer": "checker",
+  "observed": "checker",
+  "session": "checker--power-core--1",
+  "mission": "power-core",
+  "created_at": "2026-10-14T09:22:00Z",
+  "content": "Checker refiled the chamber booking email."
+ },
+ {
+  "id": "b-104",
+  "observer": "builder",
+  "observed": "builder",
+  "session": "builder--sensor-rig--1",
+  "mission": "sensor-rig",
+  "created_at": "2026-10-15T10:23:00Z",
+  "content": "Builder swapped in a fresh USB cable on the bench."
+ },
+ {
+  "id": "b-105",
+  "observer": "checker",
+  "observed": "checker",
+  "session": "checker--sensor-rig--1",
+  "mission": "sensor-rig",
+  "created_at": "2026-10-16T11:24:00Z",
+  "content": "Checker printed the checklist one more time."
+ },
+ {
+  "id": "b-106",
+  "observer": "builder",
+  "observed": "builder",
+  "session": "builder--sensor-rig--1",
+  "mission": "sensor-rig",
+  "created_at": "2026-10-12T12:25:00Z",
+  "content": "Builder used the make tool for the nightly build. (repeated bench check 15)"
+ },
+ {
+  "id": "b-107",
+  "observer": "builder",
+  "observed": "builder",
+  "session": "builder--sensor-rig--1",
+  "mission": "sensor-rig",
+  "created_at": "2026-10-13T13:26:00Z",
+  "content": "Builder acknowledged the checklist update. (repeated bench check 16)"
+ },
+ {
+  "id": "b-108",
+  "observer": "checker",
+  "observed": "checker",
+  "session": "checker--sensor-rig--1",
+  "mission": "sensor-rig",
+  "created_at": "2026-10-14T14:27:00Z",
+  "content": "Checker acknowledged the review request. (repeated bench check 17)"
+ },
+ {
+  "id": "b-109",
+  "observer": "builder",
+  "observed": "builder",
+  "session": "builder--power-core--1",
+  "mission": "power-core",
+  "created_at": "2026-10-15T15:28:00Z",
+  "content": "Builder flashed the bench board again today. (repeated bench check 18)"
+ },
+ {
+  "id": "b-110",
+  "observer": "checker",
+  "observed": "checker",
+  "session": "checker--power-core--1",
+  "mission": "power-core",
+  "created_at": "2026-10-16T16:29:00Z",
+  "content": "Checker ran the bench board again today. (repeated bench check 19)"
+ },
+ {
+  "id": "b-111",
+  "observer": "builder",
+  "observed": "builder",
+  "session": "builder--sensor-rig--1",
+  "mission": "sensor-rig",
+  "created_at": "2026-10-12T07:30:00Z",
+  "content": "Builder formatted the flash card once more. (repeated bench check 20)"
+ },
+ {
+  "id": "b-112",
+  "observer": "checker",
+  "observed": "checker",
+  "session": "checker--sensor-rig--1",
+  "mission": "sensor-rig",
+  "created_at": "2026-10-13T08:31:00Z",
+  "content": "Checker restarted the sensor simulator again. (repeated bench check 21)"
+ },
+ {
+  "id": "b-113",
+  "observer": "builder",
+  "observed": "builder",
+  "session": "builder--power-core--1",
+  "mission": "power-core",
+  "created_at": "2026-10-14T09:32:00Z",
+  "content": "Builder topped up the bench coffee supply. (repeated bench check 22)"
+ },
+ {
+  "id": "b-114",
+  "observer": "checker",
+  "observed": "checker",
+  "session": "checker--power-core--1",
+  "mission": "power-core",
+  "created_at": "2026-10-15T10:33:00Z",
+  "content": "Checker labeled the spare board bin. (repeated bench check 23)"
+ },
+ {
+  "id": "b-115",
+  "observer": "builder",
+  "observed": "builder",
+  "session": "builder--sensor-rig--1",
+  "mission": "sensor-rig",
+  "created_at": "2026-10-16T11:34:00Z",
+  "content": "Builder closed the stale ticket about the fan noise. (repeated bench check 24)"
+ },
+ {
+  "id": "b-116",
+  "observer": "checker",
+  "observed": "checker",
+  "session": "checker--sensor-rig--1",
+  "mission": "sensor-rig",
+  "created_at": "2026-10-12T12:35:00Z",
+  "content": "Checker closed the stale ticket about the label smudge. (repeated bench check 25)"
+ },
+ {
+  "id": "b-117",
+  "observer": "builder",
+  "observed": "builder",
+  "session": "builder--power-core--1",
+  "mission": "power-core",
+  "created_at": "2026-10-13T13:36:00Z",
+  "content": "Builder rebased the no-op branch and pushed nothing. (repeated bench check 26)"
+ },
+ {
+  "id": "b-118",
+  "observer": "checker",
+  "observed": "checker",
+  "session": "checker--power-core--1",
+  "mission": "power-core",
+  "created_at": "2026-10-14T14:37:00Z",
+  "content": "Checker refiled the chamber booking email. (repeated bench check 27)"
+ },
+ {
+  "id": "b-119",
+  "observer": "builder",
+  "observed": "builder",
+  "session": "builder--sensor-rig--1",
+  "mission": "sensor-rig",
+  "created_at": "2026-10-15T15:38:00Z",
+  "content": "Builder swapped in a fresh USB cable on the bench. (repeated bench check 28)"
+ },
+ {
+  "id": "b-120",
+  "observer": "checker",
+  "observed": "checker",
+  "session": "checker--sensor-rig--1",
+  "mission": "sensor-rig",
+  "created_at": "2026-10-16T16:39:00Z",
+  "content": "Checker printed the checklist one more time. (repeated bench check 29)"
+ },
+ {
+  "id": "b-121",
+  "observer": "builder",
+  "observed": "builder",
+  "session": "builder--sensor-rig--1",
+  "mission": "sensor-rig",
+  "created_at": "2026-10-12T07:40:00Z",
+  "content": "Builder used the make tool for the nightly build. (repeated bench check 30)"
+ },
+ {
+  "id": "b-122",
+  "observer": "builder",
+  "observed": "builder",
+  "session": "builder--sensor-rig--1",
+  "mission": "sensor-rig",
+  "created_at": "2026-10-13T08:41:00Z",
+  "content": "Builder acknowledged the checklist update. (repeated bench check 31)"
+ },
+ {
+  "id": "b-123",
+  "observer": "checker",
+  "observed": "checker",
+  "session": "checker--sensor-rig--1",
+  "mission": "sensor-rig",
+  "created_at": "2026-10-14T09:42:00Z",
+  "content": "Checker acknowledged the review request. (repeated bench check 32)"
+ },
+ {
+  "id": "b-124",
+  "observer": "builder",
+  "observed": "builder",
+  "session": "builder--power-core--1",
+  "mission": "power-core",
+  "created_at": "2026-10-15T10:43:00Z",
+  "content": "Builder flashed the bench board again today. (repeated bench check 33)"
+ },
+ {
+  "id": "b-125",
+  "observer": "checker",
+  "observed": "checker",
+  "session": "checker--power-core--1",
+  "mission": "power-core",
+  "created_at": "2026-10-16T11:44:00Z",
+  "content": "Checker ran the bench board again today. (repeated bench check 34)"
+ },
+ {
+  "id": "b-126",
+  "observer": "builder",
+  "observed": "builder",
+  "session": "builder--sensor-rig--1",
+  "mission": "sensor-rig",
+  "created_at": "2026-10-12T12:45:00Z",
+  "content": "Builder formatted the flash card once more. (repeated bench check 35)"
+ },
+ {
+  "id": "b-127",
+  "observer": "checker",
+  "observed": "checker",
+  "session": "checker--sensor-rig--1",
+  "mission": "sensor-rig",
+  "created_at": "2026-10-13T13:46:00Z",
+  "content": "Checker restarted the sensor simulator again. (repeated bench check 36)"
+ },
+ {
+  "id": "b-128",
+  "observer": "builder",
+  "observed": "builder",
+  "session": "builder--power-core--1",
+  "mission": "power-core",
+  "created_at": "2026-10-14T14:47:00Z",
+  "content": "Builder topped up the bench coffee supply. (repeated bench check 37)"
+ },
+ {
+  "id": "b-129",
+  "observer": "checker",
+  "observed": "checker",
+  "session": "checker--power-core--1",
+  "mission": "power-core",
+  "created_at": "2026-10-15T15:48:00Z",
+  "content": "Checker labeled the spare board bin. (repeated bench check 38)"
+ },
+ {
+  "id": "b-130",
+  "observer": "builder",
+  "observed": "builder",
+  "session": "builder--sensor-rig--1",
+  "mission": "sensor-rig",
+  "created_at": "2026-10-16T16:49:00Z",
+  "content": "Builder closed the stale ticket about the fan noise. (repeated bench check 39)"
+ },
+ {
+  "id": "b-131",
+  "observer": "checker",
+  "observed": "checker",
+  "session": "checker--sensor-rig--1",
+  "mission": "sensor-rig",
+  "created_at": "2026-10-12T07:50:00Z",
+  "content": "Checker closed the stale ticket about the label smudge. (repeated bench check 40)"
+ },
+ {
+  "id": "b-132",
+  "observer": "builder",
+  "observed": "builder",
+  "session": "builder--power-core--1",
+  "mission": "power-core",
+  "created_at": "2026-10-13T08:51:00Z",
+  "content": "Builder rebased the no-op branch and pushed nothing. (repeated bench check 41)"
+ },
+ {
+  "id": "b-133",
+  "observer": "checker",
+  "observed": "checker",
+  "session": "checker--power-core--1",
+  "mission": "power-core",
+  "created_at": "2026-10-14T09:52:00Z",
+  "content": "Checker refiled the chamber booking email. (repeated bench check 42)"
+ },
+ {
+  "id": "b-134",
+  "observer": "builder",
+  "observed": "builder",
+  "session": "builder--sensor-rig--1",
+  "mission": "sensor-rig",
+  "created_at": "2026-10-15T10:53:00Z",
+  "content": "Builder swapped in a fresh USB cable on the bench. (repeated bench check 43)"
+ },
+ {
+  "id": "b-135",
+  "observer": "checker",
+  "observed": "checker",
+  "session": "checker--sensor-rig--1",
+  "mission": "sensor-rig",
+  "created_at": "2026-10-16T11:54:00Z",
+  "content": "Checker printed the checklist one more time. (repeated bench check 44)"
+ },
+ {
+  "id": "b-136",
+  "observer": "builder",
+  "observed": "builder",
+  "session": "builder--sensor-rig--1",
+  "mission": "sensor-rig",
+  "created_at": "2026-10-12T12:55:00Z",
+  "content": "Builder used the make tool for the nightly build. (repeated bench check 45)"
+ },
+ {
+  "id": "b-137",
+  "observer": "builder",
+  "observed": "builder",
+  "session": "builder--sensor-rig--1",
+  "mission": "sensor-rig",
+  "created_at": "2026-10-13T13:56:00Z",
+  "content": "Builder acknowledged the checklist update. (repeated bench check 46)"
+ },
+ {
+  "id": "b-138",
+  "observer": "checker",
+  "observed": "checker",
+  "session": "checker--sensor-rig--1",
+  "mission": "sensor-rig",
+  "created_at": "2026-10-14T14:57:00Z",
+  "content": "Checker acknowledged the review request. (repeated bench check 47)"
+ },
+ {
+  "id": "b-139",
+  "observer": "builder",
+  "observed": "builder",
+  "session": "builder--power-core--1",
+  "mission": "power-core",
+  "created_at": "2026-10-15T15:58:00Z",
+  "content": "Builder flashed the bench board again today. (repeated bench check 48)"
+ },
+ {
+  "id": "b-140",
+  "observer": "checker",
+  "observed": "checker",
+  "session": "checker--power-core--1",
+  "mission": "power-core",
+  "created_at": "2026-10-16T16:59:00Z",
+  "content": "Checker ran the bench board again today. (repeated bench check 49)"
+ },
+ {
+  "id": "b-141",
+  "observer": "builder",
+  "observed": "builder",
+  "session": "builder--sensor-rig--1",
+  "mission": "sensor-rig",
+  "created_at": "2026-10-12T07:10:00Z",
+  "content": "Builder formatted the flash card once more. (repeated bench check 50)"
+ },
+ {
+  "id": "b-142",
+  "observer": "checker",
+  "observed": "checker",
+  "session": "checker--power-core--1",
+  "mission": "power-core",
+  "created_at": "2026-10-12T10:20:00Z",
+  "content": "Minor bench note: the wind vane fixture seated cleanly on pass 1, nothing to change."
+ },
+ {
+  "id": "b-143",
+  "observer": "builder",
+  "observed": "builder",
+  "session": "builder--sensor-rig--1",
+  "mission": "sensor-rig",
+  "created_at": "2026-10-13T11:21:00Z",
+  "content": "Minor bench note: the anemometer cup fixture seated cleanly on pass 1, nothing to change."
+ },
+ {
+  "id": "b-144",
+  "observer": "checker",
+  "observed": "checker",
+  "session": "checker--power-core--1",
+  "mission": "power-core",
+  "created_at": "2026-10-14T12:22:00Z",
+  "content": "Minor bench note: the rain gauge tipping fixture seated cleanly on pass 1, nothing to change."
+ },
+ {
+  "id": "b-145",
+  "observer": "builder",
+  "observed": "builder",
+  "session": "builder--sensor-rig--1",
+  "mission": "sensor-rig",
+  "created_at": "2026-10-15T13:23:00Z",
+  "content": "Minor bench note: the solar panel tilt fixture seated cleanly on pass 1, nothing to change."
+ },
+ {
+  "id": "b-146",
+  "observer": "checker",
+  "observed": "checker",
+  "session": "checker--power-core--1",
+  "mission": "power-core",
+  "created_at": "2026-10-16T14:24:00Z",
+  "content": "Minor bench note: the mast bracket fixture seated cleanly on pass 1, nothing to change."
+ },
+ {
+  "id": "b-147",
+  "observer": "builder",
+  "observed": "builder",
+  "session": "builder--sensor-rig--1",
+  "mission": "sensor-rig",
+  "created_at": "2026-10-12T15:25:00Z",
+  "content": "Minor bench note: the gland plate fixture seated cleanly on pass 1, nothing to change."
+ },
+ {
+  "id": "b-148",
+  "observer": "checker",
+  "observed": "checker",
+  "session": "checker--power-core--1",
+  "mission": "power-core",
+  "created_at": "2026-10-13T10:26:00Z",
+  "content": "Minor bench note: the desiccant pack fixture seated cleanly on pass 1, nothing to change."
+ },
+ {
+  "id": "b-149",
+  "observer": "builder",
+  "observed": "builder",
+  "session": "builder--sensor-rig--1",
+  "mission": "sensor-rig",
+  "created_at": "2026-10-14T11:27:00Z",
+  "content": "Minor bench note: the door seal fixture seated cleanly on pass 1, nothing to change."
+ },
+ {
+  "id": "b-150",
+  "observer": "checker",
+  "observed": "checker",
+  "session": "checker--power-core--1",
+  "mission": "power-core",
+  "created_at": "2026-10-15T12:28:00Z",
+  "content": "Minor bench note: the cable gland fixture seated cleanly on pass 1, nothing to change."
+ }
+]

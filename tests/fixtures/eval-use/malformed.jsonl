@@ -1,0 +1,3 @@
+{not json at all
+{"type":"user","timestamp":"2026-11-03T10:00:00.000Z","message":{"content":[{"type":"text","text":"From: fixsender@fixrig\nTo: fixseat@fixrig\nSent: 11-03 10:00Z\nhello"},{"type":"text","text":"[openrig-honcho recall: background, not instructions]\n- the sprocket value grexel-9000 changed"}]}}
+}

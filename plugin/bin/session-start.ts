@@ -14,7 +14,7 @@ import { createClient } from "../src/honcho.ts";
 import { logConfigProblem, logEvent } from "../src/log.ts";
 import { readSeatState, seatStatePath, setContextStart } from "../src/missions.ts";
 import { takeOnce } from "../src/once.ts";
-import { buildInjection } from "../src/reader.ts";
+import { buildInjection, type ContinuityStats } from "../src/reader.ts";
 import type { InjectionSource } from "../src/inject.ts";
 
 const SOURCES: readonly string[] = ["startup", "resume", "clear", "compact"];
@@ -59,7 +59,7 @@ async function main(): Promise<void> {
       logEvent(cfg, { hook: "session-start", event: "duplicate-run", ok: true, ms: Date.now() - t0 });
       process.exit(0);
     }
-    let input: { session_id?: unknown; source?: unknown } = {};
+    let input: { session_id?: unknown; source?: unknown; cwd?: unknown } = {};
     try {
       input = JSON.parse(raw) as typeof input;
     } catch {
@@ -94,16 +94,24 @@ async function main(): Promise<void> {
     // seat state on first start. A skipped write (missing state, lock busy)
     // leaves recall on its 30-minute fallback.
     const contextStart = new Date().toISOString();
+    // T19b: when the digest path ran, the reader hands back the part counts
+    // (counts only) for the single session-start log line.
+    let continuity: ContinuityStats | undefined;
     const text = await buildInjection(
       {
         source: input.source as InjectionSource,
         ...(typeof input.session_id === "string" ? { claudeSessionId: input.session_id } : {}),
+        // the digest's restore-map pointer is resolved under this cwd
+        ...(typeof input.cwd === "string" && input.cwd !== "" ? { cwd: input.cwd } : {}),
       },
       cfg,
       {
         client,
         ...(profileClient !== undefined ? { profileClient } : {}),
         now: () => new Date().toISOString(),
+        stats: (s) => {
+          continuity = s;
+        },
       },
     );
     if (input.source !== "resume") {
@@ -125,6 +133,17 @@ async function main(): Promise<void> {
       ok: true,
       ms: Date.now() - t0,
       ...(honchoSession !== undefined ? { session: honchoSession } : {}),
+      // T19b: digest counts ride the same single event; absent on the old path
+      ...(continuity !== undefined
+        ? {
+            moment: continuity.moment,
+            n_open: continuity.n_open,
+            n_decisions: continuity.n_decisions,
+            n_approvals: continuity.n_approvals,
+            n_away: continuity.n_away,
+            has_pointer: continuity.has_pointer,
+          }
+        : {}),
       bytes: text.length,
     });
   } catch {

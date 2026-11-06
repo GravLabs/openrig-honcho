@@ -15,7 +15,7 @@ import { normalizeMission, readRigMission, readSeatState, seatStatePath } from "
 import { statsFrom, type SeatStats } from "./stats.ts";
 
 /** The Honcho server version this plugin is built against (ADR-0006 O3). */
-export const EXPECTED_VERSION = "3.4.0";
+export const EXPECTED_VERSION = "3.5.0";
 
 /** Unhealthy when live + replay spool pass 80% of their combined 10 MB. */
 export const SPOOL_UNHEALTHY_BYTES = 8_000_000;
