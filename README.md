@@ -23,7 +23,7 @@ the same identity, and skip memory on resume. This plugin:
 ## Status
 
 Version 0.3 adds a continuity digest at every restart, a decision ledger whose
-entries can be trusted, and quieter recall. 0.3.0 is the latest release. See the
+entries can be trusted, and quieter recall. 0.3.1 is the latest release. See the
 [changelog](CHANGELOG.md) and the [roadmap](docs/ARCHITECTURE.md#roadmap).
 
 ## How it works in one minute

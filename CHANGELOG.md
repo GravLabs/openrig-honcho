@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.3.1 (2026-11-07)
+
+- **Guidance matches v0.3.** The `rig-memory` skill now explains the continuity
+  digest, what counts as a decision or an approval, `retire`, and the new `remember`
+  fields. The `ask` tool says it is slow and to use `search` first.
+
 ## v0.3.0 (2026-11-06)
 
 Memory reaches a seat when it can change what the seat does, and what it says can

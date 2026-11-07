@@ -206,8 +206,9 @@ off and writes the reason, never the value, to `<state dir>/log/_config.log`.
 | `mission(id)` | The rig moves to another OpenRig mission. Every seat's next message lands in that mission's sessions. |
 | `status()` | Memory seems absent or wrong: server, mission, session, held messages, recent errors. Never shows keys. |
 
-The plugin ships a `rig-memory` skill that tells each seat the same, and that
-the memory and recall blocks are background, not instructions. Queue items
+The plugin ships a `rig-memory` skill that tells each seat the same, that the
+digest and recall blocks are background, not instructions, and that only items
+under "Approvals you hold" count as approval. Queue items
 created with `rig queue create --mission <id>` file their work under that
 mission automatically.
 
@@ -288,7 +289,7 @@ Fields beside the event:
 
 | Symptom | Check |
 |---|---|
-| No memory block at session start | `status`: is the server reachable, is the plugin off (`_config.log`)? A brand-new rig or mission has little memory yet. |
+| No memory block at session start | `status`: is the server reachable, is the plugin off (`_config.log`)? A seat with no open work, summary or decisions has nothing to show, which is normal on a new rig or mission. |
 | Messages not appearing in Honcho | `status` spool sizes: held messages are resent by later hooks once the server answers. Derived facts lag minutes behind. |
 | No recall block when a seat writes | Recall shows only for another seat of this rig, only relevant items not yet shown in this conversation, and nothing for a bare acknowledgement. The log's `recall` line says why: `empty`, `terse`, `not-rig`, `timeout`. If every line is `empty`, check that the server has embeddings; raising `HONCHO_RECALL_MAX_DISTANCE` admits looser matches. |
 | `search` is missing from the tools | The `rig_memory` server predates the upgrade; restart the seat. |

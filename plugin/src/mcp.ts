@@ -93,7 +93,8 @@ function toolList(deps: McpDeps): unknown[] {
   const tools: unknown[] = [
     {
       name: "ask",
-      description: "Ask the rig's shared memory a question (Honcho workspace chat).",
+      description:
+        "Slow reasoning over everything the rig remembers (30-50 s, times out at 90 s). Use search first; ask only when a lookup was not enough.",
       inputSchema: {
         type: "object",
         properties: {
