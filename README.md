@@ -1,6 +1,6 @@
 # openrig-honcho
 
-Shared memory for a team of agents. A Claude Code plugin for
+Shared memory for a team of agents. A plugin for Claude Code and Codex seats in
 [OpenRig](https://www.openrig.dev) rigs that records who said what to whom in a
 self-hosted [Honcho](https://github.com/plastic-labs/honcho) server. It gives that
 memory back when a seat starts, when another seat writes to it, and whenever a
@@ -22,18 +22,19 @@ the same identity, and skip memory on resume. This plugin:
 
 ## Status
 
-Version 0.3 adds a continuity digest at every restart, a decision ledger whose
-entries can be trusted, and quieter recall. 0.3.1 is the latest release. See the
+Version 0.4 gives Codex seats the same memory as Claude Code seats. Version 0.3 added
+a continuity digest at every restart, a decision ledger whose entries can be
+trusted, and quieter recall. 0.4.1 is the latest release. See the
 [changelog](CHANGELOG.md) and the [roadmap](docs/ARCHITECTURE.md#roadmap).
 
 ## How it works in one minute
 
 A rig is a team of agents ("seats") in separate terminals. The plugin hooks into
-four moments of each seat's Claude Code session:
+four moments of each seat's Claude Code or Codex session:
 
 ```mermaid
 flowchart LR
-  subgraph Seat["a seat (Claude Code)"]
+  subgraph Seat["a seat (Claude Code or Codex)"]
     SS["session starts,<br/>resumes or compacts"]
     PR["a prompt arrives"]
     TE["the turn ends"]
@@ -106,7 +107,7 @@ Full numbers and method are in [docs/EVALUATION.md](docs/EVALUATION.md).
 ## Get started
 
 You need a self-hosted Honcho v3 server, [Bun](https://bun.sh), and OpenRig with
-Claude Code seats. The [user guide](docs/USER-GUIDE.md) covers installation,
+Claude Code or Codex seats. The [user guide](docs/USER-GUIDE.md) covers installation,
 settings, privacy, logs and troubleshooting.
 
 ## Documentation

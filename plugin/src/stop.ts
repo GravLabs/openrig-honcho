@@ -37,6 +37,13 @@ export interface StopInput {
   last_assistant_message?: string;
   session_id?: string;
   stop_hook_active?: boolean;
+  /**
+   * C2b (review F1): Codex's own turn identity, forwarded by the Stop bin
+   * ONLY under --harness codex (Codex has no transcript, so the segment
+   * yields no turnId). Claude never sends it - the transcript uuid keeps
+   * full control of the E3 hash there, byte-identically.
+   */
+  turn_id?: string;
 }
 
 interface TEntry {
@@ -175,8 +182,11 @@ async function innerReply(
   // turnId is a uuid (no newline), so a turn-hash and a fallback hash can
   // only collide if a reply's text itself began "<uuid>\n" — at worst one
   // extra skip of an identical-seeming reply, never a wrong write.
+  // C2b (review F1): with no transcript (Codex) the harness-supplied
+  // turn_id carries the turn identity; Claude input never has one.
+  const identity = turnId ?? input.turn_id;
   const hash = createHash("sha256")
-    .update(turnId === undefined ? text : `${turnId}\n${text}`, "utf8")
+    .update(identity === undefined ? text : `${identity}\n${text}`, "utf8")
     .digest("hex");
   const seatFile = seatStatePath(config.stateDir, config.workspace, config.peer);
   if (readSeatState(seatFile)?.last_reply_hash === hash) {

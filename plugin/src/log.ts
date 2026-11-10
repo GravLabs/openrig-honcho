@@ -48,6 +48,29 @@ export interface LogEvent {
   query_chars?: number;
   partial?: number;
   /**
+   * C2c (ADR-0016, review F4): run-level flags, usually applied through
+   * bindEventFields so they land on every line the run writes (O1: a
+   * separate harness-unknown EVENT would be a second line).
+   * harness_unknown: 1 - argv carried a --harness token that did not resolve
+   * (the run behaves as claude); no_turn_id: 1 - a Codex Stop run with no
+   * usable turn_id, so the text-only E3 dedupe token is visible. Good runs
+   * and every Claude line carry neither.
+   */
+  harness_unknown?: number;
+  no_turn_id?: number;
+  /**
+   * C4 (ADR-0016, review F2): the Codex rollout novelty path. rollout_seen:
+   * 1 marks a run where it read at all (so "the path ran clean" is told
+   * apart from "it never ran"); rollout_unreadable: 1 when a
+   * transcript_path was given but its tail could not be read;
+   * rollout_bad_lines counts rollout lines that failed to parse (the tail
+   * may start mid-line, so >= 1 is normal, not an error). Codex-only: the
+   * Claude path never adds these, so its log lines stay byte-identical.
+   */
+  rollout_seen?: number;
+  rollout_unreadable?: number;
+  rollout_bad_lines?: number;
+  /**
    * T18b (ADR-0013 decision 2): the recall holdout arm this run took.
    * Present ONLY while a holdout share is configured (loadConfig default
    * 0 -> recall.ts omits it), so today's log lines stay byte-identical.
@@ -81,6 +104,11 @@ export interface LogEvent {
   offset?: number;
   char_class?: string;
   bytes?: number;
+  /** F11 (C5f): the Codex Stop's whole-hook budget. F14 (C5g): budget_cut
+   * counts only requests that FAILED on a budget-reduced timeout - a
+   * reduced timeout that still answered is not a cut. */
+  stop_budget_ms?: number;
+  budget_cut?: number;
   error_class?: string;
 }
 
@@ -102,6 +130,20 @@ export function errorClassFrom(kind: string, status?: number): string {
   if (kind === "http" && status !== undefined) return `http_${status}`;
   if (kind === "connect" || kind === "timeout" || kind === "parse") return kind;
   return "other";
+}
+
+/**
+ * C2c (ADR-0016, review F4): run-level fields on the ONE line per run (O1).
+ * A hook bin calls this once with what the whole run knows (an unresolved
+ * --harness token, a Codex Stop with no usable turn_id) and every event this
+ * process logs - including the ones library code emits - carries the field.
+ * Merging, never replacing; a process binds at most twice.
+ */
+const boundFields: Partial<Pick<LogEvent, "harness_unknown" | "no_turn_id">> = {};
+export function bindEventFields(fields: Partial<Pick<LogEvent, "harness_unknown" | "no_turn_id">>): void {
+  for (const [k, v] of Object.entries(fields)) {
+    if (v !== undefined) (boundFields as Record<string, number>)[k] = v;
+  }
 }
 
 export function logEvent(config: LogTarget, e: LogEvent): void {
@@ -133,6 +175,13 @@ export function logEvent(config: LogTarget, e: LogEvent): void {
     if (e.dropped_small !== undefined) line.dropped_small = e.dropped_small;
     if (e.query_chars !== undefined) line.query_chars = e.query_chars;
     if (e.partial !== undefined) line.partial = e.partial;
+    const harnessUnknown = e.harness_unknown ?? boundFields.harness_unknown;
+    if (harnessUnknown !== undefined) line.harness_unknown = harnessUnknown;
+    const noTurnId = e.no_turn_id ?? boundFields.no_turn_id;
+    if (noTurnId !== undefined) line.no_turn_id = noTurnId;
+    if (e.rollout_seen !== undefined) line.rollout_seen = e.rollout_seen;
+    if (e.rollout_unreadable !== undefined) line.rollout_unreadable = e.rollout_unreadable;
+    if (e.rollout_bad_lines !== undefined) line.rollout_bad_lines = e.rollout_bad_lines;
     if (e.arm !== undefined) line.arm = e.arm;
     if (e.routine !== undefined) line.routine = e.routine;
     if (e.verify !== undefined) line.verify = e.verify;
@@ -148,6 +197,8 @@ export function logEvent(config: LogTarget, e: LogEvent): void {
     if (e.offset !== undefined) line.offset = e.offset;
     if (e.char_class !== undefined) line.char_class = e.char_class;
     if (e.bytes !== undefined) line.bytes = e.bytes;
+    if (e.stop_budget_ms !== undefined) line.stop_budget_ms = e.stop_budget_ms;
+    if (e.budget_cut !== undefined) line.budget_cut = e.budget_cut;
     if (e.error_class !== undefined) line.error_class = e.error_class;
     appendFileSync(file, `${JSON.stringify(line)}\n`, { mode: 0o600 });
   } catch {

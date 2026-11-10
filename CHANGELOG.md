@@ -1,5 +1,61 @@
 # Changelog
 
+## v0.4.1 (2026-11-10)
+
+Security fixes for the Codex install, from an independent security review of v0.4.0.
+The Claude path is unchanged. Rerun the Codex install on each Codex seat folder to pick
+them up.
+
+- **Trust only what we wrote.** The installer used to record trust for any hook in a
+  group that merely mentioned the plugin folder, so a planted command could be
+  trusted. Now it trusts, merges and removes only hooks that exactly match what it
+  writes, and never touches anything else.
+- **Parallel installs no longer lose trust.** Two installs sharing one `CODEX_HOME`
+  could drop one seat's trust block, leaving that seat's hooks silently untrusted. A
+  lock now guards the user config, which is re-read before it is replaced. The run
+  aborts if someone else changed it in the meantime.
+- **Control characters refused.** A path containing a control character or DEL
+  could break the user's Codex config. Such paths are refused like the other unsafe
+  characters.
+- **Backups of the user config stay in `CODEX_HOME`,** in a folder only the owner can
+  read, and are never written through a symlink.
+- **No leftover temp files** after a refusal partway through an install.
+- **Nested seats.** A seat below a folder that already runs our hooks skips its own
+  hooks only when that folder holds all of them, from a plugin copy that still
+  exists. If it holds only some of them, the install is refused with nothing
+  written, and the message says what to fix. Uninstall always works.
+
+## v0.4.0 (2026-11-09)
+
+Codex seats get the same memory as Claude Code seats (ADR-0016).
+
+- **Codex hooks.** The same four moments as Claude: the continuity digest at
+  startup, resume, clear and compaction, recording each prompt and reply, and recall
+  when another seat writes. The hooks are told which harness they serve
+  (`--harness codex`); nothing is guessed. The Claude path is unchanged, byte for
+  byte.
+- **`rig_memory` on Codex.** The server runs from the seat's Codex config with its
+  tools approved for our server only, so it works under `approval_policy = "never"`.
+- **Codex install.** `install-project.ts --harness codex` writes the seat's project
+  hooks, a marked `rig_memory` block in `.codex/config.toml`, the skill in
+  `.agents/skills/`, and a settings file readable only by its owner. It records
+  hook trust for our own hooks in the user's Codex config, one marked block per seat,
+  so several seats share one `CODEX_HOME`. Uninstall removes exactly what it added
+  and keeps backups.
+- **What the installer checks, and refuses.** It checks that the seat folder is a
+  trusted Codex project and says so if not; it never grants project trust itself.
+  It refuses a seat in a linked git worktree, because Codex reads that seat's hooks
+  from the main checkout. A seat nested inside another seat's install skips its own
+  hooks when Codex would already load the outer ones.
+- **Safe paths only.** Codex runs hook lines through a shell, so the Codex install
+  refuses a seat, settings or plugin path containing a quote, `$`, a backtick, a
+  backslash or a newline.
+- **Codex Stop runs synchronously** with one 20 second budget, because `codex exec`
+  ends background hooks at shutdown. What is left after the budget is kept locally
+  and sent later.
+- **Also for Claude:** a backup taken in the same second as an earlier one no longer
+  overwrites it.
+
 ## v0.3.1 (2026-11-07)
 
 - **Guidance matches v0.3.** The `rig-memory` skill now explains the continuity

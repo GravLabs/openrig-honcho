@@ -15,6 +15,11 @@ import { isKillSwitch, loadConfig } from "../src/env.ts";
 import { createClient } from "../src/honcho.ts";
 import { logConfigProblem } from "../src/log.ts";
 import { runStdio, type McpDeps } from "../src/mcp.ts";
+// C5a (ADR-0016 decision 9): a Codex server run names its owned settings
+// file; --harness is accepted so the run resolves as codex, and the file's
+// values merge under the environment like every other Codex entry point.
+import { resolveHarness } from "../src/harness.ts";
+import { harnessUnknownWithSettings, readSettingsFile } from "../src/settings.ts";
 
 function askTimeoutFromEnv(env: Record<string, string | undefined>): number | undefined {
   const raw = (env.HONCHO_ASK_TIMEOUT_MS ?? "").trim();
@@ -24,7 +29,21 @@ function askTimeoutFromEnv(env: Record<string, string | undefined>): number | un
 }
 
 async function main(): Promise<void> {
-  const cfg = loadConfig(process.env);
+  // C5a: Codex-only merge of the settings file UNDER the environment (env
+  // wins). A broken file keeps the server exactly as today's bad-config path:
+  // empty tools + one _config.log line (the problem token, never a value).
+  const { harness, flagUnknown } = resolveHarness(process.argv.slice(2));
+  let env: Record<string, string | undefined> = process.env;
+  let problem: string | null = null;
+  if (harness === "codex") {
+    const s = readSettingsFile(process.argv.slice(2));
+    if (s.problem !== null) problem = s.problem;
+    else env = { ...s.vars, ...process.env };
+  }
+  // C5a2 (review O2): an unresolved --harness next to --settings IS the
+  // cause; the disabled path below logs it instead of blaming the URL.
+  if (problem === null) problem = harnessUnknownWithSettings(process.argv.slice(2), flagUnknown);
+  const cfg = problem === null ? loadConfig(env) : { enabled: false as const, reason: problem };
   let deps: McpDeps;
   if (!cfg.enabled) {
     if (!isKillSwitch(cfg.reason)) {
@@ -40,8 +59,10 @@ async function main(): Promise<void> {
         apiKey: cfg.apiKey,
         timeoutMs: cfg.timeoutMs,
       }),
-      ...(askTimeoutFromEnv(process.env) !== undefined
-        ? { askTimeoutMs: askTimeoutFromEnv(process.env) }
+      // C5a: the ask timeout reads the MERGED env too - a HONCHO_* value in
+      // the settings file must work the same as a real variable.
+      ...(askTimeoutFromEnv(env) !== undefined
+        ? { askTimeoutMs: askTimeoutFromEnv(env) }
         : {}),
       now: () => new Date().toISOString(),
     };

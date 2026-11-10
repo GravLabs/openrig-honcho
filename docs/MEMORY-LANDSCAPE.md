@@ -213,6 +213,10 @@ A system that can edit its own exam will pass it.
 | v0.5 | Lesson candidates, promotion gate, poisoning tests, and the store decision from the bake-off. |
 | v0.6 | Self-tuning, only if O7 and O8 have held. |
 
+On 2026-11-08 the owner frontloaded Codex seats as v0.4 (ADR-0016), so each later
+row moves one release: these v0.4 items are now v0.5, and so on. STRATEGY.md has the
+current numbering.
+
 ## 6. What to reuse
 
 **Rule (owner, 2026-11-05): never copy verbatim. Study the idea, then write our own

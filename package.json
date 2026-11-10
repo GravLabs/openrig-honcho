@@ -1,6 +1,6 @@
 {
   "name": "openrig-honcho",
-  "version": "0.3.1",
+  "version": "0.4.1",
   "description": "Shared per-rig memory for OpenRig seats on a self-hosted Honcho server (Claude Code plugin)",
   "license": "MIT",
   "repository": {

@@ -138,8 +138,8 @@ inputs to these.
 | O4 | **Never mislead.** Memory does not introduce false, stale or unverified beliefs. | Precision of injected items (correct and still current, by review); acted-on instructions that OpenRig never delivered. | At least 90% precision; 0 acted-on undelivered instructions. |
 | O5 | **Pull its weight.** What memory shows changes behaviour. | Share of injected blocks whose new information shows up in the next action (the "new information used" count in EVALUATION.md), per moment and overall. | At least 50% overall, from 0% today: 70% for the continuity digest, 50% for work-claim context, 25% for per-message recall. |
 | O6 | **Stay cheap and safe.** Memory never becomes the bottleneck or a leak. | Median and 95th-percentile wait on the seat's critical path; tokens injected per turn; model-host calls; secret and cross-rig leaks. | p95 under 1 s; under 1 500 characters per turn on average; 0 leaks. |
-| O7 | **Improve from experience.** The team gets measurably better at repeated kinds of work. | Repeat-failure rate, review findings per item and time to first correct action, over time, from outcomes recorded outside the agent. | Baseline set in v0.4; targets follow from it. |
-| O8 | **Every change earns its place.** No lesson or tuning stays live without evidence, and all can be undone. | Share of live lessons with a passing comparison; rollback tested. | From v0.5: 100%. |
+| O7 | **Improve from experience.** The team gets measurably better at repeated kinds of work. | Repeat-failure rate, review findings per item and time to first correct action, over time, from outcomes recorded outside the agent. | Baseline set in v0.5; targets follow from it. |
+| O8 | **Every change earns its place.** No lesson or tuning stays live without evidence, and all can be undone. | Share of live lessons with a passing comparison; rollback tested. | From v0.6: 100%. |
 
 ## 6. Tests
 
@@ -243,21 +243,29 @@ flowchart LR
   delivered by OpenRig" next to an instruction that fails it.
 
 **After v0.3** the owner-approved plan supersedes phases 3 and 4 where they differ:
-- v0.4: outcome log, lessons as itemized lore updates, lessons shown before risky
+- v0.4: Codex seats get the same memory as Claude seats (ADR-0016), frontloaded by
+  the owner on 2026-11-08.
+- v0.5: outcome log, lessons as itemized lore updates, lessons shown before risky
   actions, trust classes, local checkpoints; a test run of other stores alongside.
   A checkpoint is a short line the Stop hook saves from a seat's final reply, in
   local state, with no model involved. The digest shows it first, so "where you
   left off" still works when Honcho is behind.
-- v0.5: proposed lessons, a promotion gate with rollback, standing attack tests,
+- v0.6: proposed lessons, a promotion gate with rollback, standing attack tests,
   the store decision.
-- v0.6: self-tuning, only if O7 and O8 have held.
+- v0.7: self-tuning, only if O7 and O8 have held.
 
 **Later, not scheduled:**
 - Support for creating and deleting a rig's workspace, so setup and teardown need
   no manual server steps. Deleting destroys a rig's memory, so it needs an explicit
   confirmation. Server deletes also finish in the background, so the tool must
   report that honestly.
-- Support for more agent harnesses, such as Codex, beyond Claude Code. Each harness
+- Publish the plugin through official channels, so users install it the normal way
+  instead of copying a release folder: a Claude Code plugin marketplace, Codex's
+  plugin route once v0.4 ships, and OpenRig's own catalog if it gets one. It needs an
+  install path that does not depend on a fixed folder, settings that work without
+  our machine's defaults, and the same scrub as the GitHub export. Each submission
+  needs the owner's OK. (Owner request, 2026-11-09.)
+- Support for more agent harnesses beyond Claude Code and Codex. Each harness
   needs its own way to hook the moments memory is shown, and the core should stay
   shared across them.
 

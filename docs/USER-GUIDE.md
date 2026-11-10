@@ -24,8 +24,8 @@ How to install, run and look after the plugin. For what it is, start with the
   purpose: this plugin is built for a server you run.
 - **[Bun](https://bun.sh)** on every seat's PATH. The plugin has no other
   dependencies.
-- **OpenRig** 0.7.2 or later, with **Claude Code** seats. Codex seats are not
-  supported.
+- **OpenRig** 0.7.2 or later, with **Claude Code** or **Codex** seats. Codex
+  seats need Codex 0.167 or later; see "Codex seats" below.
 - All seats of one rig on one host. The plugin keeps a little state on local
   disk.
 
@@ -129,6 +129,49 @@ So if some seats work in a subfolder of an installed folder, install there too,
 the parent first. The subfolder install sees the parent's hooks and leaves its
 own out (`hooks: skipped, <parent folder> already runs them for this folder`),
 so no hook runs twice.
+
+### Codex seats
+
+A Codex seat reads none of the Claude files, so it has its own install:
+
+```bash
+bun run <plugin>/bin/install-project.ts <seat folder> --harness codex --dry-run \
+  --url http://localhost:8000/v3 --workspace my-rig --leader design-architect
+```
+
+Run it again without `--dry-run`. It writes, in the seat folder:
+
+- `.codex/hooks.json` with our SessionStart, UserPromptSubmit and Stop hooks;
+- a marked `rig_memory` block in `.codex/config.toml`, with our tools approved so
+  they work under `approval_policy = "never"`;
+- the skill in `.agents/skills/rig-memory/`;
+- `.codex/openrig-honcho/`: the settings (mode 600), the install record and
+  backups.
+
+It also records trust for our own hooks in the user's Codex config
+(`$CODEX_HOME/config.toml`, by default `~/.codex/config.toml`), in one marked block
+per seat, after a backup. Codex skips a hook it does not trust. Every run prints the
+user config it will write, so check that line if you use a test `CODEX_HOME`.
+
+Before you start the seat:
+
+- **The seat folder must be a trusted Codex project.** Codex ignores a project's own
+  config, including our hooks, unless the folder (or its git repository) is trusted
+  in the user config. The installer checks and tells you; it never grants project
+  trust, because that turns on all of the project's local config. Seat setup does it.
+- **A plain path.** Codex runs hook lines through a shell, so the installer refuses a
+  seat folder, or a plugin folder, whose path contains a quote, `$`, a backtick, a
+  backslash or a newline. Keep the plugin folder on such a plain path for Claude
+  seats too.
+- **Not in a linked git worktree.** Codex reads a linked worktree's hooks from the
+  main checkout, so the installer refuses there.
+- **Restart the seat.** Codex finds hooks when a session starts.
+- **A local model needs a suitable model catalog.** Codex on a local model uses the
+  catalog's instructions; one copied from another model can make a seat invent
+  instructions. That is part of the seat's Codex profile, not of this plugin.
+
+If you damage the marked block in `.codex/config.toml` by hand, delete the block and
+then uninstall. To uninstall: the same command with `--harness codex --uninstall`.
 
 ### Check it
 

@@ -14,6 +14,13 @@ export interface HonchoClientOptions {
   workspace: string;
   apiKey: string;
   timeoutMs: number;
+  /**
+   * F14 (C5g): called when a request FAILED on its own timeout, with the
+   * timeoutMs actually used. Lets a caller tell "the budget cut this short"
+   * from "the budget only reduced the timeout" - a reduced timeout that
+   * still answered must not count. Optional; no other caller sets it.
+   */
+  onTimeout?: (timeoutMs: number) => void;
 }
 
 export type ErrorKind = "connect" | "timeout" | "http" | "parse" | "unknown";
@@ -315,6 +322,13 @@ export function createClient(opts: HonchoClientOptions): HonchoClient {
         : err instanceof TypeError
           ? "connect"
           : "unknown";
+      if (kind === "timeout" && opts.onTimeout !== undefined) {
+        try {
+          opts.onTimeout(timeoutMs);
+        } catch {
+          // the observation never changes the request result
+        }
+      }
       const msg = err instanceof Error ? err.message : String(err);
       return { ok: false, error: scrub(`${method} ${path}: ${msg}`), kind };
     }

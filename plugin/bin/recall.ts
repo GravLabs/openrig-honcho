@@ -24,7 +24,7 @@ import type { Config } from "../src/env.ts";
 import { isKillSwitch, loadConfig } from "../src/env.ts";
 import { appendHeld, heldPath } from "../src/held.ts";
 import { createClient } from "../src/honcho.ts";
-import { errorClassFrom, logConfigProblem, logEvent } from "../src/log.ts";
+import { bindEventFields, errorClassFrom, logConfigProblem, logEvent } from "../src/log.ts";
 import { normalizeMission, readRigMission, readSeatState, seatStatePath } from "../src/missions.ts";
 import { takeOnce } from "../src/once.ts";
 import {
@@ -37,10 +37,15 @@ import {
   renderRecall,
   type RecallItem,
 } from "../src/recall.ts";
-import { knownTermsFromTranscript, readTranscriptTail } from "../src/terms.ts";
+import { knownTermsFromRollout, knownTermsFromTranscript, readTranscriptTail } from "../src/terms.ts";
 import { createHash } from "node:crypto";
 import { closeSync, existsSync, mkdirSync, openSync, readFileSync, renameSync, writeSync } from "node:fs";
 import { dirname } from "node:path";
+// C2 (ADR-0016): shared stdin seam + the one output writer. UserPromptSubmit
+// fields are identical on both harnesses (probe C1 §1); --harness is accepted
+// and needs no mapping here.
+import { readStdin, resolveHarness, writeHookJson } from "../src/harness.ts";
+import { harnessUnknownWithSettings, readSettingsFile } from "../src/settings.ts";
 
 /** ADR-0009 decision 4: the whole fetch phase holds to 2.5 s of wall time -
  * the client caps its own timeout here AND the race is the outer wall.
@@ -51,26 +56,9 @@ import { dirname } from "node:path";
 const FETCH_BUDGET_MS = 2500;
 const BUDGET: unique symbol = Symbol("recall-budget");
 
-async function readStdin(timeoutMs: number): Promise<string> {
-  const chunks: Buffer[] = [];
-  await new Promise<void>((resolve) => {
-    let done = false;
-    const finish = () => {
-      if (done) return;
-      done = true;
-      clearTimeout(timer);
-      resolve();
-    };
-    const timer = setTimeout(finish, timeoutMs);
-    process.stdin.on("data", (c) => chunks.push(Buffer.from(c)));
-    process.stdin.once("end", finish);
-    process.stdin.once("close", finish);
-    process.stdin.resume();
-  });
-  return Buffer.concat(chunks).toString("utf8");
-}
-
-const recallOff = (): boolean => (process.env.HONCHO_RECALL ?? "").trim().toLowerCase() === "off";
+// C5a: takes the MERGED env - a Codex settings file can carry HONCHO_RECALL.
+const recallOff = (env: Record<string, string | undefined>): boolean =>
+  (env.HONCHO_RECALL ?? "").trim().toLowerCase() === "off";
 
 const seenPath = (cfg: Config): string =>
   seatStatePath(cfg.stateDir, cfg.workspace, cfg.peer).replace(/\.json$/, ".recall.json");
@@ -123,12 +111,37 @@ function writeSeen(file: string, state: { session: string; ids: string[]; hashes
 
 async function main(): Promise<void> {
   const t0 = Date.now();
+  // C2b (review F3): the flag; C4 (review F2): the harness selects which
+  // transcript format the novelty filter reads. C2c (review F4): the flag
+  // rides this run's ONE event line, bound here.
+  const { harness, flagUnknown } = resolveHarness(process.argv.slice(2));
+  if (flagUnknown) bindEventFields({ harness_unknown: 1 });
   // O1: exactly one structured event per hook run (see user-prompt.ts)
   let cfg: Config | null = null;
   try {
     const raw = await readStdin(2000);
-    if (recallOff()) process.exit(0); // off for this hook only: silent, unlogged
-    const loaded = loadConfig(process.env);
+    // C5a (ADR-0016 decision 9): settings file under the environment (see
+    // session-start.ts); a broken file = plugin off for this run, exit 0.
+    // The merge runs BEFORE the recall-off check: the flag can be set in the
+    // file, and it reads the merged value exactly like a real variable.
+    let env: Record<string, string | undefined> = process.env;
+    if (harness === "codex") {
+      const s = readSettingsFile(process.argv.slice(2));
+      if (s.problem !== null) {
+        logConfigProblem(process.env, "UserPromptSubmit", s.problem);
+        process.exit(0);
+      }
+      env = { ...s.vars, ...process.env };
+    }
+    // C5a2 (review O2): an unresolved --harness next to --settings IS the
+    // cause; name it instead of blaming the missing URL.
+    const harnessProblem = harnessUnknownWithSettings(process.argv.slice(2), flagUnknown);
+    if (harnessProblem !== null) {
+      logConfigProblem(process.env, "UserPromptSubmit", harnessProblem);
+      process.exit(0);
+    }
+    if (recallOff(env)) process.exit(0); // off for this hook only: silent, unlogged
+    const loaded = loadConfig(env);
     if (!loaded.enabled) {
       if (!isKillSwitch(loaded.reason)) {
         logConfigProblem(process.env, "UserPromptSubmit", loaded.reason);
@@ -233,10 +246,27 @@ async function main(): Promise<void> {
     // item (every drop needs >= 1 distinctive term in it), i.e. no filter.
     // The minimum block stays on regardless: it is the switch's rule.
     let knownTerms: Set<string> | undefined;
+    // C4 (review F2): rollout read failures are reported once, as counts
+    // only (no paths, no content), attached to this run's single event.
+    const rolloutNote: Record<string, number> = {};
     if (cfg.novel === true) {
       const tp = typeof input.transcript_path === "string" ? input.transcript_path : "";
       const tail = tp !== "" ? readTranscriptTail(tp) : undefined;
-      knownTerms = knownTermsFromTranscript(tail ?? "", attr.content);
+      if (harness === "codex") {
+        // the same 1 MB tail and grammar, the rollout record shape (C4):
+        // user/assistant message text only. Unreadable or bad lines degrade
+        // exactly like the Claude path (no terms, no crash).
+        const r = knownTermsFromRollout(tail ?? "", attr.content);
+        knownTerms = r.known;
+        // Only when a path was actually given: with no transcript_path the
+        // run had nothing to read, and an empty marker would be noise
+        // (architect add-on from the C4 review, 00:51Z).
+        if (tp !== "") rolloutNote.rollout_seen = 1; // the Codex novelty path ran at all (C4)
+        if (tail === undefined && tp !== "") rolloutNote.rollout_unreadable = 1;
+        else if (r.badLines > 0) rolloutNote.rollout_bad_lines = r.badLines;
+      } else {
+        knownTerms = knownTermsFromTranscript(tail ?? "", attr.content);
+      }
     }
     const raced = await Promise.race([
       allDone,
@@ -316,6 +346,7 @@ async function main(): Promise<void> {
       query_chars: queryChars,
       ...(partial > 0 ? { partial } : {}),
       ...(wallHit ? { error_class: "timeout" } : {}), // T16g: the wall flag on the render event
+      ...rolloutNote, // C4: rollout read failures, counts only, codex only
     };
     if (view.text === "") {
       // nothing new to show (or nothing came back): silence
@@ -337,11 +368,7 @@ async function main(): Promise<void> {
       arm = Number.parseInt(h.slice(0, 8), 16) / 0x1_0000_0000 < holdout ? "held" : "shown";
     }
     if (arm === "shown") {
-      process.stdout.write(
-        `${JSON.stringify({
-          hookSpecificOutput: { hookEventName: "UserPromptSubmit", additionalContext: view.text },
-        })}\n`,
-      );
+      writeHookJson("UserPromptSubmit", view.text);
     } else {
       // Ruling 15:27Z (option c): the held text goes to the PRIVATE state
       // dir (0600, capped) for eval-use's baseline - never to stdout,

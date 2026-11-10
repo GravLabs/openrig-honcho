@@ -6,37 +6,46 @@
 import type { Config } from "../src/env.ts";
 import { isKillSwitch, loadConfig } from "../src/env.ts";
 import { createClient } from "../src/honcho.ts";
-import { logConfigProblem, logEvent } from "../src/log.ts";
+import { bindEventFields, logConfigProblem, logEvent } from "../src/log.ts";
 import { takeOnce } from "../src/once.ts";
 import { recordPrompt } from "../src/writer.ts";
-
-async function readStdin(timeoutMs: number): Promise<string> {
-  const chunks: Buffer[] = [];
-  await new Promise<void>((resolve) => {
-    let done = false;
-    const finish = () => {
-      if (done) return;
-      done = true;
-      clearTimeout(timer);
-      resolve();
-    };
-    const timer = setTimeout(finish, timeoutMs);
-    process.stdin.on("data", (c) => chunks.push(Buffer.from(c)));
-    process.stdin.once("end", finish);
-    process.stdin.once("close", finish);
-    process.stdin.resume();
-  });
-  return Buffer.concat(chunks).toString("utf8");
-}
+// C2 (ADR-0016): shared stdin seam. UserPromptSubmit carries the same fields
+// on both harnesses (probe C1 §1); --harness is accepted and needs no mapping
+// here.
+import { readStdin, resolveHarness } from "../src/harness.ts";
+import { harnessUnknownWithSettings, readSettingsFile } from "../src/settings.ts";
 
 async function main(): Promise<void> {
   const t0 = Date.now();
+  // C2b (review F3): this hook needs no harness mapping, only the flag.
+  // C2c (review F4): the flag rides this run's ONE event line, bound here.
+  // C5a: harness is also the gate for the settings-file merge below.
+  const { harness, flagUnknown } = resolveHarness(process.argv.slice(2));
+  if (flagUnknown) bindEventFields({ harness_unknown: 1 });
   // O1: exactly one structured event per hook run, once a config exists
   // (no config = no workspace to log under; the kill switch stays silent).
   let cfg: Config | null = null;
   try {
     const raw = await readStdin(2000);
-    const loaded = loadConfig(process.env);
+    // C5a (ADR-0016 decision 9): settings file under the environment (see
+    // session-start.ts); a broken file = plugin off for this run, exit 0.
+    let env: Record<string, string | undefined> = process.env;
+    if (harness === "codex") {
+      const s = readSettingsFile(process.argv.slice(2));
+      if (s.problem !== null) {
+        logConfigProblem(process.env, "UserPromptSubmit", s.problem);
+        process.exit(0);
+      }
+      env = { ...s.vars, ...process.env };
+    }
+    // C5a2 (review O2): an unresolved --harness next to --settings IS the
+    // cause; name it instead of blaming the missing URL.
+    const harnessProblem = harnessUnknownWithSettings(process.argv.slice(2), flagUnknown);
+    if (harnessProblem !== null) {
+      logConfigProblem(process.env, "UserPromptSubmit", harnessProblem);
+      process.exit(0);
+    }
+    const loaded = loadConfig(env);
     if (!loaded.enabled) {
       if (!isKillSwitch(loaded.reason)) {
         logConfigProblem(process.env, "UserPromptSubmit", loaded.reason);

@@ -62,7 +62,7 @@ pushed at the moments it can change what a seat does.
 | Startup, resume, compaction | Continuity digest, about 2 500 characters | v0.3 |
 | Another seat writes | Recall, only what its transcript lacks; nothing if under 2 items | v0.3 |
 | On demand | `search` and `ask` | Released |
-| Before a risky action | Lessons matched to that action | v0.4 |
+| Before a risky action | Lessons matched to that action | v0.5 |
 
 ## How the digest is built
 
@@ -142,14 +142,15 @@ is made on evidence, by running other stores through the same tests.
 ```mermaid
 flowchart LR
   V3["v0.3: resume and trust<br/>ledger, digest, quieter recall,<br/>routine messages skipped, scenario tests"]
-  V4["v0.4: capture and deliver<br/>outcome log, lessons in seat lore,<br/>lessons before risky actions, trust classes,<br/>local checkpoints"]
-  V5["v0.5: learn safely<br/>proposed lessons, promotion gate,<br/>attack tests, store decision"]
-  V6["v0.6: self-tuning<br/>under the same gate"]
+  V4["v0.4: Codex seats<br/>same memory as Claude seats"]
+  V5["v0.5: capture and deliver<br/>outcome log, lessons in seat lore,<br/>lessons before risky actions, trust classes,<br/>local checkpoints"]
+  V6["v0.6: learn safely<br/>proposed lessons, promotion gate,<br/>attack tests, store decision"]
+  V7["v0.7: self-tuning<br/>under the same gate"]
   ST["Store test run:<br/>Caura, Hindsight, Graphiti, MemOS"]
-  V3 --> V4 --> V5
-  V5 -- "only if O7 and O8 held" --> V6
-  V4 -.-> ST
-  ST -. "evidence" .-> V5
+  V3 --> V4 --> V5 --> V6
+  V6 -- "only if O7 and O8 held" --> V7
+  V5 -.-> ST
+  ST -. "evidence" .-> V6
 ```
 
 Honcho stays until that test run says otherwise. The loop sits above the store, so

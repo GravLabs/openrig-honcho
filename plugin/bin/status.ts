@@ -1,15 +1,21 @@
 // O3 (ADR-0006): `rig`-side health check for one seat's memory.
 //   plugin/bin/status.ts [--json]
+//   plugin/bin/status.ts --harness codex --settings <path> [--json]  (C5j)
 // Prints counters + the last structured log lines (projections only, never
 // raw lines or secrets - F-T8-4). Exit code: 1 when unhealthy - config
 // disabled, server unreachable, server version not the expected 3.5.0, or
 // live+replay spool past 80% of its 10 MB budget; 0 otherwise. Unlike the
 // hooks this bin DOES print (it is run by a human or an agent on purpose),
 // but never the kill-switch reason and never the API key.
+// C5j (L1 live finding): a Codex seat's config lives ONLY in its settings
+// file, so the CLI needs the same --settings handling as mcp.ts - without
+// it status on a Codex seat read no config and printed memory: DISABLED.
 import { isKillSwitch, loadConfig } from "../src/env.ts";
 import { createClient } from "../src/honcho.ts";
 import { logConfigProblem } from "../src/log.ts";
 import { collectStatus, type StatusReport } from "../src/status.ts";
+import { resolveHarness } from "../src/harness.ts";
+import { harnessUnknownWithSettings, readSettingsFile } from "../src/settings.ts";
 
 function humanLines(st: StatusReport): string[] {
   const s = st.server;
@@ -37,7 +43,19 @@ function humanLines(st: StatusReport): string[] {
 
 async function main(): Promise<void> {
   const json = process.argv.includes("--json");
-  const cfg = loadConfig(process.env);
+  // C5j: same Codex settings-file handling as mcp.ts - merge UNDER the
+  // environment (env wins), a broken file or an unresolved --harness next
+  // to --settings IS the cause and takes the disabled path below.
+  const { harness, flagUnknown } = resolveHarness(process.argv.slice(2));
+  let env: Record<string, string | undefined> = process.env;
+  let problem: string | null = null;
+  if (harness === "codex") {
+    const s = readSettingsFile(process.argv.slice(2));
+    if (s.problem !== null) problem = s.problem;
+    else env = { ...s.vars, ...process.env };
+  }
+  if (problem === null) problem = harnessUnknownWithSettings(process.argv.slice(2), flagUnknown);
+  const cfg = problem === null ? loadConfig(env) : { enabled: false as const, reason: problem };
   if (!cfg.enabled) {
     // the kill switch reason is never printed or logged (review T1 F2); a
     // broken config still gets its one shared config-log line

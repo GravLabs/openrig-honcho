@@ -11,40 +11,47 @@
 import type { Config } from "../src/env.ts";
 import { isKillSwitch, loadConfig } from "../src/env.ts";
 import { createClient } from "../src/honcho.ts";
-import { logConfigProblem, logEvent } from "../src/log.ts";
+import { bindEventFields, logConfigProblem, logEvent } from "../src/log.ts";
 import { readSeatState, seatStatePath, setContextStart } from "../src/missions.ts";
 import { takeOnce } from "../src/once.ts";
 import { buildInjection, type ContinuityStats } from "../src/reader.ts";
 import type { InjectionSource } from "../src/inject.ts";
+// C2 (ADR-0016): stdin, harness and output shape come from the shared seam.
+import { readStdin, resolveHarness, sessionStartSource, writeHookJson } from "../src/harness.ts";
+import { harnessUnknownWithSettings, readSettingsFile } from "../src/settings.ts";
 
 const SOURCES: readonly string[] = ["startup", "resume", "clear", "compact"];
 
-async function readStdin(timeoutMs: number): Promise<string> {
-  const chunks: Buffer[] = [];
-  await new Promise<void>((resolve) => {
-    let done = false;
-    const finish = () => {
-      if (done) return;
-      done = true;
-      clearTimeout(timer);
-      resolve();
-    };
-    const timer = setTimeout(finish, timeoutMs);
-    process.stdin.on("data", (c) => chunks.push(Buffer.from(c)));
-    process.stdin.once("end", finish);
-    process.stdin.once("close", finish);
-    process.stdin.resume();
-  });
-  return Buffer.concat(chunks).toString("utf8");
-}
-
 async function main(): Promise<void> {
   const t0 = Date.now();
+  const { harness, flagUnknown } = resolveHarness(process.argv.slice(2));
+  // C2c (review F4): the unresolved flag rides this run's ONE event line
+  // (bound here, before any log call), never a line of its own. Names only.
+  if (flagUnknown) bindEventFields({ harness_unknown: 1 });
   // O1: exactly one structured event per hook run (see user-prompt.ts)
   let cfg: Config | null = null;
   try {
     const raw = await readStdin(2000);
-    const loaded = loadConfig(process.env);
+    // C5a (ADR-0016 decision 9): a Codex run may name a settings file; its
+    // values merge UNDER the environment. A broken file turns the plugin off
+    // for this run, named (never valued) in _config.log, exit 0.
+    let env: Record<string, string | undefined> = process.env;
+    if (harness === "codex") {
+      const s = readSettingsFile(process.argv.slice(2));
+      if (s.problem !== null) {
+        logConfigProblem(process.env, "SessionStart", s.problem);
+        process.exit(0);
+      }
+      env = { ...s.vars, ...process.env };
+    }
+    // C5a2 (review O2): an unresolved --harness next to --settings IS the
+    // cause; name it instead of blaming the missing URL.
+    const harnessProblem = harnessUnknownWithSettings(process.argv.slice(2), flagUnknown);
+    if (harnessProblem !== null) {
+      logConfigProblem(process.env, "SessionStart", harnessProblem);
+      process.exit(0);
+    }
+    const loaded = loadConfig(env);
     if (!loaded.enabled) {
       if (!isKillSwitch(loaded.reason)) {
         logConfigProblem(process.env, "SessionStart", loaded.reason);
@@ -67,7 +74,10 @@ async function main(): Promise<void> {
       logEvent(cfg, { hook: "session-start", event: "stdin-invalid", ok: false, ms: Date.now() - t0, error_class: "parse" });
       process.exit(0);
     }
-    if (typeof input.source !== "string" || !SOURCES.includes(input.source)) {
+    // C2 (ADR-0016): Codex "fork" is treated as "resume" before the check;
+    // every Claude source passes through unchanged.
+    const source = sessionStartSource(harness, input.source);
+    if (typeof source !== "string" || !SOURCES.includes(source)) {
       // unknown start: no semantics, no block - a deliberate no-op, not a failure
       logEvent(cfg, { hook: "session-start", event: "unknown-source", ok: true, ms: Date.now() - t0 });
       process.exit(0);
@@ -99,7 +109,7 @@ async function main(): Promise<void> {
     let continuity: ContinuityStats | undefined;
     const text = await buildInjection(
       {
-        source: input.source as InjectionSource,
+        source: source as InjectionSource,
         ...(typeof input.session_id === "string" ? { claudeSessionId: input.session_id } : {}),
         // the digest's restore-map pointer is resolved under this cwd
         ...(typeof input.cwd === "string" && input.cwd !== "" ? { cwd: input.cwd } : {}),
@@ -114,22 +124,18 @@ async function main(): Promise<void> {
         },
       },
     );
-    if (input.source !== "resume") {
+    if (source !== "resume") {
       await setContextStart(cfg.stateDir, cfg.workspace, cfg.peer, contextStart);
     }
     if (text !== "") {
-      process.stdout.write(
-        `${JSON.stringify({
-          hookSpecificOutput: { hookEventName: "SessionStart", additionalContext: text },
-        })}\n`,
-      );
+      writeHookJson("SessionStart", text);
     }
     // fix 19:50Z #3: the HONCHO session name (as the writer logs it), not the
     // Claude session id - buildInjection's resolveSession just set it.
     const honchoSession = readSeatState(seatStatePath(cfg.stateDir, cfg.workspace, cfg.peer))?.session;
     logEvent(cfg, {
       hook: "session-start",
-      event: input.source, // validated against SOURCES above
+      event: source, // validated against SOURCES above
       ok: true,
       ms: Date.now() - t0,
       ...(honchoSession !== undefined ? { session: honchoSession } : {}),

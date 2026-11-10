@@ -63,10 +63,23 @@ export function makeTempDir(prefix: string): string {
   return dir;
 }
 
-/** Register a dir created some other way (e.g. returned by a child) so the
- * sweep removes it too. Rare; makeTempDir is the normal door. */
-export function trackTempDir(dir: string): string {
-  live.add(dir);
+/** Register an extra path (a dir created some other way, e.g. returned by a
+ * child, or a symlink sitting beside a temp dir) so it is removed at the end
+ * of this test file, with the exit sweep as the belt. Rare; makeTempDir is
+ * the normal door. Safe on symlinks: rmDir's rmSync is lstat-based, so a
+ * symlink is unlinked, never followed (probed on bun 1.4.4: the link goes,
+ * the target survives), and force:true makes the afterAll and the exit
+ * sweep idempotent. */
+export function trackTempDir(path: string): string {
+  live.add(path);
   installExitHook();
-  return dir;
+  try {
+    afterAll(() => {
+      live.delete(path);
+      rmDir(path);
+    });
+  } catch {
+    // not inside a test file: the exit sweep is this path's cleanup.
+  }
+  return path;
 }

@@ -111,3 +111,65 @@ export function knownTermsFromTranscript(tail: string, incoming: string): Set<st
   add(typeof incoming === "string" ? incoming : "");
   return known;
 }
+
+/** Result of a rollout tail read: the known set and how many lines did not
+ * parse (the tail's first line is almost always cut mid-line - a count, not
+ * an error; C4 / review F2). */
+export interface RolloutTerms {
+  known: Set<string>;
+  badLines: number;
+}
+
+/** A Codex rollout block of user/assistant message content: an object with
+ * input_text/output_text type and string text (probe C1: the two block kinds
+ * real rollouts carry). Anything else - reasoning summaries, tool call
+ * arguments, tool output strings - is never message text here, by shape as
+ * well as by role. */
+function rolloutBlockText(block: unknown): string {
+  if (block === null || typeof block !== "object") return "";
+  const b = block as Record<string, unknown>;
+  if (b.type !== "input_text" && b.type !== "output_text") return "";
+  return typeof b.text === "string" ? b.text : "";
+}
+
+/**
+ * C4 (ADR-0016, review F2): the known-term set of a CODEX ROLLOUT tail
+ * (same readTranscriptTail bytes, same budget, same term grammar as
+ * knownTermsFromTranscript). A rollout wraps records: only
+ * `{type:"response_item", payload:{type:"message", role:"user"|"assistant"}}`
+ * lines contribute text - reasoning, function calls, call outputs, event
+ * messages and metadata records never become known terms. A line that does
+ * not parse is skipped exactly like the Claude path does (the tail may start
+ * mid-line) and is only counted, never fatal.
+ */
+export function knownTermsFromRollout(tail: string, incoming: string): RolloutTerms {
+  const known = new Set<string>();
+  let badLines = 0;
+  const add = (s: string): void => {
+    for (const m of s.matchAll(TOKEN_RE)) known.add(m[0].toLowerCase());
+  };
+  for (const line of (typeof tail === "string" ? tail : "").split("\n")) {
+    if (line === "") continue;
+    let e: unknown;
+    try {
+      e = JSON.parse(line);
+    } catch {
+      badLines++; // the head cut and any garbage line
+      continue;
+    }
+    if (e === null || typeof e !== "object") continue;
+    if ((e as Record<string, unknown>).type !== "response_item") continue;
+    const payload = (e as Record<string, unknown>).payload;
+    if (payload === null || typeof payload !== "object") continue;
+    const p = payload as Record<string, unknown>;
+    if (p.type !== "message") continue;
+    if (p.role !== "user" && p.role !== "assistant") continue; // developer is not the seat's text
+    if (Array.isArray(p.content)) {
+      let text = "";
+      for (const block of p.content) text += rolloutBlockText(block) + "\n";
+      add(text);
+    }
+  }
+  add(typeof incoming === "string" ? incoming : "");
+  return { known, badLines };
+}
