@@ -33,6 +33,8 @@ function humanLines(st: StatusReport): string[] {
     `redactions: ${Object.entries(c.redactions).map(([k, n]) => `${k}=${n}`).join(" ") || "none"}`,
     `last error: ${st.last_error_class ?? "none"}${st.last_error_at ? ` at ${st.last_error_at}` : ""}`,
     `spool: live ${sp(st.spool.live)} replay ${sp(st.spool.replay)} dead ${sp(st.spool.dead)}`,
+    // O3 item 4 (ADR-0017 decision 4): the outcome collector runs on demand
+    `outcomes: ${st.outcomes.last_run_at === null ? "never run" : `last run ${st.outcomes.last_run_at}, ${st.outcomes.records} records`}`,
   ];
   if (st.problems.length > 0) lines.push(`problems: ${st.problems.join("; ")}`);
   for (const l of st.log_tail) {

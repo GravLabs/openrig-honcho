@@ -409,6 +409,36 @@ describe("status: MCP tool + bin (O3)", () => {
     }
   }, 15000);
 
+  // O3 item 4 (ADR-0017 decision 4): status reports the outcome collector's
+  // last run and its record count for THIS workspace, or that it never ran.
+  test("O3 item 4: outcomes - never run is a fact, after a run it is mtime + count", async () => {
+    const fake = await startFakeHoncho();
+    const dir = makeTempDir("obs-outc-");
+    try {
+      const env = {
+        HOME: dir, HONCHO_STATE_DIR: dir, HONCHO_ENABLED: "true",
+        HONCHO_URL: fake.url, HONCHO_WORKSPACE: WS, HONCHO_PEER: SELF };
+      const never = await runBin("status.ts", env, "");
+      expect(never.code, never.out + never.err).toBe(0);
+      expect(never.out).toContain("outcomes: never run");
+      const jn = JSON.parse((await runBin("status.ts", env, "", ["--json"])).out) as Record<string, any>;
+      expect(jn.outcomes).toEqual({ last_run_at: null, records: 0 });
+      expect(jn.healthy).toBe(true); // never-run is a fact, not a problem
+      // three records at the collector's own path (one blank line between)
+      const file = join(dir, "outcomes", `${WS}.jsonl`);
+      mkdirSync(join(dir, "outcomes"), { recursive: true, mode: 0o700 });
+      writeFileSync(file, '{"qitemId":"a"}\n{"qitemId":"b"}\n\n{"qitemId":"c"}\n', { mode: 0o600 });
+      const human = await runBin("status.ts", env, "");
+      expect(human.out).toMatch(/outcomes: last run \d{4}-\d{2}-\d{2}T\S+, 3 records/);
+      const j = JSON.parse((await runBin("status.ts", env, "", ["--json"])).out) as Record<string, any>;
+      expect(j.outcomes.records).toBe(3);
+      // the time IS the file's mtime - the report invents no clock
+      expect(j.outcomes.last_run_at).toBe(statSync(file).mtime.toISOString());
+    } finally {
+      await fake.stop();
+    }
+  }, 15000);
+
   test("bin: server down -> exit 1 with the problem", async () => {
     const fake = await startFakeHoncho();
     const dir = makeTempDir("obs-bin-");

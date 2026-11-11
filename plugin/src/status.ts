@@ -12,6 +12,7 @@ import type { Config } from "./env.ts";
 import type { HonchoClient } from "./honcho.ts";
 import { readLogTail } from "./log.ts";
 import { normalizeMission, readRigMission, readSeatState, seatStatePath } from "./missions.ts";
+import { outcomesFile } from "./outcomes.ts";
 import { statsFrom, type SeatStats } from "./stats.ts";
 
 /** The Honcho server version this plugin is built against (ADR-0006 O3). */
@@ -39,9 +40,35 @@ export interface StatusReport {
   last_error_at: string | null;
   last_error_class: string | null;
   queue: unknown;
+  /** O3 item 4 (ADR-0017 decision 4): the outcome collector is on-demand
+   * only, so its last run is the outcomes file's mtime and its records are
+   * the non-empty lines. last_run_at null = the collector has NEVER RUN for
+   * this workspace - a fact, not a failure (it never makes the seat
+   * unhealthy). */
+  outcomes: { last_run_at: string | null; records: number };
   log_tail: { ts: string; hook: string; event: string; ok: boolean; error_class?: string }[];
   problems: string[];
   healthy: boolean;
+}
+
+/** The outcome collector's own state for one workspace (O3 item 4). Counts
+ * only - no record content is read into the report. An absent or unstatable
+ * file is NEVER RUN (null, 0); if the mtime reads but the body cannot, the
+ * run time stands and the count says 0 rather than inventing one. */
+function outcomeStat(file: string): { last_run_at: string | null; records: number } {
+  let lastRun: string;
+  try {
+    lastRun = statSync(file).mtime.toISOString();
+  } catch {
+    return { last_run_at: null, records: 0 };
+  }
+  let records = 0;
+  try {
+    records = readFileSync(file, "utf8").split("\n").filter((l) => l.trim() !== "").length;
+  } catch {
+    // unreadable body: the run time is still a fact
+  }
+  return { last_run_at: lastRun, records };
 }
 
 /** bytes + line count of a spool file (absent = zeros; unreadable = marker). */
@@ -99,6 +126,7 @@ export async function collectStatus(config: Config, client: HonchoClient): Promi
     last_error_at: null,
     last_error_class: null,
     queue: null,
+    outcomes: { last_run_at: null, records: 0 },
     log_tail: [],
     problems,
     healthy: true,
@@ -153,6 +181,8 @@ export async function collectStatus(config: Config, client: HonchoClient): Promi
   if (spoolBytes(report.spool.live) + spoolBytes(report.spool.replay) > SPOOL_UNHEALTHY_BYTES) {
     problems.push("spool above 8 MB (80% of 10 MB)");
   }
+
+  report.outcomes = outcomeStat(outcomesFile(config.stateDir, config.workspace));
 
   report.log_tail = readLogTail(config, 5);
 

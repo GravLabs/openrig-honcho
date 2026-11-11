@@ -245,8 +245,10 @@ flowchart LR
 **After v0.3** the owner-approved plan supersedes phases 3 and 4 where they differ:
 - v0.4: Codex seats get the same memory as Claude seats (ADR-0016), frontloaded by
   the owner on 2026-11-08.
-- v0.5: outcome log, lessons as itemized lore updates, lessons shown before risky
-  actions, trust classes, local checkpoints; a test run of other stores alongside.
+- v0.5: **first** the outcome log and seats pulling memory when they claim work
+  (ADR-0017, owner 2026-11-10), so every later item can be measured; then lessons
+  as itemized lore updates, lessons shown before risky actions, trust classes,
+  local checkpoints; a test run of other stores alongside.
   A checkpoint is a short line the Stop hook saves from a seat's final reply, in
   local state, with no model involved. The digest shows it first, so "where you
   left off" still works when Honcho is behind.

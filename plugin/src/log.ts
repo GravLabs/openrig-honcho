@@ -20,6 +20,25 @@ export interface LogEvent {
   ok: boolean;
   ms: number;
   session?: string;
+  /**
+   * O1 (ADR-0017 decision 6): on MCP lines, the seat's current in-progress
+   * qitem id when the daemon knows one - a pointer (id only), never content,
+   * so a tool call can be counted against the item in progress. Absent when
+   * unknown; absent on every non-mcp line, which stay byte-identical.
+   */
+  qitem?: string;
+  /**
+   * O2 (ruling 3): the claim-time pointer's outcome on a nudge run. The
+   * run KEEPS its ordinary event (sent/spooled) so existing event counts
+   * stay comparable; this field carries shown|held|none.
+   */
+  pointer?: "shown" | "held" | "none";
+  /**
+   * O4 L3 (security pass on 90f2ae6): why a nudged run showed no pointer -
+   * the envelope was not this rig's daemon, or the row's destination is
+   * another seat. Only rides a pointer=none line; never any row content.
+   */
+  pointer_skip?: "unverified" | "not_for_seat";
   n_msgs?: number;
   /** T21 (ADR-0005 E5b): 1 on the user-prompt/stop events whose write the
    * routine rule suppressed deriver reasoning for. A whitelisted count,
@@ -165,6 +184,9 @@ export function logEvent(config: LogTarget, e: LogEvent): void {
       ms: Math.max(0, Math.round(e.ms)),
     };
     if (e.session !== undefined) line.session = e.session;
+    if (e.qitem !== undefined) line.qitem = e.qitem;
+    if (e.pointer !== undefined) line.pointer = e.pointer;
+    if (e.pointer_skip !== undefined) line.pointer_skip = e.pointer_skip;
     if (e.n_msgs !== undefined) line.n_msgs = e.n_msgs;
     if (e.n_items !== undefined) line.n_items = e.n_items;
     if (e.considered !== undefined) line.considered = e.considered;

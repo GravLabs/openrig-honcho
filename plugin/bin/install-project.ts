@@ -7,7 +7,7 @@
 // Binding rules from the operator amendment:
 // - merge only: foreign keys, hook groups, servers and key ORDER are never
 //   replaced, reordered or deleted; our hook groups append after existing
-//   ones; our env keys are exactly the five flag names;
+//   ones; our env keys are exactly the FLAG_ENV names;
 // - never read out, print, log or copy any env VALUE from the target - output
 //   names keys and hook events only; error text never carries file content
 //   (a JSON parse error message can quote it, so raw parse errors are dropped);
@@ -19,7 +19,7 @@
 // - uninstall reverts ONLY an install from THIS plugin path: a hook group or
 //   mcpServers.rig_memory naming PLUGIN_DIR is the proof; without it
 //   uninstall changes nothing at all (F2). With it, it removes exactly the
-//   five flag-name env keys (any other HONCHO_* key is foreign), our hook
+//   the FLAG_ENV flag-name env keys (any other HONCHO_* key is foreign), our hook
 //   groups, the server, our enabledMcpjsonServers entry and the skill folder.
 //   It NEVER deletes a container key (hooks, hooks.<event>, env,
 //   enabledMcpjsonServers, mcpServers): our entries come out, empty
@@ -140,10 +140,14 @@ const FLAG_ENV: Record<string, string> = {
   "--leader": "HONCHO_LEADER_PEER",
   "--profile-workspace": "HONCHO_PROFILE_WORKSPACE",
   "--owner-peer": "HONCHO_OWNER_PEER",
+  // O3 item 3 (ADR-0017): the recall holdout share, the SAME setting on both
+  // harnesses - Claude keeps it in settings.json env, Codex in the seat's
+  // settings file, where a reinstall keeps it (see the carry-over there).
+  "--recall-holdout": "HONCHO_RECALL_HOLDOUT",
 };
 const OUR_ENV_NAMES = Object.values(FLAG_ENV); // uninstall removes exactly these
 const USAGE =
-  "usage: bun run <plugin>/bin/install-project.ts <project dir> --url U --workspace W [--leader P] [--profile-workspace W] [--owner-peer P] [--dry-run] | ... <project dir> --uninstall [--dry-run]";
+  "usage: bun run <plugin>/bin/install-project.ts <project dir> --url U --workspace W [--leader P] [--profile-workspace W] [--owner-peer P] [--recall-holdout N] [--dry-run] | ... <project dir> --uninstall [--dry-run]";
 
 function die(msg: string): never {
   console.error(`install-project: ${msg}`);
@@ -716,7 +720,7 @@ function loadInstallRecord(path: string): InstallRecord | null {
   if (parsed.version !== 1) die(bad);
   if (typeof parsed.plugin !== "string") die(bad);
   if (typeof parsed.enabledAdded !== "boolean") die(bad);
-  // ruling (b) 01:05Z: envAdded carries ONLY the five flag names, no duplicates
+  // ruling (b) 01:05Z: envAdded carries ONLY the FLAG_ENV flag names, no duplicates
   const names = OUR_ENV_NAMES as readonly string[];
   if (
     !Array.isArray(parsed.envAdded) ||
@@ -862,6 +866,8 @@ function validateFlags(flags: Map<string, string>): void {
     HONCHO_LEADER_PEER: flags.get("HONCHO_LEADER_PEER"),
     HONCHO_PROFILE_WORKSPACE: flags.get("HONCHO_PROFILE_WORKSPACE"),
     HONCHO_OWNER_PEER: flags.get("HONCHO_OWNER_PEER"),
+    // O3 item 3: the holdout flag goes through loadConfig's own 0..0.9 rule.
+    HONCHO_RECALL_HOLDOUT: flags.get("HONCHO_RECALL_HOLDOUT"),
     HONCHO_PEER: "install-check",
     HONCHO_STATE_DIR: "/tmp/install-check",
   });
@@ -954,7 +960,7 @@ function planInstall(
     }
   }
 
-  // env: only the five flag names; foreign keys (anything not ours) are never
+  // env: only the FLAG_ENV flag names; foreign keys (anything not ours) are never
   // touched; replacing an existing key keeps its position in the object.
   // Rule 3/5 (T13b): a present key is only ours to change if the record lists
   // it or a v0.1.1 install from this path makes present names ours. A foreign
@@ -1082,14 +1088,14 @@ function planUninstall(cur: { settings?: Json; mcp?: Json }, record: InstallReco
   }
 
   // rule 4 (T13b): with a record, ONLY its envAdded names go; without one
-  // (v0.1.1 install) all five present names count as added, as v0.1.1 did.
+  // (v0.1.1 install) all present names count as added, as v0.1.1 did.
   // Any other HONCHO_* key is foreign in both modes.
   if (isJsonObject(settings.env)) {
     const env = settings.env as Json;
     const candidates = record !== null ? record.envAdded : OUR_ENV_NAMES;
     const removed = candidates.filter((k) => k in env);
     // rule 4 (architect 03:58Z): EVERY HONCHO_* key still present is named,
-    // not just our five - a foreign HONCHO_* the owner has must be visible
+    // not just our names - a foreign HONCHO_* the owner has must be visible
     const left = Object.keys(env).filter((k) => k.startsWith("HONCHO_") && !removed.includes(k));
     for (const k of removed) delete env[k];
     if (removed.length > 0) lines.push(`settings: removed env keys ${removed.join(", ")}`);
@@ -2426,7 +2432,51 @@ function mainCodex(args: Args): void {
     userConfigCreated: record?.userConfigCreated ?? false,
   };
 
-  const settingsContent = `${JSON.stringify(Object.fromEntries([...args.flags.entries()].sort()), null, 2)}\n`;
+  // O3 item 3 (ADR-0017) as corrected by F-E (R15 Part 2): ONLY the holdout
+  // carries across a reinstall. Carrying every key meant a reinstall that
+  // DROPPED --leader kept leadership (a revocation printed nothing and
+  // revoked nothing). The holdout is the one carry because it is a
+  // measurement stance: it must not flip because of a routine reinstall.
+  // Every other key behaves exactly as at 11fc779: flags set it, omitting a
+  // flag drops it. This file is still ours alone (an unrecorded one is
+  // refused); foreign hand-added spellings stay outside our rewrite.
+  const carried: Record<string, string> = {};
+  // O7 N4 (second security pass): the carried value must survive loadConfig's
+  // OWN 0..0.9 rule (env.ts, identical regex and bounds) or it is dropped -
+  // a hand-edited or corrupted setting used to ride along AND be printed
+  // raw, ANSI escapes included. What is kept and printed is the PARSED
+  // number, never the stored string.
+  let carryInvalid = false;
+  if (record !== null && existsSync(settingsPath)) {
+    try {
+      const prev: unknown = JSON.parse(readFileSync(settingsPath, "utf8"));
+      if (prev !== null && typeof prev === "object" && !Array.isArray(prev)) {
+        const hold = (prev as Record<string, unknown>)["HONCHO_RECALL_HOLDOUT"];
+        if (typeof hold === "string" && hold !== "") {
+          const raw = hold.trim();
+          if (/^\d+(?:\.\d+)?$/.test(raw) && Number(raw) >= 0 && Number(raw) <= 0.9) {
+            carried["HONCHO_RECALL_HOLDOUT"] = String(Number(raw));
+          } else {
+            carryInvalid = true;
+          }
+        }
+      }
+    } catch {
+      // unreadable or not JSON: ours, replaced from the flags as before
+    }
+  }
+  const flagSettings = Object.fromEntries(args.flags);
+  const settingsObj = { ...carried, ...flagSettings };
+  if (!("HONCHO_RECALL_HOLDOUT" in flagSettings)) {
+    if (carried["HONCHO_RECALL_HOLDOUT"] !== undefined) {
+      lines.push(
+        `holdout kept across reinstall: ${carried["HONCHO_RECALL_HOLDOUT"]} (pass --recall-holdout to change it)`,
+      );
+    } else if (carryInvalid) {
+      lines.push("holdout dropped (invalid)");
+    }
+  }
+  const settingsContent = `${JSON.stringify(Object.fromEntries(Object.entries(settingsObj).sort()), null, 2)}\n`;
   let skipLineAt = -1; // C5d: index of the ancestor-skip line, if any
 
   if (args.uninstall) {
@@ -2524,7 +2574,8 @@ function mainCodex(args: Args): void {
     }
     if (!existsSync(settingsPath) || readFileSync(settingsPath, "utf8") !== settingsContent) {
       settingsNext = settingsContent;
-      lines.push(`settings.json: ${args.flags.size > 0 ? `keys ${[...args.flags.keys()].sort().join(", ")} (names only - no values echoed)` : "write (empty)"}`);
+      const keysOut = Object.entries(settingsObj).sort().map(([k]) => k);
+      lines.push(`settings.json: ${keysOut.length > 0 ? `keys ${keysOut.join(", ")} (names only - no values echoed)` : "write (empty)"}`);
     }
     // --- hooks (C5d: or the deliberate skip of them) ------------------------
     if (ancestorHooksDir !== null) {

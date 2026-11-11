@@ -129,6 +129,115 @@ describe("redact: each of the 9 ADR kinds, alone and inside a sentence", () => {
   }
 });
 
+describe("O6 N-B: GitHub and GitLab token prefixes", () => {
+  // One fake per shipped prefix shape (R15 N-B: short tokens of these
+  // shapes survive opaque - they need a named rule). All values synthetic.
+  const cases: [string, string][] = [
+    ["ghp_", `ghp_${rand(36, ALNUM)}`], // fake-secret
+    ["gho_", `gho_${rand(36, ALNUM)}`], // fake-secret
+    ["ghs_", `ghs_${rand(36, ALNUM)}`], // fake-secret
+    ["ghu_", `ghu_${rand(36, ALNUM)}`], // fake-secret
+    [`github_pat_${rand(20, ALNUM)}_${rand(44, ALNUM)}`, `github_pat_${rand(20, ALNUM)}_${rand(44, ALNUM)}`], // fake-secret
+    ["glpat-", `glpat-${rand(20, LOWER36)}`],
+  ];
+  for (const [label, token] of cases) {
+    test(`masks ${label}* alone and in a sentence`, () => {
+      expect(redact(token).text).toBe("[REDACTED:gittoken]");
+      expect(redact(token).counts.gittoken).toBe(1);
+      const r = redact(`pushed with token ${token} yesterday`);
+      expect(r.text).toBe("pushed with token [REDACTED:gittoken] yesterday");
+      const body = token.slice(token.startsWith("github_pat_") ? 11 : token.indexOf("_") + 1);
+      expect(r.text).not.toContain(body.slice(0, 10));
+    });
+  }
+  test("kept: a short body or a bare prefix is not a token", () => {
+    expect(redact("ghp_short").text).toBe("ghp_short"); // fake-secret
+    expect(redact("glpat- alone").text).toBe("glpat- alone");
+  });
+  test("idempotent on the masked form", () => {
+    const once = redact(`ghp_${rand(36, ALNUM)}`).text; // fake-secret
+    expect(redact(once).text).toBe(once);
+  });
+});
+
+describe("O7 N2/N1: word boundary, real minimum lengths, the full GitLab family", () => {
+  // Second security pass on 7ac023e: the N-B rule had no word boundary and
+  // a 6-char body, so ordinary identifiers were masked in everything stored
+  // ("highp_precision" -> hi[REDACTED:gittoken]). Real minimums (architect
+  // ruling): gh[pousr]_ body >= 36, github_pat_ body >= 50, and the GitLab
+  // family gl*- with dash in the alphabet, body >= 20. Values synthetic.
+  const masked: Array<[string, string]> = [
+    ["ghp classic 36", `ghp_${rand(36, ALNUM)}`], // fake-secret
+    ["ghs app 36", `ghs_${rand(36, ALNUM)}`], // fake-secret
+    ["ghp body 40", `ghp_${rand(40, ALNUM)}`], // fake-secret
+    ["github_pat fine-grained 82", `github_pat_11${rand(20, ALNUM)}_${rand(61, ALNUM)}`], // fake-secret
+    ["glpat with dash (alphabet [0-9a-zA-Z_-])", `glpat-${rand(2, LOWER36)}-${rand(19, ALNUM)}`], // fake-secret
+    ["glpat 20 then dotted suffix", `token glpat-${rand(20, ALNUM)}.01.0w1x2y3z4 ok`], // fake-secret
+    ["gldt deploy", `gldt-${rand(20, ALNUM)}`], // fake-secret
+    ["glrt runner", `glrt-${rand(20, ALNUM)}`], // fake-secret
+    ["glptt pipeline trigger", `glptt-${rand(40, HEX)}`], // fake-secret
+    ["glsoat", `glsoat-${rand(20, ALNUM)}`], // fake-secret
+    ["glft", `glft-${rand(20, ALNUM)}`], // fake-secret
+    ["glimt", `glimt-${rand(20, ALNUM)}`], // fake-secret
+    ["glagent", `glagent-${rand(20, ALNUM)}`], // fake-secret
+  ];
+  for (const [label, token] of masked) {
+    test(`masks ${label}`, () => {
+      const alone = token.startsWith("token ") ? token : `token ${token} ok`;
+      const r = redact(alone);
+      expect(r.counts.gittoken).toBe(1);
+      expect(r.text).toContain("[REDACTED:gittoken]");
+      expect(r.text).not.toContain(token.replace(/^token /, "").slice(0, 12));
+    });
+  }
+  // The reviewer's exact over-mask cases (probe-redact.ts): these MUST stay
+  // visible - masked ordinary code is the N2 regression.
+  const kept: Array<[string, string]> = [
+    ["GLSL highp_ identifier", "uniform highp_precision float x"],
+    ["snake identifiers ghs_handler / gho_counter", "call ghs_handler() then gho_counter++"],
+    ["substring thoughp_/laughp_", "laughp_rate and tough_value"],
+    ["ghp_ with a short body", "ghp_short"],
+    ["bare glpat- prefix", "glpat- alone"],
+    ["glpat short body", "glpat-abc123"],
+    ["ghs_/gho_ with underscored short bodies", "ghs_handler_map and gho_counter_next = 0"],
+  ];
+  for (const [label, text] of kept) {
+    test(`keeps ${label} unchanged`, () => {
+      const r = redact(text);
+      expect(r.text).toBe(text);
+      expect(r.counts.gittoken).toBeUndefined();
+    });
+  }
+  // O8 F-J (R17): the O7 greedy GitHub body ate a glued "glpat" prefix and
+  // stopped at the dash, leaving the GitLab BODY in the clear - a redaction
+  // gap a7362d5 did not have. The glued case must leak zero body
+  // characters, one label or two.
+  test("O8 F-J: a GitHub token glued straight into a GitLab one leaks no body", () => {
+    const gh = `ghp_${"A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6Q7r8"}`; // fake-secret 36
+    const gl = `glpat-${"AbCdEfGhIjKlMnOpQrSt"}`; // fake-secret 20 (split so no literal token sits in the source)
+    const r = redact(`k ${gh}${gl} k`);
+    expect(r.text).toBe("k [REDACTED:gittoken] k");
+    expect(r.text).not.toContain("AbCd");
+    expect(r.text).not.toContain(gl.slice(0, 8));
+    expect(r.counts.gittoken).toBeGreaterThanOrEqual(1);
+  });
+  test("O8 F-J: github_pat_ glued into a GitLab token, and the reverse glue", () => {
+    const pat = `github_pat_11${"A".repeat(20)}_${"b".repeat(61)}`; // fake-secret
+    const gl = `gldt-${"0123456789abcdefABCD"}`; // fake-secret 20 (split so no literal token sits in the source)
+    expect(redact(`x ${pat}${gl} y`).text).toBe("x [REDACTED:gittoken] y");
+    const ghp = `ghs_${"Z9y8X7w6V5u4T3s2R1q0P9o8N7m6L5k4J3i2"}`; // fake-secret 36
+    // reverse glue: the GitLab body alphabet already spans the second
+    // prefix - must stay one fully masked label
+    expect(redact(`x ${gl}${ghp} y`).text).toBe("x [REDACTED:gittoken] y");
+  });
+  test("idempotent on the masked form of each family", () => {
+    for (const t of [`ghp_${rand(36, ALNUM)}`, `glpat-${rand(20, LOWER36)}`, `github_pat_11${rand(20, ALNUM)}_${rand(61, ALNUM)}`]) {
+      const once = redact(t).text;
+      expect(redact(once).text).toBe(once);
+    }
+  });
+});
+
 describe("redact: kept shapes", () => {
   const kept: Array<[label: string, value: string]> = [
     ["40-char git SHA", rand(40, HEX)],

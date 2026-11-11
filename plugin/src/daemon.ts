@@ -20,8 +20,9 @@ export const DAEMON_TIMEOUT_MS = 1000;
 export interface DaemonFailure {
   ok: false;
   /** no-url: never issued a request; timeout: aborted at the budget;
-   * network: fetch rejected; http: non-2xx; parse: body not the shape. */
-  kind: "no-url" | "timeout" | "network" | "http" | "parse";
+   * network: fetch rejected; http: non-2xx; parse: body not the shape;
+   * too-big: body exceeded the caller's maxBytes (O8 item 3, R17). */
+  kind: "no-url" | "timeout" | "network" | "http" | "parse" | "too-big";
   status?: number;
 }
 
@@ -41,14 +42,56 @@ export interface OutboxEntry {
   deliveredAt?: string;
 }
 
-async function getJson(url: string): Promise<{ ok: true; json: unknown } | DaemonFailure> {
+/** One GET with the shared 1 s budget and failure kinds. Shared by all
+ * daemon readers in this file (O1: the collector reuses the same budget).
+ * With maxBytes (O8 item 3, R17) the response is capped: content-length is
+ * rejected cheaply when present, and the streamed body is cut off past the
+ * cap even when it lies or is absent - JSON.parse then never sees a body
+ * bigger than maxBytes. Callers without a cap keep today's behaviour; the
+ * collector's list reads are legitimately large and stay uncapped. */
+export async function getJson(
+  url: string,
+  maxBytes?: number,
+): Promise<{ ok: true; json: unknown } | DaemonFailure> {
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), DAEMON_TIMEOUT_MS);
   try {
     const res = await fetch(url, { signal: ctrl.signal });
     if (!res.ok) return { ok: false, kind: "http", status: res.status };
+    if (maxBytes === undefined) {
+      try {
+        return { ok: true, json: await res.json() };
+      } catch {
+        return { ok: false, kind: "parse" };
+      }
+    }
+    const declared = Number(res.headers.get("content-length") ?? "");
+    if (Number.isFinite(declared) && declared > maxBytes) {
+      return { ok: false, kind: "too-big" };
+    }
+    if (res.body === null) return { ok: false, kind: "parse" };
+    const reader = res.body.getReader();
+    const parts: Uint8Array[] = [];
+    let total = 0;
+    for (;;) {
+      const chunk = await reader.read();
+      if (chunk.done === true) break;
+      total += chunk.value.byteLength;
+      if (total > maxBytes) {
+        // Release the connection best-effort; the abort timer is the backstop.
+        await reader.cancel().catch(() => {});
+        return { ok: false, kind: "too-big" };
+      }
+      parts.push(chunk.value);
+    }
+    const buf = new Uint8Array(total);
+    let off = 0;
+    for (const p of parts) {
+      buf.set(p, off);
+      off += p.byteLength;
+    }
     try {
-      return { ok: true, json: await res.json() };
+      return { ok: true, json: JSON.parse(new TextDecoder().decode(buf)) };
     } catch {
       return { ok: false, kind: "parse" };
     }
@@ -266,4 +309,172 @@ export function matchesOutboxEntry(
   if (entry.destinationSession !== sessionName) return false;
   if (typeof entry.body !== "string" || trimTrailing(entry.body) !== trimTrailing(prompt)) return false;
   return deliveryInWindow(entry, nowIso);
+}
+
+/**
+ * O7 N5 (second security pass): is this exact prompt backed by OpenRig's
+ * delivery record? The writer's verification (ADR-0012 decision 2) as a
+ * yes/no: fetch the SENDER's newest outbox entries and find one whose
+ * destination is this seat, whose body equals this raw prompt (both
+ * trailing-trimmed) and whose delivery stamp is inside the 10-minute
+ * window. Any failure - no url, HTTP error, timeout, parse, no entry -
+ * answers false (fail closed: no record means not delivered).
+ */
+export async function outboxDelivered(
+  daemonUrl: string | undefined,
+  senderSession: string,
+  sessionName: string,
+  prompt: string,
+  nowIso: string,
+): Promise<boolean> {
+  const res = await fetchOutbox(daemonUrl, senderSession);
+  if (!res.ok) return false;
+  return res.entries.some((e) => matchesOutboxEntry(e, sessionName, prompt, nowIso));
+}
+
+/**
+ * O2 (ADR-0017 decision 7): the row view the claim-time pointer needs:
+ * tags + the summary field, capped. The daemon answers the same full
+ * document as `rig queue show`; only these fields leave this function -
+ * the body never does (it must never be shown, and the pointer's query is
+ * shown in the exact search call).
+ */
+/** O8 item 3 (R17): the pointer row read is capped so a huge body cannot
+ * make JSON.parse scale - the hook fails closed to ordinary recall past
+ * this size instead. 256 KB is far above any real row (the largest brief
+ * on this host is a few KB) and well inside the 1 s daemon budget. */
+const POINTER_ROW_MAX_BYTES = 256 * 1024;
+
+export async function fetchQueuePointerRow(
+  daemonUrl: string | undefined,
+  qitemId: string,
+): Promise<{ ok: true; sourceSession?: string; destinationSession: string; tags: string[]; summary: string; querySource: string } | DaemonFailure> {
+  if (daemonUrl === undefined || daemonUrl === "") return { ok: false, kind: "no-url" };
+  const r = await getJson(`${daemonUrl}/api/queue/${encodeURIComponent(qitemId)}`, POINTER_ROW_MAX_BYTES);
+  if (!r.ok) return r;
+  if (typeof r.json !== "object" || r.json === null) return { ok: false, kind: "parse" };
+  const doc = r.json as { sourceSession?: unknown; destinationSession?: unknown; tags?: unknown; summary?: unknown; body?: unknown };
+  const tags = Array.isArray(doc.tags) ? doc.tags.filter((t): t is string => typeof t === "string") : [];
+  // O2 (brief): the BODY is never read here. The shown search call carries
+  // the query, and body words must never be shown, so the query source is
+  // tags + the row's own summary field only (an empty summary means tags
+  // only; empty tags and empty summary means no pointer).
+  let summary = typeof doc.summary === "string" ? doc.summary.trim() : "";
+  if (summary.length > 200) summary = summary.slice(0, 200);
+  // O3 (brief item 5, architect 21:03Z): rows created without a summary
+  // fall back to the FIRST LINE of the body ("O2: the claim-time memory
+  // pointer") as the query source - the one place a body line is read,
+  // never logged, never stored, sanitised by the caller's sanitizeQuery.
+  // With a summary the body is not read at all.
+  let querySource = summary;
+  if (querySource === "" && typeof doc.body === "string") {
+    // O7 N3 (second security pass): never split() the whole body - a 150 MB
+    // one built a 75 M-element array (~2.6 s) and blew the synchronous
+    // hook's budget. Bound the read first: 400 chars, cut at the first
+    // newline, trim, cap 200. Output-identical to the old code (the cap
+    // lives inside the 400-char window). Honest scope (O8 item 3, R17
+    // note): this slice itself no longer scales with the body, but the
+    // WHOLE JSON was still parsed before reaching here (0.57 s at 80 MB).
+    // The response cap on the getJson above closes that: beyond 256 KB the
+    // read fails closed (kind too-big) before any parse.
+    const head = doc.body.slice(0, 400);
+    const nl = head.indexOf("\n");
+    const first = (nl === -1 ? head : head.slice(0, nl)).trim();
+    querySource = first.length > 200 ? first.slice(0, 200) : first;
+  }
+  return {
+    ok: true,
+    ...(typeof doc.sourceSession === "string" && doc.sourceSession !== ""
+      ? { sourceSession: doc.sourceSession }
+      : {}),
+    // O4 L3 (security pass on 90f2ae6): the pointer's addressee check needs
+    // the row's destination. "" (absent/odd) fails the bin's equality gate,
+    // so a row that does not name a seat gets no pointer - fail closed.
+    destinationSession: typeof doc.destinationSession === "string" ? doc.destinationSession.trim() : "",
+    tags,
+    summary,
+    querySource,
+  };
+}
+
+// O1 (ADR-0017 decision 1): the outcome collector's two read-only reads.
+// Live probe 2026-11-10 (0.7.2, read-only): GET /api/queue/list?state=done
+// &limit=2000 answers a PLAIN ARRAY of the FULL queue docs (body included,
+// claimedAt, closureReason, closureTarget, handedOffFrom/To present); the
+// rig is client-side from the destinationSession suffix (no rig= param -
+// probe: ?rig=... is ignored). GET /api/queue/<id>/transitions answers a
+// PLAIN ARRAY of {transitionId, qitemId, state, ts, closureReason,
+// closureTarget, actorSession, transitionNote}.
+
+/** Queue docs for a server-side state filter; plain array, full docs. */
+export async function fetchQueueListByState(
+  daemonUrl: string | undefined,
+  state: string,
+  limit = 5000,
+): Promise<{ ok: true; docs: Record<string, unknown>[] } | DaemonFailure> {
+  if (daemonUrl === undefined || daemonUrl === "") return { ok: false, kind: "no-url" };
+  const r = await getJson(
+    `${daemonUrl}/api/queue/list?state=${encodeURIComponent(state)}&limit=${limit}`,
+  );
+  if (!r.ok) return r;
+  if (!Array.isArray(r.json)) return { ok: false, kind: "parse" };
+  const docs = r.json.filter(
+    (e): e is Record<string, unknown> =>
+      typeof e === "object" && e !== null && typeof (e as Record<string, unknown>).qitemId === "string",
+  );
+  return { ok: true, docs };
+}
+
+/** Every queue doc, all states (probe 2026-11-10: no state param answers
+ * the full set; state=all matches nothing and must NOT be used). */
+export async function fetchQueueListAll(
+  daemonUrl: string | undefined,
+  limit = 5000,
+): Promise<{ ok: true; docs: Record<string, unknown>[] } | DaemonFailure> {
+  if (daemonUrl === undefined || daemonUrl === "") return { ok: false, kind: "no-url" };
+  const r = await getJson(`${daemonUrl}/api/queue/list?limit=${limit}`);
+  if (!r.ok) return r;
+  if (!Array.isArray(r.json)) return { ok: false, kind: "parse" };
+  const docs = r.json.filter(
+    (e): e is Record<string, unknown> =>
+      typeof e === "object" && e !== null && typeof (e as Record<string, unknown>).qitemId === "string",
+  );
+  return { ok: true, docs };
+}
+
+/** One item's append-only transition log, oldest first as answered. */
+export async function fetchTransitions(
+  daemonUrl: string | undefined,
+  qitemId: string,
+): Promise<{ ok: true; transitions: Record<string, unknown>[] } | DaemonFailure> {
+  if (daemonUrl === undefined || daemonUrl === "") return { ok: false, kind: "no-url" };
+  const r = await getJson(`${daemonUrl}/api/queue/${encodeURIComponent(qitemId)}/transitions`);
+  if (!r.ok) return r;
+  if (!Array.isArray(r.json)) return { ok: false, kind: "parse" };
+  const transitions = r.json.filter(
+    (e): e is Record<string, unknown> => typeof e === "object" && e !== null,
+  );
+  return { ok: true, transitions };
+}
+
+/** O1/ADR-0017 decision 6: the seat's current in-progress qitem id, or null
+ * when none or unknown. One state-filtered call; callers cache. Never
+ * throws; a failure is just "unknown" (null). */
+export async function fetchCurrentItem(
+  daemonUrl: string | undefined,
+  sessionName: string,
+): Promise<string | null> {
+  if (daemonUrl === undefined || daemonUrl === "") return null;
+  const r = await getJson(
+    `${daemonUrl}/api/queue/list?destination=${encodeURIComponent(sessionName)}&state=in-progress`,
+  );
+  if (!r.ok || !Array.isArray(r.json)) return null;
+  for (const e of r.json) {
+    if (typeof e !== "object" || e === null) continue;
+    const d = e as Record<string, unknown>;
+    if (d.destinationSession !== sessionName) continue;
+    if (d.state !== "in-progress") continue;
+    if (typeof d.qitemId === "string" && d.qitemId !== "") return d.qitemId;
+  }
+  return null;
 }

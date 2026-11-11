@@ -171,6 +171,51 @@ describe("codex install: create, idempotence, uninstall", () => {
     expect(backupNames(dir).length).toBe(2);
   });
 
+  // O3 item 3 (ADR-0017): the Codex install accepts the same holdout setting
+  // as the Claude install (one FLAG_ENV name for both harnesses), writes it
+  // to the seat's settings file, and a reinstall keeps it. loadConfig's own
+  // 0..0.9 rule is the installer's validator.
+  test("O6 F-E: a reinstall WITHOUT --leader drops it; only the holdout carries, and says so", async () => {
+    const { dir, env } = mkSeat();
+    const r1 = await run(dir, [...CODEX_INSTALL, "--leader", "lead_x", "--recall-holdout", "0.4"], env);
+    expect(r1.code).toBe(0);
+    expect(readJson(SETTINGS(dir)).HONCHO_LEADER_PEER).toBe("lead_x");
+    const r2 = await run(dir, CODEX_INSTALL, env); // revocation reinstall: no flags
+    expect(r2.code).toBe(0);
+    const s = readJson(SETTINGS(dir));
+    expect(s.HONCHO_LEADER_PEER).toBeUndefined(); // the revocation now bites
+    expect(s.HONCHO_RECALL_HOLDOUT).toBe("0.4"); // F-E: holdout-only carry-over
+    expect(s.HONCHO_URL).toBe(URL_);
+    expect(s.HONCHO_WORKSPACE).toBe(WS);
+    expect(r2.all).toContain("holdout kept across reinstall: 0.4"); // one output line
+  });
+
+  test("O3 item 3: --recall-holdout lands in settings.json, a reinstall keeps it, a bad share refuses", async () => {
+    const { dir, env } = mkSeat();
+    const withHold = [...CODEX_INSTALL, "--recall-holdout", "0.5"];
+    const held = { HONCHO_RECALL_HOLDOUT: "0.5", HONCHO_URL: URL_, HONCHO_WORKSPACE: WS };
+    const r1 = await run(dir, withHold, env);
+    expect(r1.code, r1.all).toBe(0);
+    expect(readJson(SETTINGS(dir))).toEqual(held);
+    // reinstall WITHOUT the flag: the holdout is ours, it is kept
+    const r2 = await run(dir, CODEX_INSTALL, env);
+    expect(r2.code, r2.all).toBe(0);
+    expect(readJson(SETTINGS(dir))).toEqual(held);
+    // reinstall WITH a new value: the flag wins
+    const r3 = await run(dir, [...CODEX_INSTALL, "--recall-holdout", "0.2"], env);
+    expect(r3.code, r3.all).toBe(0);
+    expect(readJson(SETTINGS(dir))).toEqual({ ...held, HONCHO_RECALL_HOLDOUT: "0.2" });
+    // an out-of-range share is loadConfig's refusal, zero writes
+    const before = readFileSync(SETTINGS(dir), "utf8");
+    const r4 = await run(dir, [...CODEX_INSTALL, "--recall-holdout", "0.95"], env);
+    expect(r4.code).toBe(1);
+    expect(r4.all).toContain("refusing bad input");
+    expect(readFileSync(SETTINGS(dir), "utf8")).toBe(before);
+    // uninstall removes the whole settings file, the holdout with it
+    expect((await run(dir, ["--harness", "codex", "--uninstall"], env)).code).toBe(0);
+    expect(existsSync(SETTINGS(dir))).toBe(false);
+  });
+
   test("F8: uninstall of a created config.toml leaves a backup - bytes typed inside our block survive", async () => {
     const { dir, env } = mkSeat();
     expect((await run(dir, CODEX_INSTALL, env)).code).toBe(0);

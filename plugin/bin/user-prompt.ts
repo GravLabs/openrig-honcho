@@ -6,12 +6,16 @@
 import type { Config } from "../src/env.ts";
 import { isKillSwitch, loadConfig } from "../src/env.ts";
 import { createClient } from "../src/honcho.ts";
-import { bindEventFields, logConfigProblem, logEvent } from "../src/log.ts";
+import { bindEventFields, errorClassFrom, logConfigProblem, logEvent } from "../src/log.ts";
+// F-G (O6, R15 Part 2): the claim-time pointer MOVED to the synchronous
+// recall.ts - async stdout cannot reach the turn (ADR-0001's I/O table;
+// Codex aborts async hook tasks at shutdown). This hook writes and logs
+// only and prints NOTHING.
 import { takeOnce } from "../src/once.ts";
 import { recordPrompt } from "../src/writer.ts";
 // C2 (ADR-0016): shared stdin seam. UserPromptSubmit carries the same fields
 // on both harnesses (probe C1 §1); --harness is accepted and needs no mapping
-// here.
+// here. F-G: writeHookJson left with the pointer (nothing printed anymore).
 import { readStdin, resolveHarness } from "../src/harness.ts";
 import { harnessUnknownWithSettings, readSettingsFile } from "../src/settings.ts";
 
@@ -85,6 +89,8 @@ async function main(): Promise<void> {
       cfg,
       { client, now: () => new Date().toISOString() },
     );
+    // F-G: the pointer branch lived here; it moved to the synchronous
+    // recall.ts, where its output can actually reach the turn.
     // on the contained-exception path recordPrompt already wrote this run's
     // single event; do not double-log it here.
     // T14b-2 (ADR-0009): a not-recorded attribution skip is correct behaviour,

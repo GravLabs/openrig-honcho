@@ -304,11 +304,14 @@ Each hook run adds one JSON line to `<state dir>/log/<workspace>.log` (the state
 dir is `HONCHO_STATE_DIR`, default `~/.openrig-honcho`; rotated at 5 MB, 3
 kept): hook, peer, event, ok, duration and counts, never content.
 
+The first tool call after a pause can take about a second while the seat's
+current item is looked up.
+
 | Hook | Normal events | Error events (`ok: false`) |
 |---|---|---|
 | `session-start` | `startup`, `resume`, `clear`, `compact` (the source) | `stdin-invalid`, `unknown-source`, `unexpected` |
 | `user-prompt` | `sent`, `spooled` (held for later), `not-recorded` (automation or harness text), `empty` | `stdin-invalid`, `refused`, `profile-unexpected`, `unexpected` |
-| `recall` | `injected`, `empty`, `not-peer`, `not-rig` (a seat of another rig), `terse` (a bare acknowledgement) | `timeout`, `error` |
+| `recall` | `injected`, `empty`, `pointer` (a queue hand-off answered with the claim pointer), `not-peer`, `not-rig` (a seat of another rig), `terse` (a bare acknowledgement) | `timeout`, `error` |
 | `stop` | `sent`, `spooled`, `duplicate segment` (a reply already stored) | `stdin-invalid`, `unexpected` |
 | `mcp` | `tool:<name>`, e.g. `tool:search` | `refused` |
 | any hook | `duplicate-run`: a second copy of the same hook for the same event, which means two installs register the hooks | |
@@ -322,11 +325,47 @@ Fields beside the event:
   `considered`, `dropped_context`, `dropped_dup`, `dropped_trivia` and
   `query_chars`.
 
+- **`recall`, queue hand-offs:** `pointer` is `shown` or `none`, with
+  `n_items` and the queue item id, on its own `pointer` event line; only a
+  hand-off from this rig's daemon whose row names this seat gets one. When
+  the holdout holds such a hand-off, there is no pointer line - the hand-off
+  gets its ordinary recall line (shown, empty or timeout) carrying
+  `pointer=held`, so held hand-offs stay countable. `none` may carry
+  `error_class` (`timeout` when the row read or search ran out of its
+  budget). Older releases logged the pointer on the `user-prompt` line
+  instead, where `pointer_skip` said why none was shown (`unverified`,
+  `not_for_seat`); those old lines still read correctly.
+- **`mcp`:** the seat's session and, when it has one, its current queue item.
+
 `status` (the tool, or `bin/status.ts --json`) exits 1 when something is wrong:
 - the server is unreachable;
 - the held-message spool is over 80% full;
 - the server version is not the tested one;
 - the plugin is off.
+
+## Outcomes
+
+To see what happened to the rig's queue work, and what memory each seat used
+while doing it, run the collector:
+
+```bash
+bun run <plugin>/bin/outcomes.ts --rig <rig name> --workspace <workspace>
+```
+
+It reads the rig's closed queue rows from the OpenRig daemon, read-only, and adds
+one line per row to `<state dir>/outcomes/<workspace>.jsonl` (folder 0700, file
+0600). A record holds ids, seat names, tags, times, how the row closed, follow-on
+rows, and counts of the destination seat's memory use between claim and close:
+digests, recall shown or held, `search`, `ask`, `remember` and `retire`. It never
+holds a row's body or summary, or any prompt. Running it again adds only new rows,
+and `--rebuild` rewrites the file identically from the same inputs. It never talks
+to Honcho. It prints a short summary per seat: items closed, the median time from
+claim to close, the share closed denied, failed or canceled, rows with follow-ons,
+and the share of items where the seat searched. `status` shows when it last ran.
+
+With `HONCHO_RECALL_HOLDOUT` above 0, compare the held and shown arms to see
+whether memory changed the work. For a Codex seat, pass `--recall-holdout` to the
+Codex install.
 
 ## Troubleshooting
 

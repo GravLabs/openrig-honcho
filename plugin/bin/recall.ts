@@ -19,11 +19,23 @@
 // value or unset is on. It lives here, not in env.ts Config: the flag means
 // nothing to any other hook, and Config is the shared contract every hook
 // fixture builds.
-import { attribute } from "../src/attribute.ts";
+import { attribute, stripLeadingReminders } from "../src/attribute.ts";
 import type { Config } from "../src/env.ts";
 import { isKillSwitch, loadConfig } from "../src/env.ts";
+import { fetchQueuePointerRow, outboxDelivered } from "../src/daemon.ts";
+import { parseEnvelope } from "../src/envelope.ts";
 import { appendHeld, heldPath } from "../src/held.ts";
 import { createClient } from "../src/honcho.ts";
+// O2/F-G (ADR-0017): the claim-time pointer, moved to THIS synchronous hook
+// (the async writer's stdout cannot reach the turn).
+import { searchSnapshot } from "../src/mcp.ts";
+import { qitemIdFromNudge } from "../src/nudge.ts";
+import {
+  POINTER_BUDGET_MS,
+  pointerArm,
+  pointerBlock,
+  pointerQuery,
+} from "../src/pointer.ts";
 import { bindEventFields, errorClassFrom, logConfigProblem, logEvent } from "../src/log.ts";
 import { normalizeMission, readRigMission, readSeatState, seatStatePath } from "../src/missions.ts";
 import { takeOnce } from "../src/once.ts";
@@ -109,6 +121,69 @@ function writeSeen(file: string, state: { session: string; ids: string[]; hashes
   renameSync(tmp, file);
 }
 
+/** The shown-arm search shared by both F-K drivers (the peer-path join and
+ * the skip-path attempt). Every silent outcome logs one pointer=none line;
+ * a real block prints the block plus the pointer=shown line. With
+ * silentExit=true (the skip path) there is NO recall to fall back to, so
+ * even a thrown search ends the run after its none line; with
+ * silentExit=false (the peer join) a thrown search logs and RETURNS so
+ * ordinary recall still renders - the pointer never silences memory. */
+async function pointerSearchExit(
+  c: Config,
+  nudgeId: string,
+  querySource: string,
+  tN: number,
+  t0: number,
+  logP: (over: Record<string, unknown>) => void,
+  silentExit: boolean,
+): Promise<void> {
+  const pQuery = pointerQuery(querySource);
+  if (pQuery === "") {
+    logP({});
+    process.exit(0);
+  }
+  const rem = POINTER_BUDGET_MS - (Date.now() - tN);
+  if (rem <= 50) {
+    // the row fetch already spent the wall: silence, never a delay
+    // past the budget (the reviewer's exit-wall pin).
+    logP({ error_class: "timeout" });
+    process.exit(0);
+  }
+  try {
+    const pClient = createClient({
+      url: c.url,
+      workspace: c.workspace,
+      apiKey: c.apiKey,
+      timeoutMs: c.timeoutMs,
+    });
+    const snap = await searchSnapshot(pClient, c, pQuery, undefined, rem);
+    if (snap.unfinished === snap.total) {
+      logP({ ...(snap.wallHit ? { error_class: "timeout" } : {}) });
+      process.exit(0);
+    }
+    const count = snap.memories.length + snap.messages.length;
+    const text = pointerBlock(pQuery, count, [...snap.memories, ...snap.messages]);
+    if (text === "") {
+      logP({ n_items: count });
+      process.exit(0);
+    }
+    writeHookJson("UserPromptSubmit", text);
+    logEvent(c, {
+      hook: "recall",
+      event: "pointer",
+      ok: true,
+      ms: Date.now() - t0,
+      pointer: "shown",
+      n_items: count,
+      qitem: nudgeId,
+    });
+    process.exit(0);
+  } catch {
+    logP({ error_class: "other" });
+    if (silentExit) process.exit(0);
+  }
+}
+
 async function main(): Promise<void> {
   const t0 = Date.now();
   // C2b (review F3): the flag; C4 (review F2): the harness selects which
@@ -182,14 +257,139 @@ async function main(): Promise<void> {
       },
     });
     const sender = recallSender(attr, cfg.peer);
+    // F-K (O8, R17) + F-G (O6, R15 Part 2, architect ruling 08:18Z).
+    // What F-K changed is the ARM SUBJECT only: a prompt is a pointer
+    // subject when the nudge BODY matches, whatever the sender kind. R17
+    // read the real hand-off shapes off this host's outbox - From: <the
+    // writing seat> (kind=peer, and kind=peer sameRig=false when the rig
+    // names differ) and From: daemon@kernel (kind=skip) - and the old gate
+    // demanded kind=automation or a peer literally named "daemon", so with
+    // the shipped default the pointer armed for NEITHER shape: inert for
+    // every ordinary hand-off. The safety is the four network gates, not
+    // the sender kind: the daemon answered the row, the row's
+    // destinationSession is exactly this seat, the delivery record matches
+    // this exact prompt (N5), and the holdout coin says shown. F-G is
+    // unchanged: the pointer's output rides the SYNCHRONOUS line (async
+    // stdout cannot reach the turn) and every non-shown case keeps today's
+    // line byte-exact. Both arms read the row (09:55Z: held needs the
+    // gates to mark its line - a line carries pointer=shown, held or
+    // none); the marker is gated on the four gates, the route on shown
+    // too. (c) On the peer path the row fetch runs IN PARALLEL with
+    // recall's own fetch - recall never waits on the daemon (ADR-0012
+    // decision 4) - and whichever of the row verdict and the fetch phase
+    // lands first decides, so the worst case stays at today's
+    // FETCH_BUDGET_MS wall and a hanging daemon can never add its timeout
+    // in series; the retrieval, when the pointer owns the prompt, is the
+    // same searchSnapshot the shown search(...) call performs, under one
+    // POINTER_BUDGET_MS wall shared with the row fetch (getJson caps
+    // itself at 1 s); silence on every non-shown outcome.
+    const pSession = typeof input.session_id === "string" ? input.session_id : "";
+    const pPrompt = typeof input.prompt === "string" ? input.prompt : "";
+    const nudgeHeader = parseEnvelope(stripLeadingReminders(pPrompt));
+    // kind=skip carries no content (attribute.ts union): its nudge body is
+    // inside the envelope and only parseEnvelope can see it. For every
+    // other kind attr.content already IS that body, and NUDGE_RE anchors
+    // at ^, so a quoted or forwarded nudge (VF1) still misses it - an
+    // accidental mention of the nudge text cannot arm the pointer.
+    const nudgeId = qitemIdFromNudge(
+      attr.kind === "skip" ? (nudgeHeader?.body ?? "") : attr.content,
+    );
+    const pointerSubject = nudgeId !== null;
+    const pointerArmNow =
+      pointerArm(pSession, pPrompt, cfg.recallHoldout ?? 0) === "shown" ? "shown" : "held";
+    let heldMarker = false; // set when a held hand-off's own line must carry the arm
+    const tN = Date.now();
+    const rowP =
+      pointerSubject && nudgeId !== null
+        ? Promise.race([
+            fetchQueuePointerRow(cfg.daemonUrl, nudgeId),
+            // belt and braces: getJson caps at DAEMON_TIMEOUT_MS, this caps
+            // the whole read so neither pointer driver below can outlive
+            // the budget
+            new Promise<null>((resolve) => {
+              setTimeout(() => resolve(null), POINTER_BUDGET_MS);
+            }),
+          ])
+        : null;
+    // N5 (O7, second security pass): the nudge body and the row addressee
+    // are not OpenRig's DELIVERY record. The fourth gate is the writer's own
+    // outbox match (ADR-0012 decision 2) against this exact prompt, fetched
+    // IN PARALLEL with the row read (and, on the peer path, with recall's
+    // fetches) - the sender is the envelope's own From. Self-capped like
+    // rowP (a hung daemon adds nothing in series); unanswered or no match
+    // means the ordinary line for BOTH arms (ruling (b) shape, and the held
+    // marker stays honest: an unproven hand-off is not marked as one).
+    const nudgeHeaderFrom = nudgeHeader?.from;
+    const outboxP =
+      pointerSubject && cfg.daemonUrl !== undefined && nudgeHeaderFrom !== undefined
+        ? Promise.race([
+            outboxDelivered(
+              cfg.daemonUrl,
+              nudgeHeaderFrom,
+              cfg.sessionName,
+              pPrompt,
+              new Date().toISOString(),
+            ),
+            new Promise<false>((resolve) => {
+              setTimeout(() => resolve(false), POINTER_BUDGET_MS);
+            }),
+          ])
+        : null;
     if (sender === null) {
-      // not a same-rig peer message: no network at all (the writer records
+      // not a same-rig peer message: no recall network (the writer records
       // it). ADR-0011 decision 3: another rig logs its own reason.
+      // F-K (O8): BOTH real hand-off shapes arrive HERE - a daemon wake or
+      // system envelope is kind=skip, and a seat hand-off whose rig differs
+      // from cfg.rig is kind=peer sameRig=false (the dev-review probe arm;
+      // the same-rig seat hand-off takes the peer join below instead). So
+      // the pointer gets its chance BEFORE the skip exit, same four gates,
+      // same single POINTER budget, still one event per run:
+      // - every gate + shown arm + a real block: the pointer line REPLACES
+      //   the skip line and the block prints;
+      // - every gate + held arm: the skip line UNCHANGED plus pointer=held
+      //   (O6 09:55Z: the marker rides the line this run produces; the
+      //   asymmetry vs the peer path - where the held arm still renders
+      //   ordinary recall - is inherent: there is no recall on this path);
+      // - any gate failing (row silent or unreadable, another addressee, no
+      //   delivery record): today's skip line byte-for-byte, no marker.
+      const c = cfg;
+      const skipEvent = recallSkip(attr, c.peer) ?? "not-peer";
+      const logSkipPointer = (over: Record<string, unknown>): void => {
+        logEvent(c, {
+          hook: "recall",
+          event: "pointer",
+          ok: true,
+          ms: Date.now() - t0,
+          pointer: "none",
+          n_items: 0,
+          qitem: nudgeId,
+          ...over,
+        });
+      };
+      let heldSkip = false;
+      if (rowP !== null && nudgeId !== null) {
+        const r = await rowP;
+        if (r !== null && r.ok && r.destinationSession === c.sessionName) {
+          const delivered = outboxP !== null && (await outboxP);
+          if (delivered) {
+            if (pointerArmNow === "held") {
+              heldSkip = true;
+            } else {
+              // every gate + shown: the pointer owns this run, shown or
+              // silent. There is no recall here to fall back to, so even a
+              // thrown search ends with this run's one pointer line.
+              await pointerSearchExit(c, nudgeId, r.querySource, tN, t0, logSkipPointer, true);
+              process.exit(0); // pointerSearchExit always exits; TS signpost
+            }
+          }
+        }
+      }
       logEvent(cfg, {
         hook: "recall",
-        event: recallSkip(attr, cfg.peer) ?? "not-peer",
+        event: skipEvent,
         ok: true,
         ms: Date.now() - t0,
+        ...(heldSkip ? { pointer: "held" } : {}),
       });
       process.exit(0);
     }
@@ -238,6 +438,67 @@ async function main(): Promise<void> {
         });
       }),
     );
+    // The fetch wall starts with the fetches (a few ms before the novelty
+    // scan now, same absolute deadline for the render race below).
+    const wallP = new Promise<typeof BUDGET>((resolve) => {
+      setTimeout(() => resolve(BUDGET), FETCH_BUDGET_MS);
+    });
+    if (rowP !== null) {
+      // Choose at the end, part 1 (ruling (c)): the row verdict races the
+      // recall fetches. If the fetches answer first the pointer forfeits
+      // this prompt - the pending row read dies with the process, so a
+      // hanging daemon is free of charge to today's path.
+      const winner = await Promise.race([
+        rowP.then((r) => ({ kind: "row" as const, r })),
+        allDone.then(() => ({ kind: "recall" as const, r: null })),
+      ]);
+      const c = cfg;
+      const logP = (over: Record<string, unknown>): void => {
+        logEvent(c, {
+          hook: "recall",
+          event: "pointer",
+          ok: true,
+          ms: Date.now() - t0,
+          pointer: "none",
+          n_items: 0,
+          qitem: nudgeId,
+          ...over,
+        });
+      };
+      if (
+        winner.kind === "row" &&
+        winner.r !== null &&
+        nudgeId !== null &&
+        winner.r.ok &&
+        winner.r.destinationSession === c.sessionName
+      ) {
+        // N5: the row's three gates passed; the fourth is the delivery
+        // record. outboxP started with rowP, so this await is at most the
+        // remaining headroom of the one POINTER wall, never a serial hop.
+        const delivered = outboxP !== null && (await outboxP);
+        if (!delivered) {
+          // No record, a mismatch, or the daemon did not answer in time:
+          // today's recall below, unchanged, with NO marker on this run's
+          // line (rulings 08:18Z(b) + 09:55Z read through N5).
+        } else if (pointerArmNow === "held") {
+          // (b) + 09:55Z: three gates passed and the coin held. Ordinary
+          // recall renders unchanged; THIS run's line gets pointer=held so
+          // the outcome log can separate held hand-offs from everything
+          // else. No separate pointer line - one prompt, one line.
+          heldMarker = true;
+        } else {
+          // every gate passed including the shown arm: the pointer owns
+          // this prompt - shown or silent, today's recall is not rendered
+          // (its requests, if any are still in flight, die with this
+          // exit). A thrown search logs its none line and RETURNS: today's
+          // recall, if it answered, still renders (the pointer must never
+          // silence memory).
+          await pointerSearchExit(c, nudgeId, winner.r.querySource, tN, t0, logP, false);
+        }
+      }
+      // row unreadable, absent, answered for another seat, or the pointer
+      // search threw: today's recall below, unchanged (ruling (b)).
+    }
     // T19c (ADR-0014 decision 4): the novelty filter's known set, built
     // while the three queries above are already in flight (the row: the
     // read+scan stays out of the network path). The LAST 1 MB (TAIL_BYTES) of the
@@ -268,19 +529,14 @@ async function main(): Promise<void> {
         knownTerms = knownTermsFromTranscript(tail ?? "", attr.content);
       }
     }
-    const raced = await Promise.race([
-      allDone,
-      new Promise<typeof BUDGET>((resolve) => {
-        setTimeout(() => resolve(BUDGET), FETCH_BUDGET_MS);
-      }),
-    ]);
+    const raced = await Promise.race([allDone, wallP]);
     const wallHit = raced === BUDGET;
     const finished = results.filter(
       (r): r is NonNullable<(typeof results)[number]> => r !== undefined,
     );
     if (wallHit && finished.length === 0) {
       // the abandoned requests die with this process (session-start.ts note)
-      logEvent(cfg, { hook: "recall", event: "timeout", ok: false, ms: Date.now() - t0, bytes: 0, n_items: 0, error_class: "timeout", query_chars: queryChars, partial: pairs.length });
+      logEvent(cfg, { hook: "recall", event: "timeout", ok: false, ms: Date.now() - t0, bytes: 0, n_items: 0, error_class: "timeout", query_chars: queryChars, partial: pairs.length, ...(heldMarker ? { pointer: "held" } : {}) });
       process.exit(0);
     }
     const failed = finished.find((r) => !r.ok);
@@ -350,7 +606,7 @@ async function main(): Promise<void> {
     };
     if (view.text === "") {
       // nothing new to show (or nothing came back): silence
-      logEvent(cfg, { hook: "recall", event: "empty", ok: true, ms: Date.now() - t0, bytes: 0, n_items: 0, ...counts });
+      logEvent(cfg, { hook: "recall", event: "empty", ok: true, ms: Date.now() - t0, bytes: 0, n_items: 0, ...counts, ...(heldMarker ? { pointer: "held" } : {}) });
       process.exit(0);
     }
     // T18b (ADR-0013 decision 2): the deterministic arm. sha256 over the
@@ -402,6 +658,7 @@ async function main(): Promise<void> {
       n_items: view.ids.length,
       ...counts,
       ...(holdout > 0 ? { arm } : {}),
+      ...(heldMarker ? { pointer: "held" } : {}),
     });
   } catch {
     if (cfg !== null) {

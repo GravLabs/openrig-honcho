@@ -360,3 +360,72 @@ describe("C5l3 F20: a refusal inside the staged apply leaves no temps behind", (
     expect(readFileSync(userCfg(codexHome), "utf8")).toBe(original);
   });
 });
+
+// O7 N4 (second security pass): the reinstall carry-over trusted whatever
+// HONCHO_RECALL_HOLDOUT the old settings file held and PRINTED IT RAW - a
+// hand-edited or corrupted value (ANSI escapes included) rode into every
+// later reinstall's output. The carry-over now applies loadConfig's own
+// rule (env.ts: ^\d+(\.\d+)?$ and 0..0.9): carry the PARSED number or drop
+// it saying "holdout dropped (invalid)" - the raw stored string is never
+// printed.
+describe("O7 N4: the holdout carry-over validates before carrying", () => {
+  const esc = String.fromCharCode(27);
+  const bel = String.fromCharCode(7);
+  test("garbage carry-over: dropped, said so, and the raw value never printed", async () => {
+    const dir = makeTempDir("o7n4-");
+    const { codexHome, env } = mkHome();
+    const r1 = await run(dir, [...CODEX_INSTALL, "--leader", "lead_x", "--recall-holdout", "0.4"], env);
+    expect(r1.code).toBe(0);
+    // a later hand edit (or another same-user process) leaves a bad holdout
+    const s = readJson(SETTINGS(dir));
+    s.HONCHO_RECALL_HOLDOUT = `0.4${esc}[2J${esc}]0;x${bel} nope-CANARY`;
+    writeFileSync(SETTINGS(dir), JSON.stringify(s));
+    const r2 = await run(dir, CODEX_INSTALL, env);
+    expect(r2.code).toBe(0);
+    expect(r2.all).toContain("holdout dropped (invalid)");
+    expect(r2.all).not.toContain("nope-CANARY"); // never printed raw
+    expect(r2.all).not.toContain(esc); // no escape ever reaches the terminal
+    expect(r2.all).not.toContain("holdout kept");
+    const after = readJson(SETTINGS(dir));
+    expect(after.HONCHO_RECALL_HOLDOUT).toBeUndefined(); // dropped, not carried
+    expect(after.HONCHO_LEADER_PEER).toBeUndefined(); // F-E stays: no --leader, revoked
+    void codexHome;
+  });
+  test("out-of-range hand edit (0.95): dropped, not carried", async () => {
+    const dir = makeTempDir("o7n4r-");
+    const { codexHome, env } = mkHome();
+    expect((await run(dir, [...CODEX_INSTALL, "--recall-holdout", "0.4"], env)).code).toBe(0);
+    const s = readJson(SETTINGS(dir));
+    s.HONCHO_RECALL_HOLDOUT = "0.95";
+    writeFileSync(SETTINGS(dir), JSON.stringify(s));
+    const r2 = await run(dir, CODEX_INSTALL, env);
+    expect(r2.all).toContain("holdout dropped (invalid)");
+    expect(readJson(SETTINGS(dir)).HONCHO_RECALL_HOLDOUT).toBeUndefined();
+    void codexHome;
+  });
+  test(`valid non-canonical carry-over ("0.40"): kept as the parsed number`, async () => {
+    const dir = makeTempDir("o7n4c-");
+    const { codexHome, env } = mkHome();
+    expect((await run(dir, [...CODEX_INSTALL, "--recall-holdout", "0.4"], env)).code).toBe(0);
+    const s = readJson(SETTINGS(dir));
+    s.HONCHO_RECALL_HOLDOUT = "0.40";
+    writeFileSync(SETTINGS(dir), JSON.stringify(s));
+    const r2 = await run(dir, CODEX_INSTALL, env);
+    expect(r2.all).toContain("holdout kept across reinstall: 0.4"); // parsed, not "0.40"
+    expect(readJson(SETTINGS(dir)).HONCHO_RECALL_HOLDOUT).toBe("0.4");
+    void codexHome;
+  });
+  test("zero carry-over is valid: kept and printed as 0; an explicit flag still wins", async () => {
+    const dir = makeTempDir("o7n4z-");
+    const { codexHome, env } = mkHome();
+    expect((await run(dir, [...CODEX_INSTALL, "--recall-holdout", "0"], env)).code).toBe(0);
+    const r2 = await run(dir, CODEX_INSTALL, env);
+    expect(r2.all).toContain("holdout kept across reinstall: 0");
+    expect(readJson(SETTINGS(dir)).HONCHO_RECALL_HOLDOUT).toBe("0");
+    const r3 = await run(dir, [...CODEX_INSTALL, "--recall-holdout", "0.6"], env);
+    expect(r3.code).toBe(0);
+    expect(r3.all).not.toContain("holdout"); // flag set: no carry-over line
+    expect(readJson(SETTINGS(dir)).HONCHO_RECALL_HOLDOUT).toBe("0.6");
+    void codexHome;
+  });
+});

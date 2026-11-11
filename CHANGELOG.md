@@ -1,5 +1,33 @@
 # Changelog
 
+## v0.5.0 (2026-11-11)
+
+Measure whether memory helps, and get seats to look things up themselves (ADR-0017).
+
+- **Outcome log.** `bin/outcomes.ts --rig <name>` writes one record per closed
+  queue row, taken from OpenRig's own queue: claim and close times, how the row
+  closed, follow-on rows, and the destination seat's memory use while it worked
+  (digest, recall shown or held, `search`, `ask`, `remember`, `retire`). It holds
+  ids, times and counts only, never message text. It stays in a local file,
+  readable only by its owner, that can be rebuilt from scratch, and nothing is
+  sent to Honcho. `status` reports when it last ran.
+- **A pointer when a seat picks up work.** On a queue hand-off, the seat sees up to
+  three lines: how many related items memory holds, the titles of the top two, and
+  the exact `search(...)` call to see more. If nothing is related, nothing is shown.
+  It is held back for the same share of prompts as recall, so its effect can be
+  measured.
+- **The digest and the skill point to search.** After context loss, the digest ends
+  with the search call for the seat's open item. The skill now starts with "search
+  first when you start a queue item", and is shorter.
+- **Codex seats can be measured too.** `--recall-holdout` now works for the Codex
+  install.
+- **Security.** Search text built from queue rows is redacted first, and
+  invisible, bidirectional and control characters are stripped from everything
+  the pointer shows. A pointer shows only for a verified hand-off addressed to
+  this seat. The collector accepts only well-formed seat names and never prints
+  control characters. Digest titles from queue rows get the same treatment.
+  GitHub and GitLab tokens are now masked by their prefixes, however short.
+
 ## v0.4.1 (2026-11-10)
 
 Security fixes for the Codex install, from an independent security review of v0.4.0.

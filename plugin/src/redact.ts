@@ -95,6 +95,28 @@ export function redact(text: string): Redacted {
       "jwt",
       counts,
     );
+    // 3b. gittoken (O6 N-B, R15; tightened by O7 N2/N1 on the second
+    // security pass). The O6 rule had no word boundary and a 6-char body,
+    // so ordinary identifiers were masked in everything stored
+    // ("highp_precision" -> hi[REDACTED:gittoken]). \b kills the substring
+    // hits (ghp_ inside highp_, laughp_); the bodies carry the REAL minimum
+    // lengths (classic PAT 36, fine-grained PAT 50, GitLab 20). The GitLab
+    // family is complete (pat/dt/rt/ptt/soat/ft/imt/agent) and its alphabet
+    // includes the dash. O8 F-J (R17): a greedy GitHub body spans a glued
+    // SECOND GitHub body (its alphabet has no dash) but STOPS at a glued
+    // GitLab dash, leaving the GitLab body in the clear. The two glued
+    // alternatives in front pair a NON-GREEDY minimum GitHub body with a
+    // REQUIRED GitLab token: an optional tail would never be tried (the
+    // greedy body wins with it empty), a required one forces the body back
+    // to its minimum so the pair masks as one label. A glued GitLab token
+    // BEFORE a GitHub one was already safe - the GitLab alphabet spans the
+    // second prefix.
+    text = replaceOnce(
+      text,
+      /\b(?:gh[pousr]_[A-Za-z0-9_]{36,}?gl(?:pat|dt|rt|ptt|soat|ft|imt|agent)-[A-Za-z0-9_-]{20,}|github_pat_[A-Za-z0-9_]{50,}?gl(?:pat|dt|rt|ptt|soat|ft|imt|agent)-[A-Za-z0-9_-]{20,}|gh[pousr]_[A-Za-z0-9_]{36,}|github_pat_[A-Za-z0-9_]{50,}|gl(?:pat|dt|rt|ptt|soat|ft|imt|agent)-[A-Za-z0-9_-]{20,})/g,
+      "gittoken",
+      counts,
+    );
     // 4. bearer - label included in the replacement (not a keep-name kind).
     // ADR 70ee11e: "Authorization: Basic" is covered too; a bare "basic "
     // is deliberately NOT an alternative, only a bare "bearer ".

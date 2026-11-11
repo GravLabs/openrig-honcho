@@ -143,7 +143,7 @@ is made on evidence, by running other stores through the same tests.
 flowchart LR
   V3["v0.3: resume and trust<br/>ledger, digest, quieter recall,<br/>routine messages skipped, scenario tests"]
   V4["v0.4: Codex seats<br/>same memory as Claude seats"]
-  V5["v0.5: capture and deliver<br/>outcome log, lessons in seat lore,<br/>lessons before risky actions, trust classes,<br/>local checkpoints"]
+  V5["v0.5: capture and deliver<br/>outcome log and pull at claim first,<br/>then lessons in seat lore,<br/>lessons before risky actions, trust classes,<br/>local checkpoints"]
   V6["v0.6: learn safely<br/>proposed lessons, promotion gate,<br/>attack tests, store decision"]
   V7["v0.7: self-tuning<br/>under the same gate"]
   ST["Store test run:<br/>Caura, Hindsight, Graphiti, MemOS"]

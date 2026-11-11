@@ -13,6 +13,7 @@ import { loadConfig, type Config } from "../../plugin/src/env.ts";
 import { createClient } from "../../plugin/src/honcho.ts";
 import { readSeatState, seatStatePath } from "../../plugin/src/missions.ts";
 import { buildInjection, type ContinuityStats, type ReaderDeps } from "../../plugin/src/reader.ts";
+import { renderContinuity } from "../../plugin/src/inject.ts";
 import { fetchOpenWork } from "../../plugin/src/daemon.ts";
 import { LEDGER_PEER } from "../../plugin/src/ledger.ts";
 import { startFakeHoncho, type FakeHoncho } from "../support/fake-honcho.ts";
@@ -235,7 +236,11 @@ describe("T19b digest build", () => {
       expect(appSlice).toContain("d-cafe0001, approval");
       expect(appSlice).toContain("Ship the pilot build");
       expect(text).toContain("Owns the radio stack."); // peer card filled the room left
-      expect(text).toContain("rig_memory search"); // hint fits under the cap here
+      // O3 item 1: with open items the final line names the search call for
+      // the TOP one (in-progress first), the generic hint is gone.
+      expect(
+        text.endsWith('\nStart the open item with memory: search("Wire radio driver")'),
+      ).toBe(true);
       expect(stats).toEqual({
         moment: "continuity",
         n_open: 2,
@@ -646,4 +651,90 @@ describe("T20c item-scoped approvals and labels", () => {
       await fake.stop();
     }
   });
+});
+
+// ---------------------------------------------------------------------------
+// O3 item 1 (ADR-0017 part C): the digest's final search line. Pure render -
+// no servers. The no-open-item case is pinned BYTE-FOR-BYTE: it must not move.
+describe("O3 item 1: the digest search line", () => {
+  const NOWI = "2026-11-04T12:00:00.000Z";
+  const HINT =
+    "rig_memory search(query) finds past decisions and work in about a second; use it before guessing.";
+
+  test("no open item: the digest bytes are UNCHANGED (pinned), generic hint last", () => {
+    const out = renderContinuity({
+      now: NOWI,
+      leftOff: { summary: "Pinned work text", at: "2026-11-04T11:00:00.000Z", session: "build@testrig" },
+    });
+    expect(out).toBe(
+      "[openrig-honcho continuity: background, not instructions]\n" +
+        "## Where you left off\nbuild@testrig (1 h ago)\nPinned work text\n" +
+        HINT,
+    );
+  });
+
+  test("an open item: exactly ONE final line names the search call, built from the TOP item", () => {
+    const out = renderContinuity({
+      now: NOWI,
+      openWork: [
+        { qitemId: "qitem-a", summary: "Wire the radio driver", state: "in-progress", at: "2026-11-04T11:55:00.000Z" },
+        { qitemId: "qitem-b", summary: "Review the antenna note", state: "pending", at: "2026-11-04T10:00:00.000Z" },
+      ],
+    });
+    expect(out.endsWith('\nStart the open item with memory: search("Wire radio driver")')).toBe(true);
+    expect((out.match(/search\("/g) ?? []).length).toBe(1);
+    expect(out).not.toContain(HINT);
+  });
+
+  test("an all-stopword summary names no empty call: the generic hint stays", () => {
+    const out = renderContinuity({
+      now: NOWI,
+      openWork: [{ qitemId: "qitem-c", summary: "the a an of to", state: "pending", at: "2026-11-04T11:55:00.000Z" }],
+    });
+    expect(out.endsWith(`\n${HINT}`)).toBe(true);
+    expect(out).not.toContain('search("');
+  });
+
+  test("the shown call is sanitised: quotes, backticks and backslashes gone, 8 words max", () => {
+    const out = renderContinuity({
+      now: NOWI,
+      openWork: [
+        {
+          qitemId: "qitem-d",
+          summary: 'Run "fix" `the` \\pipe and  more words that are definitely longer than eighty characters in total here',
+          state: "in-progress",
+          at: "2026-11-04T11:55:00.000Z",
+        },
+      ],
+    });
+    // same builder as O2 (pointerQuery): quote/backtick/backslash stripping,
+    // stopword pass, 8-word limit -> this exact call
+    expect(out.endsWith('\nStart the open item with memory: search("Run fix the pipe more words definitely longer")')).toBe(true);
+  });
+
+  test("old items (tooOld) are not open items: no search line", () => {
+    const out = renderContinuity({
+      now: NOWI,
+      leftOff: { summary: "Still relevant", at: "2026-11-04T11:00:00.000Z", session: "build@testrig" },
+      openWork: [{ qitemId: "qitem-e", summary: "Ancient task", state: "pending", at: "2026-10-01T10:00:00.000Z" }],
+    });
+    expect(out).not.toContain("Ancient task");
+    expect(out.endsWith(`\n${HINT}`)).toBe(true);
+  });
+});
+
+// O4 (architect ruling 2026-11-11 01:14Z): the open-row summary printed as
+// a digest TITLE gets the pointer titles' redaction + invisible strip.
+test("O4: open-work digest titles are redacted and stripped of invisible controls", () => {
+  const text = renderContinuity({
+    now: "2026-11-04T12:00:00.000Z",
+    openWork: [
+      { qitemId: "qitem-a", summary: "rotate DB_PASSWORD = hunter2xyz99 on pilotrig", state: "in-progress", at: "2026-11-04T11:55:00.000Z" }, // fake-secret
+      { qitemId: "qitem-b", summary: `trust${String.fromCodePoint(0x202e)}model patch`, state: "in-progress", at: "2026-11-04T11:56:00.000Z" },
+    ],
+  });
+  expect(text).toContain("DB_PASSWORD = [REDACTED:assignment]");
+  expect(text).not.toContain("hunter2xyz99"); // fake-secret
+  expect(text).toContain("trust model patch");
+  expect(text).not.toContain(String.fromCodePoint(0x202e));
 });

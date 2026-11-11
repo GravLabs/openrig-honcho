@@ -586,9 +586,11 @@ describe("T8 review: status", () => {
       expect(r.result.isError).toBeUndefined();
       const text = textOf(r);
       const out = JSON.parse(text);
+      // O3 item 4: the report grew `outcomes` (collector state) - strict
+      // list retargeted, same discipline as the T8c-fix note below.
       expect(Object.keys(out)).toEqual([
         "config", "server", "session", "counters", "spool",
-        "last_error_at", "last_error_class", "queue", "log_tail", "problems", "healthy",
+        "last_error_at", "last_error_class", "queue", "outcomes", "log_tail", "problems", "healthy",
       ]);
       expect(out.config).toEqual({
         host: new URL(h.fake.url).host,
@@ -610,6 +612,7 @@ describe("T8 review: status", () => {
       expect(out.last_error_at).toBeNull();
       expect(out.last_error_class).toBeNull();
       expect(out.queue.total_work_units).toBe(7);
+      expect(out.outcomes).toEqual({ last_run_at: null, records: 0 }); // never run here
       expect(out.log_tail).toEqual([]);
       expect(out.problems).toEqual([]);
       expect(out.healthy).toBe(true);

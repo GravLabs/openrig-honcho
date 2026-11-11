@@ -13,6 +13,11 @@
 // From:/To:/Sent:/---/↩/<system-reminder (after whitespace) is prefixed "> ",
 // so content lines are always rendered at column 0. Never throws (S1): any
 // escape becomes "" (no block beats a broken SessionStart hook).
+// O3 (ADR-0017 part C): the continuity digest reuses the pointer's query
+// builder (pointer.ts - pure: crypto + redact only), so the search call it
+// names is byte-identical to the one the claim-time pointer would show.
+
+import { pointerQuery, sanitizeVisible } from "./pointer.ts";
 
 export type InjectionSource = "startup" | "resume" | "clear" | "compact";
 
@@ -396,7 +401,15 @@ export function renderContinuity(input: ContinuityInput): string {
         ]
           .filter((x) => x !== "")
           .join(", ");
-        lines.push(...item(label, o.summary));
+        // O4 (architect ruling 2026-11-11 01:14Z): the queue summary rides
+        // this digest as a TITLE - same redaction + invisible strip as the
+        // pointer titles, per line (x3 then quotes what remains visible).
+        const safe = o.summary
+          .split("\n")
+          .map((ln) => sanitizeVisible(ln))
+          .filter((ln) => ln !== "")
+          .join("\n");
+        lines.push(...item(label, safe));
       }
       sections.push(section("Your open work", lines));
     }
@@ -478,7 +491,19 @@ export function renderContinuity(input: ContinuityInput): string {
     if (card.length > 0) sections.push(section("Your peer card", card.flatMap((c) => x3(c).split("\n"))));
 
     if (sections.length === 0) return ""; // nothing to say: no header either
-    return fillSections(sections, CONTINUITY_HEADER, CAP_CONTINUITY, SEARCH_HINT);
+    // O3 item 1 (ADR-0017 part C): when the digest lists an open queue item,
+    // its final line names the search call for that item - the FIRST open
+    // item, which is in-progress-first by fetch order and is sections[0], so
+    // any non-empty digest with an open item shows it. One line, built with
+    // the same pointerQuery the claim-time pointer uses. No open item: the
+    // generic hint, unchanged bytes. An all-stopword summary yields no query,
+    // so the generic hint stays rather than naming an empty call.
+    const topQuery = open.length > 0 ? pointerQuery(open[0].summary) : "";
+    const hint =
+      topQuery === ""
+        ? SEARCH_HINT
+        : `Start the open item with memory: search("${topQuery}")`;
+    return fillSections(sections, CONTINUITY_HEADER, CAP_CONTINUITY, hint);
   } catch {
     return ""; // S1: no digest beats a broken session start
   }

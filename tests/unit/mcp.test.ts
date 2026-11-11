@@ -19,6 +19,7 @@ import type { HonchoClient } from "../../plugin/src/honcho.ts";
 import { handleLine } from "../../plugin/src/mcp.ts";
 import { readRigMission } from "../../plugin/src/missions.ts";
 import { startFakeHoncho, type FakeHoncho } from "../support/fake-honcho.ts";
+import { startFakeDaemon } from "../support/fake-daemon.ts";
 import { LEDGER_PEER } from "../../plugin/src/ledger.ts";
 
 const WS = "ws";
@@ -462,6 +463,77 @@ describe("bin/mcp.ts rig_memory (T8)", () => {
       const c = await h.close();
       expect(c.err).toBe("");
       await fake.stop();
+    }
+  });
+
+  test("O1 (ADR-0017 decision 6): tool lines carry the seat session and the in-progress qitem", async () => {
+    const fake = await startFakeHoncho();
+    const ITEM = "qitem-20261110120000-0123456789abcdef";
+    const d = await startFakeDaemon({
+      queueList: [
+        { qitemId: ITEM, destinationSession: "build@ws", state: "in-progress" },
+        { qitemId: "qitem-20261110120001-0000000000000000", destinationSession: "other@ws", state: "in-progress" },
+      ],
+    });
+    const dir = makeTempDir("mcp-test-");
+    const h = start(baseEnv(dir, fake, { OPENRIG_URL: d.url, OPENRIG_SESSION_NAME: "build@ws" }));
+    try {
+      await h.init();
+      const r = await h.rpc(2, "tools/call", { name: "mission", arguments: { id: "outcome-6" } });
+      expect(r.result.isError).toBeUndefined();
+      const line = JSON.parse(
+        readFileSync(join(dir, "log", `${WS}.log`), "utf8").trim().split("\n").at(-1) as string,
+      ) as Record<string, unknown>;
+      expect(line).toMatchObject({ hook: "mcp", event: "tool:mission", session: "build@ws", qitem: ITEM });
+      // still ONE line per run (O1): the second call appends one line, not two
+      await h.rpc(3, "tools/call", { name: "mission", arguments: { id: "outcome-6b" } });
+      const lines = readFileSync(join(dir, "log", `${WS}.log`), "utf8").trim().split("\n");
+      expect(lines.filter((l) => (JSON.parse(l) as Frame).hook === "mcp")).toHaveLength(2);
+      expect(JSON.parse(lines[1] as string)).toMatchObject({ session: "build@ws", qitem: ITEM });
+    } finally {
+      const c = await h.close();
+      expect(c.err).toBe("");
+      d.close();
+      await fake.stop();
+    }
+  });
+
+  test("O1: unknown current item or no session config keeps the fields absent", async () => {
+    const fake = await startFakeHoncho();
+    const d = await startFakeDaemon({ queueList: [] });
+    const dir = makeTempDir("mcp-test-");
+    const h = start(baseEnv(dir, fake, { OPENRIG_URL: d.url, OPENRIG_SESSION_NAME: "build@ws" }));
+    try {
+      await h.init();
+      await h.rpc(2, "tools/call", { name: "mission", arguments: { id: "outcome-6" } });
+      let line = JSON.parse(
+        readFileSync(join(dir, "log", `${WS}.log`), "utf8").trim().split("\n").at(-1) as string,
+      ) as Record<string, unknown>;
+      expect(line.session).toBe("build@ws");
+      expect("qitem" in line).toBe(false);
+    } finally {
+      const c = await h.close();
+      expect(c.err).toBe("");
+      d.close();
+      await fake.stop();
+    }
+    // no OPENRIG_SESSION_NAME at all: no session field either, line otherwise normal
+    const dir2 = makeTempDir("mcp-test-");
+    const fake2 = await startFakeHoncho();
+    const h2 = start(baseEnv(dir2, fake2));
+    try {
+      await h2.init();
+      await h2.rpc(2, "tools/call", { name: "mission", arguments: { id: "outcome-6" } });
+      const line2 = JSON.parse(
+        readFileSync(join(dir2, "log", `${WS}.log`), "utf8").trim().split("\n").at(-1) as string,
+      ) as Record<string, unknown>;
+      expect(line2.hook).toBe("mcp");
+      expect("session" in line2).toBe(false);
+      expect("qitem" in line2).toBe(false);
+    } finally {
+      const c = await h2.close();
+      expect(c.err).toBe("");
+      await fake2.stop();
     }
   });
 

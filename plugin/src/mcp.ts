@@ -10,6 +10,7 @@
 // tools - "off means off" without killing the calling session (review T1 F2).
 
 import type { Config } from "./env.ts";
+import { fetchCurrentItem } from "./daemon.ts";
 import type { Conclusion, HonchoClient, SearchMessage } from "./honcho.ts";
 import { ageLabel, forScopeLabel, x3 } from "./inject.ts";
 import { logEvent } from "./log.ts";
@@ -42,6 +43,26 @@ export interface McpDeps {
 }
 
 const SERVER_INFO = { name: "rig_memory", version: "0.1.0" };
+
+// O1 (ADR-0017 decision 6): the seat's current in-progress item, best
+// effort. A 2 s cache so a burst of tool calls is one localhost GET; any
+// failure or absent daemon/session config reads as "unknown" (null), which
+// simply omits the field. Never blocks a tool call beyond the shared 1 s
+// daemon budget, and only on tools/call (protocol frames log nothing).
+const CURRENT_ITEM_TTL_MS = 2_000;
+let currentItemCache: { at: number; id: string | null } = { at: Number.NEGATIVE_INFINITY, id: null };
+export function resetCurrentItemCache(): void {
+  currentItemCache = { at: Number.NEGATIVE_INFINITY, id: null };
+}
+async function currentItemFor(cfg: Config): Promise<string | null> {
+  const { sessionName, daemonUrl } = cfg;
+  if (sessionName === undefined || daemonUrl === undefined) return null;
+  const now = Date.now();
+  if (now - currentItemCache.at < CURRENT_ITEM_TTL_MS) return currentItemCache.id;
+  const id = await fetchCurrentItem(daemonUrl, sessionName);
+  currentItemCache = { at: now, id };
+  return id;
+}
 const DEFAULT_PROTOCOL = "2024-11-05";
 const DEFAULT_ASK_TIMEOUT_MS = 90_000;
 
@@ -287,17 +308,32 @@ function settledWithin(jobs: Promise<void>[], ms: number): Promise<boolean> {
  * x3 and every displayed string through redact. Counts (never content)
  * reach the log line via logExtra.
  */
-async function callSearch(deps: McpDeps, args: Record<string, unknown>): Promise<CallOutcome> {
-  const config = deps.config;
-  const client = deps.client;
-  if (config === null || client === null)
-    return { res: textResult("memory unavailable: disabled", true), refused: false };
-  if (typeof args.query !== "string" || args.query.trim() === "") {
-    return { res: textResult("usage: search {query: string, about?: string}", true), refused: false };
-  }
-  const query = redact(args.query).text;
-  const aboutRaw = typeof args.about === "string" ? args.about.trim() : "";
-  const about = aboutRaw === "" ? undefined : redact(aboutRaw).text;
+
+/**
+ * O2 (architect ruling 2026-11-10 20:33Z): THE SHARED SEARCH RETRIEVAL.
+ * The conclusions pairs + message search + ledger marks that the search
+ * tool renders, all inside one wall - extracted verbatim from callSearch
+ * so the claim-time pointer runs the SAME retrieval under its own budget:
+ * the pointer's count is what the exact search(...) call it shows would
+ * return (decision: share the function, do not copy it). A failed job
+ * stays an empty slot and is counted unfinished; wallHit says the wall
+ * fired. Behaviour is identical to the old inline block - callSearch is
+ * now renderer only, and its pins (tests/unit/mcp.test.ts) cover both.
+ */
+export async function searchSnapshot(
+  client: HonchoClient,
+  config: Config,
+  query: string,
+  about: string | undefined,
+  wallMs: number,
+): Promise<{
+  memories: Conclusion[];
+  messages: SearchMessage[];
+  superseded: Map<string, string> | undefined;
+  total: number;
+  unfinished: number;
+  wallHit: boolean;
+}> {
   const mission = normalizeMission(readRigMission(config.stateDir, config.workspace).mission);
   // the server names scope peers scope.<scope> (missions.scopeFor, same as
   // recall's pairs); the no-about shape is self-about-self plus scope-about-
@@ -365,11 +401,27 @@ async function callSearch(deps: McpDeps, args: Record<string, unknown>): Promise
     );
   }
   const total = jobs.length;
-  const wallHit = !(await settledWithin(jobs, SEARCH_WALL_MS));
+  const wallHit = !(await settledWithin(jobs, wallMs));
   const finishedMem = mem.filter((m): m is Conclusion[] => m !== undefined);
   const memories = finishedMem.flat();
   const messages = msgs ?? [];
   const unfinished = total - (finishedMem.length + (msgs !== undefined ? 1 : 0));
+  return { memories, messages, superseded, total, unfinished, wallHit };
+}
+
+async function callSearch(deps: McpDeps, args: Record<string, unknown>): Promise<CallOutcome> {
+  const config = deps.config;
+  const client = deps.client;
+  if (config === null || client === null)
+    return { res: textResult("memory unavailable: disabled", true), refused: false };
+  if (typeof args.query !== "string" || args.query.trim() === "") {
+    return { res: textResult("usage: search {query: string, about?: string}", true), refused: false };
+  }
+  const query = redact(args.query).text;
+  const aboutRaw = typeof args.about === "string" ? args.about.trim() : "";
+  const about = aboutRaw === "" ? undefined : redact(aboutRaw).text;
+  const snap = await searchSnapshot(client, config, query, about, SEARCH_WALL_MS);
+  const { memories, messages, superseded, total, unfinished, wallHit } = snap;
   const logExtra = {
     n_items: memories.length,
     n_msgs: messages.length,
@@ -759,6 +811,11 @@ export async function handleLine(line: string, deps: McpDeps): Promise<string | 
         const t0 = Date.now();
         const { res, refused, logExtra } = await handleCall(deps, msg.params);
         if (deps.config !== null) {
+          // O1 (ADR-0017 decision 6): MCP lines gain the seat's session name
+          // and, when the daemon knows one, its current in-progress qitem -
+          // pointers only, one line per run still (O1). The item lookup is
+          // cached 2 s and never throws; unknown simply stays absent.
+          const currentQitem = await currentItemFor(deps.config);
           logEvent(deps.config, {
             hook: "mcp",
             // T8d-1 item 0: the security refusals log event "refused" with
@@ -766,6 +823,8 @@ export async function handleLine(line: string, deps: McpDeps): Promise<string | 
             event: refused ? "refused" : `tool:${toolName}`,
             ok: !refused && res.isError !== true,
             ms: Date.now() - t0,
+            ...(deps.config.sessionName !== undefined ? { session: deps.config.sessionName } : {}),
+            ...(currentQitem !== null ? { qitem: currentQitem } : {}),
             ...(refused ? { error_class: "refused" } : {}),
             ...(logExtra ?? {}), // T16d: tool:search carries ms + result counts only
           });

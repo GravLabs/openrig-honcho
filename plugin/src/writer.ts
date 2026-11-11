@@ -26,7 +26,7 @@ import {
   stripLeadingReminders,
   UNKNOWN_SENDER_PEER,
 } from "./attribute.ts";
-import { bodyMismatchShape, deliveryInWindow, fetchOutbox, fetchQueueItem, matchesOutboxEntry, trimTrailing } from "./daemon.ts";
+import { bodyMismatchShape, deliveryInWindow, fetchOutbox, fetchQueuePointerRow, matchesOutboxEntry, trimTrailing } from "./daemon.ts";
 import { parseEnvelope } from "./envelope.ts";
 import { LEDGER_PEER } from "./ledger.ts";
 import type { Config } from "./env.ts";
@@ -92,6 +92,25 @@ export type WriterOutcome =
        * single event as the `verify` field (O1).
        */
       verify?: "verified" | "unverified" | "unchecked" | "self";
+      /**
+       * O2 (ADR-0017 decision 7): set on a run whose prompt was a queue
+       * hand-off nudge the daemon answered - the row's own pointers, for
+       * the bin's claim-time memory pointer. Tags and the summary field
+       * only (the body never travels); the bin decides arm, search, block.
+       * O4 L3 (security pass on 90f2ae6): the data now carries the proof -
+       * destinationSession (the bin shows only for its own seat) and
+       * nudgeUnverified (the envelope was not this rig's daemon; a peer
+       * quoting a nudge body, VF1 shape). Either blocks the pointer, and
+       * the bin logs why.
+       */
+      nudge?: {
+        qitemId: string;
+        tags: string[];
+        summary: string;
+        querySource: string;
+        destinationSession: string;
+        nudgeUnverified?: true;
+      };
     };
 
 const REPLAY_MAX = 50;
@@ -599,6 +618,15 @@ async function promptSteps(
   // A failed fetch leaves today's behaviour to the E11 fallback below.
   let eff: Attribution = attr;
   let nudgeResolved = false;
+  // O2: hoisted - the return at the end of this function reads it.
+  let nudgeInfo: {
+    qitemId: string;
+    tags: string[];
+    summary: string;
+    querySource: string;
+    destinationSession: string;
+    nudgeUnverified?: true;
+  } | null = null;
   if (eff.kind === "peer" || eff.kind === "automation") {
     // T16j F1+F2 (review VF1/VF1b): the sender override and the item-tag
     // mission selection below are keyed on THIS prompt's own envelope being
@@ -614,9 +642,24 @@ async function promptSteps(
       (eff.kind === "peer" && eff.peer === "daemon" && eff.sameRig === undefined);
     const qid = qitemIdFromNudge(eff.content);
     if (qid !== null && config.daemonUrl !== undefined) {
-      const item = await fetchQueueItem(config.daemonUrl, qid);
+      const item = await fetchQueuePointerRow(config.daemonUrl, qid);
       if (item.ok) {
         nudgeResolved = true;
+        // O2: the pointer rides only a real daemon envelope (the claim
+        // moment, ADR-0017 decision 7). O4 L3 (security pass on 90f2ae6):
+        // the verification moved into the DATA - the nudge always carries
+        // the row's destinationSession, and nudgeUnverified marks an
+        // envelope that is not this rig's daemon (a peer quoting a nudge
+        // body, VF1 shape). The bin shows nothing for either and logs
+        // pointer_skip; writer's own nudge semantics are untouched.
+        nudgeInfo = {
+          qitemId: qid,
+          tags: item.tags,
+          summary: item.summary,
+          querySource: item.querySource,
+          destinationSession: item.destinationSession,
+          ...(envelopeFromDaemon ? {} : { nudgeUnverified: true as const }),
+        };
         if (envelopeFromDaemon && item.sourceSession !== undefined) {
           const cls = classifyEnvelopeSender(item.sourceSession, attrCtx);
           // F2: never across rigs - a foreign-rig sourceSession must not
@@ -761,7 +804,7 @@ async function promptSteps(
     await profileWrite(eff.content, config, deps);
   }
   if (verify === undefined || out.action === "skipped") return out;
-  return { ...out, verify };
+  return { ...out, verify, ...(nudgeInfo !== null ? { nudge: nudgeInfo } : {}) };
 }
 
 /** Entry point: never throws (S1); any escape becomes a log line + skipped. */

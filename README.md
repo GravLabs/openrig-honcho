@@ -22,9 +22,11 @@ the same identity, and skip memory on resume. This plugin:
 
 ## Status
 
-Version 0.4 gives Codex seats the same memory as Claude Code seats. Version 0.3 added
+Version 0.5 records what happened to each piece of queue work, so the team can see
+whether memory helps, and points seats to a search when they pick up work. Version
+0.4 gave Codex seats the same memory as Claude Code seats. Version 0.3 added
 a continuity digest at every restart, a decision ledger whose entries can be
-trusted, and quieter recall. 0.4.1 is the latest release. See the
+trusted, and quieter recall. 0.5.0 is the latest release. See the
 [changelog](CHANGELOG.md) and the [roadmap](docs/ARCHITECTURE.md#roadmap).
 
 ## How it works in one minute
