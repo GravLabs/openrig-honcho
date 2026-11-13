@@ -365,7 +365,9 @@ describe("status: MCP tool + bin (O3)", () => {
       expect(m).not.toBeNull();
       await call(2, "mission", { id: SECRETS.anthropic }); // F-T8-3: refused, still logged
       const r = JSON.parse((await call(3, "status", {})) as string) as { result: { content: { text: string }[] } };
-      const st = JSON.parse(r.result.content[0].text) as Record<string, any>;
+      const text = r.result.content[0].text;
+      expect(text.split("\n")[0]).toBe("[authoritative]"); // V2: status label line
+      const st = JSON.parse(text.slice(text.indexOf("\n") + 1)) as Record<string, any>;
       expect(st.last_error).toBeUndefined();
       expect(st.counters).toBeDefined();
       expect(st.log_tail.length).toBe(2); // mission, mission - the status call logs after answering

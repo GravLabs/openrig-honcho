@@ -18,6 +18,7 @@
 // names is byte-identical to the one the claim-time pointer would show.
 
 import { pointerQuery, sanitizeVisible } from "./pointer.ts";
+import { trustTag } from "./trust.ts";
 
 export type InjectionSource = "startup" | "resume" | "clear" | "compact";
 
@@ -31,8 +32,8 @@ export interface InjectionDecision {
   at: string;
   /** T19a: the ledger id; shown so the seat can cite, supersede or retire it */
   id?: string;
-  /** T19a: approvals are marked as approvals (fixed point 7) */
-  kind?: "decision" | "approval";
+  /** T19a: approvals are marked as approvals (fixed point 7); V3: so are status entries (ADR-0019 d3) */
+  kind?: "decision" | "approval" | "status";
   /**
    * T19b (ADR-0014 d1 part 4): the entry's ledger scope - lets the digest
    * match approvals to open queue items. The old renderer ignores it.
@@ -58,6 +59,8 @@ export interface InjectionAwayConclusion {
 /** T19b (ADR-0014 decision 1): input for the continuity digest. */
 export interface ContinuityInput {
   now: string;
+  /** part 0 (V1, ADR-0019 d1): local checkpoint line the Stop hook saved */
+  checkpoint?: { line: string; at: string };
   /** part 1: live open work from the daemon (max 5 rendered) */
   openWork?: InjectionOpenItem[];
   /** part 2: this session's summary (compact) or the last session's */
@@ -72,6 +75,12 @@ export interface ContinuityInput {
   pointer?: string;
   /** filler: only shown while the cap has room after parts 1-6 */
   peerCard?: string[];
+  /** V4 (ADR-0019 d4): pending stale proposals, lead seat only - the caller
+   (the reader) only passes them for a lead, already capped to 2. */
+  staleProposals?: InjectionStaleProposal[];
+  /** V6 (ADR-0019 d6): one lesson suggestion at session start - the reader
+   passes it only when its LOCAL record picked an unsuggested rework. */
+  lesson?: { qitemId: string; reason: string; seat: string };
 }
 
 export interface InjectionMissionSummary {
@@ -85,6 +94,14 @@ export interface InjectionDigestEntry {
   mission: string;
   summary: string;
   at: string;
+}
+
+/** V4 (ADR-0019 d4): one pending stale proposal for the lead seat's digest. */
+export interface InjectionStaleProposal {
+  oldId: string;
+  /** the old entry's at (the line shows its age) */
+  oldAt: string;
+  why: string;
 }
 
 export interface InjectionInput {
@@ -246,6 +263,7 @@ function render(input: InjectionInput): string {
     sections.push(section("Decisions from the leader", lines));
   }
 
+
   // E7: the seat's last session in this mission, startup/clear only.
   if (input.source === "startup" || input.source === "clear") {
     const s = input.lastSession;
@@ -350,7 +368,7 @@ function fillSections(sections: string[], header: string, cap: number, hint: str
 function decisionLabel(now: string, d: InjectionDecision, extra?: string): string {
   return [
     isText(d.id) ? d.id : "",
-    d.kind === "approval" ? "approval" : "",
+    d.kind === "approval" ? "approval" : d.kind === "status" ? "status" : "",
     ageLabel(now, d.at) ?? "",
     extra !== undefined && extra !== "" ? extra : "",
   ]
@@ -387,6 +405,16 @@ export function renderContinuity(input: ContinuityInput): string {
     const now = typeof input.now === "string" ? input.now : "";
     const sections: string[] = [];
 
+    // 0. V1 (ADR-0019 d1): the seat's local checkpoint, first on a
+    // compact/resume start. One plain line (plugin-authored; LEDGER_NOTE
+    // precedent: fixed lines are not x3-quoted) - the stored line already
+    // went through sanitizeVisible at Stop time, and this section renders
+    // whatever the Honcho parts did, including all of them failing.
+    const cp = input.checkpoint;
+    if (cp && isText(cp.line) && !tooOld(now, cp.at)) {
+      sections.push(`Where you left off${suffix(ageLabel(now, cp.at))}: ${cp.line}${trustTag("checkpoint")}`);
+    }
+
     // 1. Your open work - live queue, in-progress order already applied.
     const open = (input.openWork ?? []).filter(
       (o) => o && isText(o.qitemId) && isText(o.summary) && !tooOld(now, o.at),
@@ -411,14 +439,14 @@ export function renderContinuity(input: ContinuityInput): string {
           .join("\n");
         lines.push(...item(label, safe));
       }
-      sections.push(section("Your open work", lines));
+      sections.push(section(`Your open work${trustTag("queue")}`, lines));
     }
 
     // 2. Where you left off - the summary already fetched, source = session.
     const lo = input.leftOff;
     if (lo && isText(lo.summary) && !tooOld(now, lo.at)) {
       const label = `${isText(lo.session) ? lo.session : "?"}${suffix(ageLabel(now, lo.at))}`;
-      sections.push(section("Where you left off", item(label, lo.summary)));
+      sections.push(section(`Where you left off${trustTag("summary")}`, item(label, lo.summary)));
     }
 
     // 3. Decisions in force (approvals you hold are under their own heading).
@@ -437,7 +465,7 @@ export function renderContinuity(input: ContinuityInput): string {
       const openIdSet = new Set(open.map((o) => o.qitemId));
       sections.push(
         section(
-          "Decisions in force",
+          `Decisions in force${trustTag("decision")}`,
           [
             ...dec
               .slice(0, DECISIONS_MAX)
@@ -450,12 +478,42 @@ export function renderContinuity(input: ContinuityInput): string {
       );
     }
 
+    // 3b. V4 (ADR-0019 d4): pending stale proposals, lead seat only (the
+    // reader passes them for a lead alone) - the exact retire call from the
+    // row: "Possibly stale (<age>): <old id> - <why, sanitized, capped> -
+    // if so: retire(<old id>)". A proposal is never an automatic change.
+    const sp = (input.staleProposals ?? []).slice(0, 2);
+    if (sp.length > 0) {
+      const slines: string[] = [];
+      for (const p of sp) {
+        if (!isText(p.oldId) || !isText(p.oldAt)) continue;
+        const why = x3(String(p.why ?? "").replace(/\s+/g, " ").trim().slice(0, 160));
+        const id = x3(p.oldId);
+        slines.push(`Possibly stale${suffix(ageLabel(now, p.oldAt))}: ${id} - ${why} - if so: retire(${id})${trustTag("staleProposal")}`);
+      }
+      if (slines.length > 0) sections.push(section("Stale proposals", slines));
+    }
+
+    // 3c. V6 (ADR-0019 d6): the lesson suggestion, session start only (the
+    // reader passes it for startup alone, at most one, once per item forever
+    // - the pick and its record are local in lesson.ts). One plain line
+    // (checkpoint precedent: plugin-authored, not x3-quoted), the exact
+    // sentence from the row; trusted as authoritative since it comes from
+    // OpenRig's queue. The plugin only NAMES the file the owning seat writes
+    // by hand - it never touches that file itself.
+    const ls = input.lesson;
+    if (ls && isText(ls.qitemId) && isText(ls.reason) && isText(ls.seat)) {
+      sections.push(
+        `Lesson worth writing? ${ls.qitemId} needed rework (${ls.reason}). If something would have prevented it, write it as seats/${ls.seat}/lore/<slug>.md (the OpenRig lore template)${trustTag("outcome")}`,
+      );
+    }
+
     // 4. Approvals you hold. T24 F3: no render slice here - held approvals
     // are picked before the decisions cap and are not capped themselves; the
     // 2500 fill budget still bounds the block.
     if (ap.length > 0) {
       sections.push(
-        section("Approvals you hold", [...ap.flatMap((d) => item(decisionLabel(now, d), d.content)), LEDGER_NOTE]),
+        section(`Approvals you hold${trustTag("approval")}`, [...ap.flatMap((d) => item(decisionLabel(now, d), d.content)), LEDGER_NOTE]),
       );
     }
 
@@ -466,7 +524,7 @@ export function renderContinuity(input: ContinuityInput): string {
     if (aw.length > 0) {
       sections.push(
         section(
-          "Since you were away",
+          `Since you were away${trustTag("conclusion")}`,
           aw
             .slice(0, 3)
             .flatMap((a) =>
@@ -479,7 +537,7 @@ export function renderContinuity(input: ContinuityInput): string {
     // 6. Pointer - path only, never the map's content.
     if (isText(input.pointer)) {
       sections.push(
-        section("Restore map", [
+        section(`Restore map${trustTag("restoreMap")}`, [
           ...x3(input.pointer as string).split("\n"),
           "Read its Summary and State first.",
         ]),
@@ -488,7 +546,7 @@ export function renderContinuity(input: ContinuityInput): string {
 
     // Filler: the seat's own card, last - only if the budget left room.
     const card = (input.peerCard ?? []).filter(isText);
-    if (card.length > 0) sections.push(section("Your peer card", card.flatMap((c) => x3(c).split("\n"))));
+    if (card.length > 0) sections.push(section(`Your peer card${trustTag("summary")}`, card.flatMap((c) => x3(c).split("\n"))));
 
     if (sections.length === 0) return ""; // nothing to say: no header either
     // O3 item 1 (ADR-0017 part C): when the digest lists an open queue item,

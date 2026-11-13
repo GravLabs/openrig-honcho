@@ -26,6 +26,7 @@
 
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
+import { saveCheckpoint } from "./checkpoint.ts";
 import type { Config } from "./env.ts";
 import { withLock, writeJsonAtomic } from "./lock.ts";
 import { logEvent } from "./log.ts";
@@ -197,6 +198,10 @@ async function innerReply(
     return { action: "skipped", reason: "duplicate" };
   }
 
+  // V1 (ADR-0019 d1): save the local checkpoint BEFORE the network work, so
+  // a spool or a failed send cannot lose it; saveCheckpoint never throws.
+  // The dup/empty/stop_hook_active paths above save nothing: old kept.
+  saveCheckpoint(config.stateDir, config.workspace, config.peer, text, deps.now());
   const out = await recordBody(
     { content: text, sender: config.peer, kindTag: "reply", hookName: "stop", ...(ts !== undefined ? { createdAt: ts } : {}) },
     config,

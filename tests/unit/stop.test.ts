@@ -8,7 +8,7 @@
 
 import { describe, expect, test } from "bun:test";
 import { makeTempDir } from "../support/tempdir.ts";
-import {  writeFileSync  } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { Config } from "../../plugin/src/env.ts";
 import { createClient } from "../../plugin/src/honcho.ts";
@@ -325,5 +325,77 @@ describe("bin/stop.ts as a child process", () => {
     expect(r.code).toBe(0);
     expect(r.out).toBe("");
     expect(r.err).toBe("");
+  });
+});
+
+// V1 (ADR-0019 decision 1): the Stop path saves ONE local checkpoint line
+// per seat - first non-empty line of the final reply, sanitizeVisible'd and
+// capped at 200, with its time - in a sibling file next to the seat state.
+// Nothing goes to Honcho; empty/duplicate/stop_hook_active saves nothing and
+// keeps the old line.
+describe("recordReply V1 local checkpoint (ADR-0019 d1)", () => {
+  const cpPath = (dir: string): string => join(dir, WS, "seats", `${SELF}.checkpoint.json`);
+  const cpOf = (dir: string): { line: string; at: string } =>
+    JSON.parse(readFileSync(cpPath(dir), "utf8")) as { line: string; at: string };
+
+  test("multi-line reply: first non-empty line saved; a later reply is capped at 200", async () => {
+    const { fake, dir, config, deps } = await mk();
+    try {
+      const tp = transcript(dir, "v1a", [u("q"), a("\n   \nF6 complete on row qitem-f6\nsecond line\nthird line")]);
+      expect((await recordReply({ transcript_path: tp }, config, deps)).action).toBe("sent");
+      const cp = cpOf(dir);
+      expect(cp.line).toBe("F6 complete on row qitem-f6");
+      expect(cp.at).toBeString();
+      // a genuinely different reply replaces it, sanitized-then-capped
+      const tp2 = transcript(dir, "v1b", [u("q2"), a("k".repeat(250))]);
+      expect((await recordReply({ transcript_path: tp2 }, config, deps)).action).toBe("sent");
+      expect(cpOf(dir).line).toBe("k".repeat(200));
+    } finally {
+      await fake.stop();
+    }
+  });
+
+  test("secret-shaped token in the reply is masked in the saved line", async () => {
+    const { fake, dir, config, deps } = await mk();
+    try {
+      const tok = `sk-ant-${"A".repeat(24)}`; // fake-secret
+      const tp = transcript(dir, "v1s", [u("q"), a(`shipped with key ${tok} today`)]);
+      expect((await recordReply({ transcript_path: tp }, config, deps)).action).toBe("sent");
+      const line = cpOf(dir).line;
+      expect(line).not.toContain(tok);
+      expect(line).toContain("[REDACTED:");
+      expect(line).toContain("shipped with key");
+    } finally {
+      await fake.stop();
+    }
+  });
+
+  test("Codex shape (last_assistant_message + turn_id): the checkpoint is saved too", async () => {
+    const { fake, dir, config, deps } = await mk();
+    try {
+      const out = await recordReply(
+        { last_assistant_message: "Codex seat: row closed", turn_id: "codex-turn-1" },
+        config,
+        deps,
+      );
+      expect(out.action).not.toBe("skipped");
+      expect(cpOf(dir).line).toBe("Codex seat: row closed");
+    } finally {
+      await fake.stop();
+    }
+  });
+
+  test("empty reply: skipped and the saved checkpoint file is byte-unchanged", async () => {
+    const { fake, dir, config, deps } = await mk();
+    try {
+      const tp = transcript(dir, "v1k", [u("q"), a("a real line worth keeping")]);
+      expect((await recordReply({ transcript_path: tp }, config, deps)).action).toBe("sent");
+      const before = readFileSync(cpPath(dir));
+      const empty = transcript(dir, "v1e", [u("q2"), a("   \n \n")]);
+      expect(await recordReply({ transcript_path: empty }, config, deps)).toEqual({ action: "skipped" });
+      expect(readFileSync(cpPath(dir)).equals(before)).toBe(true);
+    } finally {
+      await fake.stop();
+    }
   });
 });

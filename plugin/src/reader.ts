@@ -13,11 +13,14 @@
 
 import { readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
+import { readCheckpoint } from "./checkpoint.ts";
 import type { Config } from "./env.ts";
 import { type Conclusion, type HonchoClient } from "./honcho.ts";
 import { readSeatState, resolveSession, normalizeMission, readRigMission, seatStatePath, scopeFor } from "./missions.ts";
 import { ensureSession, freeN } from "./writer.ts";
-import { entryBody, inForceFor, LEDGER_PEER, toEntries } from "./ledger.ts";
+import { currentLedger, entryBody, inForceFor, LEDGER_PEER, toEntries } from "./ledger.ts";
+import { readStaleState, staleStateExists, takeStaleForDigest, writeStaleState } from "./stale.ts";
+import { maybeLessonSuggestion } from "./lesson.ts";
 import { DAEMON_TIMEOUT_MS, fetchOpenWork } from "./daemon.ts";
 import { isItemScope, renderContinuity, renderInjection, type InjectionAwayConclusion, type InjectionDecision, type InjectionDigestEntry, type InjectionInput, type InjectionMissionSummary, type InjectionSessionSummary, type InjectionSource } from "./inject.ts";
 
@@ -172,7 +175,7 @@ export async function fetchMissionDecisions(
     content: entryBody(e),
     at: e.at,
     id: e.id,
-    kind: e.kind === "approval" ? ("approval" as const) : ("decision" as const),
+    kind: e.kind === "approval" ? ("approval" as const) : e.kind === "status" ? ("status" as const) : ("decision" as const),
     // T19b: scope lets the digest match approvals to open items; the old
     // renderer and the ask tool ignore it.
     scope: e.scope,
@@ -509,8 +512,50 @@ async function buildContinuity(a: {
   const leftOff = a.source === "compact" ? ownSession : lastSession;
   const away = await awayConclusions(deadline, config, deps, resolved.mission, openItems, a.prevLastSeen);
   const pointer = findRestoreMap(a.cwd, config.sessionName, Date.parse(now));
+  // V1 (ADR-0019 d1): the local checkpoint shows first, compact/resume only
+  // (never startup/clear); read is local, so it survives every Honcho failure.
+  const checkpoint =
+    a.source === "compact" || a.source === "resume"
+      ? readCheckpoint(config.stateDir, config.workspace, config.peer)
+      : null;
+  // V4 (ADR-0019 d4): pending stale proposals, LEAD seat only, and only
+  // when the local file actually holds unshown ones - the in-force re-check
+  // then costs one extra pair read, inside the same deadline. A failed or
+  // capped read shows nothing and consumes nothing (shown counts stay).
+  // The digest is this feature's showing surface; the digest-off old block
+  // is untouched.
+  let staleProps: { oldId: string; oldAt: string; why: string }[] | undefined;
+  if (
+    config.leaderPeer !== undefined &&
+    config.leaderPeer === config.peer &&
+    staleStateExists(config.stateDir, config.workspace)
+  ) {
+    const st = readStaleState(config.stateDir, config.workspace);
+    if (st !== null && st.proposals.some((p) => p.shown < 3)) {
+      const cur = await part(deadline, config.timeoutMs, async () => {
+        const p = await fetchLedgerPair(deps.client, config.leaderPeer as string);
+        return p.capped ? null : currentLedger(toEntries(p.items));
+      });
+      if (cur !== null && cur !== undefined) {
+        const picked = takeStaleForDigest(st, new Set(cur.map((e) => e.id)), 2);
+        if (picked.dirty) writeStaleState(config.stateDir, config.workspace, st);
+        if (picked.shown.length > 0)
+          staleProps = picked.shown.map((p) => ({ oldId: p.oldId, oldAt: p.oldAt, why: p.why }));
+      }
+    }
+  }
+  // V6 (ADR-0019 d6): the lesson suggestion, session start only, fully local
+  // (outcome log + this seat's own 0600 record - no network, no model, never
+  // a hook path). The pick records itself the moment it is returned, so a
+  // line can never repeat; at most one per digest. The digest-off old block
+  // is untouched.
+  const lesson =
+    a.source === "startup" && config.sessionName !== undefined
+      ? maybeLessonSuggestion(config.stateDir, config.workspace, config.sessionName, config.peer, now)
+      : undefined;
   const text = renderContinuity({
     now,
+    ...(checkpoint !== null ? { checkpoint } : {}),
     ...(openItems.length > 0 ? { openWork: openItems } : {}),
     ...(leftOff !== undefined
       ? { leftOff: { summary: leftOff.summary, at: leftOff.at, session: leftOff.session } }
@@ -520,6 +565,8 @@ async function buildContinuity(a: {
     ...(away.length > 0 ? { away } : {}),
     ...(pointer !== undefined ? { pointer } : {}),
     ...(peerCard !== undefined && peerCard.length > 0 ? { peerCard } : {}),
+    ...(staleProps !== undefined && staleProps.length > 0 ? { staleProposals: staleProps } : {}),
+    ...(lesson !== undefined ? { lesson } : {}),
   });
   const cappedTotal = a.capInfo();
   deps.stats?.({

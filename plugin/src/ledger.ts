@@ -5,7 +5,13 @@
 //
 //   [decision d-1a2b3c4d · scope mission] <decision> (reason: <reason>)
 //   [approval d-… · scope qitem-… · supersedes d-…] <text>
+//   [status d-… · scope mission] <state report>   (V3, ADR-0019 d3)
 //   [retire d-…] <reason>
+//
+// V3: for STATUS entries the newest one per (scope, mission) is the only one
+// in force - a status is replaced by the next status for the same thing, with
+// no model and no retire needed; older ones are history. Decisions and
+// approvals are untouched by that rule (a status never ends a decision).
 //
 // The current ledger is every entry that no other entry supersedes and no
 // retire entry names; supersession is transitive (A superseded by B, B by C,
@@ -27,7 +33,7 @@ import { createHash } from "node:crypto";
  */
 export const LEDGER_PEER = "openrig-ledger";
 
-export type LedgerKind = "decision" | "approval";
+export type LedgerKind = "decision" | "approval" | "status";
 
 /** An entry as parsed/stored; retire entries carry their target, nothing else. */
 export type ParsedEntry =
@@ -77,7 +83,7 @@ export const derivedId = (conclusionId: string): string => `d-${sha8(conclusionI
 // order (scope, then supersedes); format() always writes scope, so parse and
 // format round-trip what the plugin itself wrote. Anything else stays plain.
 const HEADER_RE =
-  /^\[(decision|approval|retire) (d-[0-9a-f]{8})(?: · scope ([^\s·\]]+))?(?: · supersedes (d-[0-9a-f]{8}))?\][ \t]*([\s\S]*)$/;
+  /^\[(decision|approval|status|retire) (d-[0-9a-f]{8})(?: · scope ([^\s·\]]+))?(?: · supersedes (d-[0-9a-f]{8}))?\][ \t]*([\s\S]*)$/;
 
 /** " <fact>" plus " (reason: <r>)" - the body that follows the header. */
 function formatBody(fact: string, reason?: string): string {
@@ -176,10 +182,32 @@ export function toEntries(
   return out;
 }
 
+/** (scope, mission) - the key a status entry is replaced within (V3). */
+const statusKey = (e: LedgerEntry): string => `${e.scope} ${e.mission}`;
+
+/**
+ * V3 (ADR-0019 d3): the newest status per (scope, mission), by `at` among
+ * ALL status entries (ties keep the earlier listed entry - the newest-first
+ * fetch order). Chosen before explicit ends on purpose: when the winner is
+ * retired or superseded, the key simply ends - older history never becomes
+ * in force again. Decisions and approvals are never in this map.
+ */
+function statusWinners(entries: LedgerEntry[]): Map<string, LedgerEntry> {
+  const win = new Map<string, LedgerEntry>();
+  for (const e of entries) {
+    if (e.kind !== "status") continue;
+    const k = statusKey(e);
+    const w = win.get(k);
+    if (w === undefined || e.at > w.at) win.set(k, e);
+  }
+  return win;
+}
+
 /**
  * The current ledger: every non-retire entry that is not named by another
  * entry's supersedes or by a retire - directly named is enough, which makes
- * the closure transitive (A→B→C: A and B are both named, only C stands).
+ * the closure transitive (A→B→C: A and B are both named, only C stands) -
+ * and (V3) for status entries only the newest per (scope, mission).
  * Input order (newest first) is preserved.
  */
 export function currentLedger(entries: LedgerEntry[]): LedgerEntry[] {
@@ -188,7 +216,13 @@ export function currentLedger(entries: LedgerEntry[]): LedgerEntry[] {
     if (e.kind === "retire" && e.target !== undefined) replaced.add(e.target);
     if (e.supersedes !== undefined) replaced.add(e.supersedes);
   }
-  return entries.filter((e) => e.kind !== "retire" && !replaced.has(e.id));
+  const winners = statusWinners(entries);
+  return entries.filter(
+    (e) =>
+      e.kind !== "retire" &&
+      !replaced.has(e.id) &&
+      (e.kind !== "status" || winners.get(statusKey(e))?.id === e.id),
+  );
 }
 
 /**
@@ -201,6 +235,14 @@ export function supersededMap(entries: LedgerEntry[]): Map<string, string> {
   for (const e of entries) {
     if (e.kind === "retire" && e.target !== undefined && !out.has(e.target)) out.set(e.target, "retired");
     if (e.supersedes !== undefined && !out.has(e.supersedes)) out.set(e.supersedes, e.id);
+  }
+  // V3: a status the newer one replaced is history too - the search marker
+  // says so. An explicit end seen first still wins (newest-first scan).
+  const winners = statusWinners(entries);
+  for (const e of entries) {
+    if (e.kind !== "status") continue;
+    const w = winners.get(statusKey(e));
+    if (w !== undefined && w.id !== e.id && !out.has(e.id)) out.set(e.id, w.id);
   }
   return out;
 }

@@ -82,6 +82,38 @@ describe("scan.ts on tmp repos", () => {
     expect(r.lists.some((f) => f.file === "tests/unit/fake.test.ts" && f.kind === "anthropic")).toBe(true);
   });
 
+  // F1 (qitem-20261113001934-427ddddd960d4a3c): gittoken joins HIGH. The
+  // values are built by concatenation - this file's tracked bytes stay
+  // match-free (under tests/ the marker rule would cover them too, belt and
+  // braces), and each length is exactly the redact.ts minimum.
+  const FAKE_GH_CLASSIC = ["ghp_", "A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6Q7r8"].join(""); // fake-secret 36
+  const FAKE_GH_FINE = ["github_pat_", "A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6Q7r8S9t0U1v2W3x4Y5"].join(""); // fake-secret 50 (the long body is also an opaque shape - the marker is what lets this tracked line pass the real-repo scan)
+  const FAKE_GL_PAT = ["glpat-", "AbCdEfGhIjKlMnOpQrSt"].join(""); // fake-secret 20
+
+  test("F1 gittoken HIGH: planted GitHub classic, fine-grained and GitLab fakes FAIL outside tests/", () => {
+    const dir = mkRepo({
+      "src1.txt": `x = ${FAKE_GH_CLASSIC}\n`,
+      "src2.txt": `x = ${FAKE_GH_FINE}\n`,
+      "src3.txt": `x = ${FAKE_GL_PAT}\n` });
+    const r = scanRepo(dir);
+    expect(r.ok).toBe(false);
+    for (const f of ["src1.txt", "src2.txt", "src3.txt"]) {
+      expect(r.fails.some((x) => x.file === f && x.kind === "gittoken")).toBe(true);
+    }
+    expect(render(r)).not.toContain("A1b2C3d4"); // file:line:kind only, never the value
+  });
+
+  test("F1 gittoken tests/ exemption: unmarked FAILS, the marked line lists", () => {
+    const un = mkRepo({ "tests/unit/a.ts": `const s = "${FAKE_GH_CLASSIC}";\n` });
+    const ru = scanRepo(un);
+    expect(ru.ok).toBe(false);
+    expect(ru.fails.some((x) => x.kind === "gittoken")).toBe(true);
+    const mk = mkRepo({ "tests/unit/a.ts": `const s = "${FAKE_GH_CLASSIC}"; // fake-secret\n` });
+    const rm = scanRepo(mk);
+    expect(rm.fails).toEqual([]);
+    expect(rm.lists.some((x) => x.file === "tests/unit/a.ts" && x.kind === "gittoken")).toBe(true);
+  });
+
   test("tests/ low-confidence: non-code value fails unmarked, passes marked; code value lists", () => {
     const unmarked = mkRepo({ "tests/unit/a.ts": `const ${FAKE_ASSIGN};\n` });
     const ru = scanRepo(unmarked);

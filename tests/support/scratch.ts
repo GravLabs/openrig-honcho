@@ -2,6 +2,7 @@
 // only touch workspaces named honcho-bridge-scratch*, and delete them after.
 import { appendFileSync } from "node:fs";
 import { createClient, type HonchoClient } from "../../plugin/src/honcho.ts";
+import { scratchDisappearVerdict } from "./scratch-verdict.ts";
 
 export const SCRATCH_PREFIX = "honcho-bridge-scratch-";
 export const HONCHO_URL_DEFAULT = "http://localhost:8000/v3";
@@ -202,7 +203,10 @@ export function recordGateDeletes(names: readonly string[]): boolean {
  * policy (a rejected DELETE throws there in BOTH modes - acceptance is always
  * proven); in heavy mode stops there with the names logged; in light mode
  * additionally polls workspaces/list until they are gone (the full
- * SCRATCH_DISAPPEAR_WINDOW_MS window).
+ * SCRATCH_DISAPPEAR_WINDOW_MS window); since F5 (review R14 O3) a window
+ * that ends with still-listed names whose DELETE was accepted PASSES as
+ * purge-pending - the gate leftovers step's own verdict - and only a name
+ * without an accepted DELETE throws.
  * The gate's leftovers step stays the authoritative final proof either way.
  */
 export async function cleanupScratch(
@@ -210,7 +214,11 @@ export async function cleanupScratch(
   opts: CleanupScratchOpts = {},
 ): Promise<"accepted" | "disappeared"> {
   const heavy = opts.heavy ?? process.env.HONCHO_HEAVY_TESTS === "1";
-  for (const n of names) await deleteScratchWorkspace(n);
+  const accepted = new Set<string>(); // F5: per-name fact the verdict reads
+  for (const n of names) {
+    await deleteScratchWorkspace(n); // throws unless the DELETE was accepted
+    accepted.add(n);
+  }
   // T14f (ADR-0006 amendment 2026-10-31): inside a gate run the gate sets
   // HONCHO_GATE_DELETES=<abs path>; in BOTH modes cleanup then stops once
   // every DELETE is accepted and records the names there. The leftovers step
@@ -247,20 +255,25 @@ export async function cleanupScratch(
       }
       return page.items.map((x) => x.id);
     });
-  const deadline = nowFn() + SCRATCH_DISAPPEAR_WINDOW_MS;
+  const started = nowFn();
+  const deadline = started + SCRATCH_DISAPPEAR_WINDOW_MS;
   for (;;) {
     const listed = await list();
     const still = names.filter((n) => listed.includes(n));
     if (still.length === 0) {
       console.log(
-        `SCRATCH CLEANUP (light): disappeared ${JSON.stringify(names)}; other scratch remaining: ${JSON.stringify(listed.filter((i) => i.startsWith(SCRATCH_PREFIX)))}`,
+        `SCRATCH CLEANUP (light): disappeared ${JSON.stringify(names)} in ${Math.round((nowFn() - started) / 1000)} s; other scratch remaining: ${JSON.stringify(listed.filter((i) => i.startsWith(SCRATCH_PREFIX)))}`,
       );
       return "disappeared";
     }
     if (nowFn() >= deadline) {
-      throw new Error(
-        `scratch workspaces still listed after ${SCRATCH_DISAPPEAR_WINDOW_MS / 1000} s: ${still.join(", ")}`,
-      );
+      // F5 (review R14 O3): ONE verdict on this fact with the gate's
+      // leftovers step - names whose DELETE was ACCEPTED are the server's
+      // async purge lag and pass as pending, exactly as the leftovers step
+      // passes them; release.ts still refuses while any scratch is listed.
+      // A name without an accepted DELETE is our failure and throws here.
+      console.log(scratchDisappearVerdict(still, SCRATCH_DISAPPEAR_WINDOW_MS, (n) => accepted.has(n), nowFn() - started).line);
+      return "accepted";
     }
     await sleepFn(DISAPPEAR_POLL_MS);
   }

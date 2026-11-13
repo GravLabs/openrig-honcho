@@ -162,7 +162,12 @@ async function pointerSearchExit(
       process.exit(0);
     }
     const count = snap.memories.length + snap.messages.length;
-    const text = pointerBlock(pQuery, count, [...snap.memories, ...snap.messages]);
+    // V2 (ADR-0019 d2): the title class comes from the array the item came
+    // from - conclusions are model products, messages verbatim seat words.
+    const text = pointerBlock(pQuery, count, [
+      ...snap.memories.map((m) => ({ ...m, kind: "conclusion" as const })),
+      ...snap.messages.map((m) => ({ ...m, kind: "message" as const })),
+    ]);
     if (text === "") {
       logP({ n_items: count });
       process.exit(0);

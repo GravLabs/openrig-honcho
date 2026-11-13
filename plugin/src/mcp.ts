@@ -31,6 +31,7 @@ import {
   type LedgerEntry,
 } from "./ledger.ts";
 import { collectStatus } from "./status.ts";
+import { classTag, trustClass, trustTag, type TrustClass } from "./trust.ts";
 import { ensureSession, freeN, recordBody } from "./writer.ts";
 
 export interface McpDeps {
@@ -150,7 +151,7 @@ function toolList(deps: McpDeps): unknown[] {
     tools.push({
       name: "remember",
       description:
-        "Record an explicit decision or owner approval (leader only) into shared memory. Optional: reason, scope (rig | mission | a qitem id; default mission), supersedes (an in-force d-id this replaces), kind (decision default | approval). The reply names the new decision id.",
+        "Record an explicit decision, owner approval or status report (leader only) into shared memory. Optional: reason, scope (rig | mission | a qitem id; default mission), supersedes (an in-force d-id this replaces), kind (decision default | approval | status; the newest status per scope and mission is the one in force). The reply names the new decision id.",
       inputSchema: {
         type: "object",
         properties: {
@@ -158,7 +159,7 @@ function toolList(deps: McpDeps): unknown[] {
           reason: { type: "string" },
           scope: { type: "string", description: "rig, mission (default), or a qitem id" },
           supersedes: { type: "string", description: "d-xxxxxxxx of an entry in the current ledger" },
-          kind: { type: "string", enum: ["decision", "approval"] },
+          kind: { type: "string", enum: ["decision", "approval", "status"] },
         },
         required: ["fact"],
       },
@@ -166,7 +167,7 @@ function toolList(deps: McpDeps): unknown[] {
     tools.push({
       name: "retire",
       description:
-        "Retire a decision or approval (leader only): it stays in memory for history but leaves every in-force view.",
+        "Retire a decision, approval or status (leader only): it stays in memory for history but leaves every in-force view.",
       inputSchema: {
         type: "object",
         properties: {
@@ -227,6 +228,10 @@ async function callAsk(deps: McpDeps, args: Record<string, unknown>): Promise<To
   } else {
     return textResult(`memory unavailable: ${r.kind}`, true);
   }
+  // V2 (ADR-0019 d2): the answer is a model product - one label line under
+  // it, set by the code path (ask/dialectic), whatever the text says. The
+  // 404 "no memory yet" text is the same ask surface: labelled too.
+  base = `${base}\n[${trustClass("ask")}]`;
   // Scoped ask also appends the leader's recorded decisions for this mission
   // (the same conclusions query the session-start reader runs for E8): fresh
   // remembers are visible without waiting for the deriver. No leader, no
@@ -246,12 +251,14 @@ async function callAsk(deps: McpDeps, args: Record<string, unknown>): Promise<To
           // exactly as before.
           const label = [
             ageLabel(now, d.at) ?? "undated",
-            d.kind === "approval" ? "approval" : "",
+            d.kind === "approval" ? "approval" : d.kind === "status" ? "status" : "",
             forScopeLabel(d),
           ]
             .filter((x) => x !== "")
             .join(", ");
-          lines.push(`- ${label}`);
+          lines.push(
+            `- ${label}${d.kind === "approval" ? trustTag("approval") : d.kind === "status" ? trustTag("status") : trustTag("decision")}`,
+          );
           lines.push(...x3(d.content).split("\n"));
         }
         base = `${base}\n\n${lines.join("\n")}`;
@@ -320,6 +327,20 @@ function settledWithin(jobs: Promise<void>[], ms: number): Promise<boolean> {
  * fired. Behaviour is identical to the old inline block - callSearch is
  * now renderer only, and its pins (tests/unit/mcp.test.ts) cover both.
  */
+/** V2 (ADR-0019 d2): a search hit with the trust class of the PAIR it came
+ * from, attached at snapshot build (the code path), before any flattening. */
+export type SearchMemory = Conclusion & { trust: TrustClass };
+
+/** Entries live on the ledger pair: that pair's content grammar is written
+ * by this plugin's remember/retire path (ledger.ts), so parseEntry's kind IS
+ * the code path - an approval is the owner's (authoritative), everything
+ * else on the pair (decision, status, plain, retire) is a seat's write
+ * (recorded). */
+const ledgerTrust = (content: string): TrustClass => {
+  const k = parseEntry(content).kind;
+  return k === "approval" ? trustClass("approval") : trustClass(k === "status" ? "status" : "decision");
+};
+
 export async function searchSnapshot(
   client: HonchoClient,
   config: Config,
@@ -327,7 +348,7 @@ export async function searchSnapshot(
   about: string | undefined,
   wallMs: number,
 ): Promise<{
-  memories: Conclusion[];
+  memories: SearchMemory[];
   messages: SearchMessage[];
   superseded: Map<string, string> | undefined;
   total: number;
@@ -402,10 +423,20 @@ export async function searchSnapshot(
   }
   const total = jobs.length;
   const wallHit = !(await settledWithin(jobs, wallMs));
-  const finishedMem = mem.filter((m): m is Conclusion[] => m !== undefined);
-  const memories = finishedMem.flat();
+  // V2: tag per SLOT while the pair index is still known (finishedMem.flat()
+  // would lose it): the ledger pair by entry kind, plain pairs are conclusions.
+  let finishedPairs = 0;
+  const memories: SearchMemory[] = [];
+  mem.forEach((slot, i) => {
+    if (slot === undefined) return;
+    finishedPairs++;
+    const onLedger = pairs[i].observed === LEDGER_PEER;
+    for (const c of slot) {
+      memories.push({ ...c, trust: onLedger ? ledgerTrust(String(c.content ?? "")) : trustClass("conclusion") });
+    }
+  });
   const messages = msgs ?? [];
-  const unfinished = total - (finishedMem.length + (msgs !== undefined ? 1 : 0));
+  const unfinished = total - (finishedPairs + (msgs !== undefined ? 1 : 0));
   return { memories, messages, superseded, total, unfinished, wallHit };
 }
 
@@ -438,14 +469,14 @@ async function callSearch(deps: McpDeps, args: Record<string, unknown>): Promise
   const lines: string[] = ["Memories:"];
   if (memories.length === 0) lines.push("(none)");
   for (const m of memories) {
-    lines.push(`- ${ageLabel(now, String(m.created_at ?? "")) ?? "undated"}`);
+    lines.push(`- ${ageLabel(now, String(m.created_at ?? "")) ?? "undated"}${classTag(m.trust)}`);
     lines.push(...x3(redact(m.content).text + supersedeMarker(m.content, superseded)).split("\n"));
   }
   lines.push("Messages:");
   if (messages.length === 0) lines.push("(none)");
   for (const m of messages) {
     const age = ageLabel(now, String(m.created_at ?? "")) ?? "undated";
-    lines.push(`- ${x3(String(m.peer_id))}, ${age}`);
+    lines.push(`- ${x3(String(m.peer_id))}, ${age}${trustTag("message")}`);
     lines.push(...x3(redact(String(m.content ?? "")).text.slice(0, SEARCH_MSG_SNIPPET)).split("\n"));
   }
   let text = lines.join("\n");
@@ -518,7 +549,7 @@ const optStr = (v: unknown): string | undefined => (typeof v === "string" && v.t
 
 /** remember's optional fields; an invalid one is a usage error before any write. */
 function parseLedgerArgs(args: Record<string, unknown>):
-  | { ok: true; reason?: string; scope: string; supersedes?: string; kind: "decision" | "approval" }
+  | { ok: true; reason?: string; scope: string; supersedes?: string; kind: "decision" | "approval" | "status" }
   | { ok: false; usage: string } {
   const reason = optStr(args.reason);
   if (args.reason !== undefined && reason === undefined)
@@ -533,8 +564,8 @@ function parseLedgerArgs(args: Record<string, unknown>):
   if (args.supersedes !== undefined && (supersedes === undefined || !validId(supersedes)))
     return { ok: false, usage: "remember: supersedes must be a decision id (d- plus 8 hex)" };
   const kindWord = optStr(args.kind);
-  if (kindWord !== undefined && kindWord !== "decision" && kindWord !== "approval")
-    return { ok: false, usage: "remember: kind must be decision or approval" };
+  if (kindWord !== undefined && kindWord !== "decision" && kindWord !== "approval" && kindWord !== "status")
+    return { ok: false, usage: "remember: kind must be decision, approval or status" };
   return {
     ok: true,
     ...(reason !== undefined ? { reason } : {}),
@@ -711,7 +742,9 @@ async function callStatus(deps: McpDeps): Promise<ToolResult> {
   if (config === null || client === null) return textResult("memory unavailable: disabled", true);
   // O3: the same report the bin prints (src/status.ts). F-T8-4: no raw log
   // lines and no raw error strings anywhere in it.
-  return textResult(JSON.stringify(await collectStatus(config, client), null, 2));
+  // V2 (ADR-0019 d2): one label line above the JSON - status reports OpenRig
+  // state (authoritative); the JSON bytes and the bin (collectStatus) unchanged.
+  return textResult(`[${trustClass("state")}]\n${JSON.stringify(await collectStatus(config, client), null, 2)}`);
 }
 
 interface CallOutcome {

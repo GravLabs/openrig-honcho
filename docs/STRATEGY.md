@@ -290,6 +290,11 @@ flowchart LR
     claim-pointer quality with and without it on the retrieval benchmark;
   - pull the parent along: when recall returns a decision, also return the row
     it came from and whatever superseded it, from the graph's links.
+  Store test result (2026-11-13, docs/store-test-2026-11.md): Graphiti is not
+  the store for what is in force, so the rig stays on Honcho with no second store;
+  the ledger's own supersedes links carry TreeAgent idea 3. Kept from the test: a
+  staleness proposal (a model flags ledger facts that went stale without being
+  retired, and a seat confirms), measured against Graphiti's result before it ships.
   Server baseline (owner, 2026-11-12): Honcho 3.6.1. The 3.6.0 schema changes
   (tenant_id on tenant-scoped tables, with multi-tenancy off, and new message
   text-search indexes) passed the full gate against 3.6.1 apart from the

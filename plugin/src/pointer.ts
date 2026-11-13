@@ -20,6 +20,7 @@
 
 import { createHash } from "node:crypto";
 import { redact } from "./redact.ts";
+import { trustTag } from "./trust.ts";
 
 /** The wall cap for the pointer's search. Recall's fetch budget is 2500 ms;
  * the pointer keeps the whole ADDED work under 1 s (the ADR "How we'll
@@ -119,6 +120,10 @@ export function sanitizeQuery(raw: string): string {
 export interface PointerItem {
   id?: unknown;
   content?: unknown;
+  /** V2 (ADR-0019 d2): which fetch path produced this item - the caller
+   * (plugin/bin/recall.ts) sets it from the snapshot arrays; absent is
+   * read as "conclusion" (derived), the historical default shape. */
+  kind?: "conclusion" | "message";
 }
 
 /**
@@ -155,7 +160,9 @@ export function pointerBlock(query: string, count: number, items: PointerItem[])
     // gets the same invisible/control strip so it cannot open a new block
     // line or forge a header shape. Empty after sanitising -> "unknown".
     const idPart = sanitizeVisible(it.id ?? "") === "" ? "unknown" : sanitizeVisible(it.id);
-    titles.push(`- ${idPart}: ${t}`);
+    // V2: the class rides the title AFTER the 80-char cut (outside content
+    // truncation), set by kind - the code path, never the text.
+    titles.push(`- ${idPart}: ${t}${trustTag(it.kind === "message" ? "message" : "conclusion")}`);
     if (titles.length >= 2) break;
   }
   let lines = [POINTER_BLOCK_HEADER, head, ...titles];

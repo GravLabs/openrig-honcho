@@ -23,6 +23,7 @@ import { join } from "node:path";
 import type { Config } from "../../plugin/src/env.ts";
 import { recordPrompt } from "../../plugin/src/writer.ts";
 import { recordGateDeletes, SCRATCH_DISAPPEAR_WINDOW_MS, scratchName, scratchClient } from "../support/scratch.ts";
+import { scratchDisappearVerdict } from "../support/scratch-verdict.ts";
 import { createClient } from "../../plugin/src/honcho.ts";
 
 const BASE = (process.env.HONCHO_URL ?? process.env.HONCHO_TEST_URL ?? "http://localhost:8000/v3").replace(/\/+$/, "");
@@ -32,6 +33,10 @@ const H = (): Record<string, string> => ({
   "Content-Type": "application/json" });
 
 const made: string[] = [];
+// F5: the SAME acceptance fact recordGateDeletes writes on the accepted
+// branch below, kept per name so the disappearance poll can tell purge lag
+// (accepted, pending) from a delete we never proved (throw).
+const accepted = new Set<string>();
 
 /** Paged delete-all-sessions then workspace delete; mirrors the helper's
  * 202-settle retry but loops pages (the helper's single list would strand
@@ -56,6 +61,7 @@ async function deleteScratchPaged(name: string): Promise<void> {
     // lags the delete by seconds; later attempts answer not-found)
     if (d.ok || d.status === 404) {
       recordGateDeletes([name]); // T14f: the gate's leftovers step needs every accepted delete
+      accepted.add(name); // F5: the same fact, per name, for the light poll
       return;
     }
     await new Promise((r) => setTimeout(r, 400));
@@ -93,15 +99,29 @@ afterAll(async () => {
   // ceiling is what made 120 s the ruled light window).
   const heavyRun = process.env.HONCHO_HEAVY_TESTS === "1";
   if (heavyRun) return;
-  const deadline = Date.now() + SCRATCH_DISAPPEAR_WINDOW_MS;
+  const started = Date.now();
+  const deadline = started + SCRATCH_DISAPPEAR_WINDOW_MS;
   for (;;) {
     // size=100 is the server's LIST cap (probed 2026-10-28: workspaces/list
     // size>100 -> 422; an earlier 200 here made this check silently vacuous)
     const resp = await fetch(`${BASE}/workspaces/list?size=100`, { method: "POST", headers: H() });
     const ids = (((await resp.json()) as { items?: { id: string }[] }).items ?? []).map((x) => x.id);
     const still = made.filter((n) => ids.includes(n));
-    if (still.length === 0) break;
-    if (Date.now() > deadline) throw new Error(`scratch still listed after ${SCRATCH_DISAPPEAR_WINDOW_MS / 1000} s: ${still.join(", ")}`);
+    if (still.length === 0) {
+      // F5: one line with the elapsed purge time when everything is gone
+      console.log(scratchDisappearVerdict([], SCRATCH_DISAPPEAR_WINDOW_MS, () => true, Date.now() - started).line);
+      break;
+    }
+    if (Date.now() > deadline) {
+      // F5 (review R14 O3): one verdict with the gate's leftovers step for
+      // one fact. A still-listed name whose DELETE was accepted is the
+      // server's async purge lag (10-70 min when busy) and PASSES as
+      // pending, exactly as the leftovers step passes it; release.ts still
+      // refuses while any scratch is listed. A name WITHOUT an accepted
+      // DELETE is this file's failure and still throws here.
+      console.log(scratchDisappearVerdict(still, SCRATCH_DISAPPEAR_WINDOW_MS, (n) => accepted.has(n), Date.now() - started).line);
+      return;
+    }
     await new Promise((r) => setTimeout(r, 3000));
   }
 }, SCRATCH_DISAPPEAR_WINDOW_MS + 300_000); // paged session deletes (before the window opens) + the full light window + margin

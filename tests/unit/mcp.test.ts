@@ -133,6 +133,49 @@ describe("bin/mcp.ts rig_memory (T8)", () => {
       await fake.stop();
     }
   });
+  test("V3 remember: kind status lands a [status ...] entry; the enum offers it", async () => {
+    const fake = await startFakeHoncho();
+    const dir = makeTempDir("mcp-test-");
+    const h = start(baseEnv(dir, fake, { HONCHO_OBSERVE_OTHERS: "true" }));
+    try {
+      await h.init();
+      const list = await h.rpc(2, "tools/list");
+      const tools = list.result.tools as { name: string; inputSchema: { properties: { kind?: { enum: string[] } } } }[];
+      expect(tools.find((t) => t.name === "remember")?.inputSchema.properties.kind?.enum).toEqual([
+        "decision",
+        "approval",
+        "status",
+      ]);
+      const r = await h.rpc(3, "tools/call", {
+        name: "remember",
+        arguments: { fact: "release 1.3 is published, main at d308701", kind: "status" },
+      });
+      expect(textOf(r)).toMatch(/^remembered in build--general--1 \(d-[0-9a-f]{8}\)$/);
+      const concl = (fake.state.conclusions.get(WS) ?? [])[0] as Record<string, unknown>;
+      expect(String(concl.content)).toMatch(/^\[status d-[0-9a-f]{8} · scope mission\] release 1.3 is published/);
+      expect(concl.observed_id).toBe(LEDGER_PEER);
+    } finally {
+      const c = await h.close();
+      expect(c.err).toBe("");
+      await fake.stop();
+    }
+  });
+  test("V3 remember: an unknown kind is refused with the three-kind usage line", async () => {
+    const fake = await startFakeHoncho();
+    const dir = makeTempDir("mcp-test-");
+    const h = start(baseEnv(dir, fake, { HONCHO_OBSERVE_OTHERS: "true" }));
+    try {
+      await h.init();
+      const r = await h.rpc(2, "tools/call", { name: "remember", arguments: { fact: "f", kind: "note" } });
+      expect(r.result.isError).toBe(true);
+      expect(textOf(r)).toBe("remember: kind must be decision, approval or status");
+      expect((fake.state.conclusions.get(WS) ?? []).length).toBe(0);
+    } finally {
+      const c = await h.close();
+      expect(c.err).toBe("");
+      await fake.stop();
+    }
+  });
 
   test("tools/call mission normalises the id and writes the mission file", async () => {
     const fake = await startFakeHoncho();
@@ -418,10 +461,58 @@ describe("bin/mcp.ts rig_memory (T8)", () => {
       expect(r.result.isError).toBeUndefined();
       const text = textOf(r);
       // approval: marked AND named to its item (label, never filter here)
-      expect(text).toContain("- just now, approval, for qitem-20260101000000-1234567890abcdef");
+      expect(text).toContain("- just now, approval, for qitem-20260101000000-1234567890abcdef [authoritative]");
       // mission decision: the pre-T20c line exactly
       const labelLines = text.split("\n").filter((l) => l.startsWith("- "));
-      expect(labelLines).toContain("- just now");
+      expect(labelLines).toContain("- just now [recorded]");
+    } finally {
+      const c = await h.close();
+      expect(c.err).toBe("");
+      await fake.stop();
+    }
+  });
+
+  test("V3 ask: an in-force status is labelled as status, recorded", async () => {
+    const fake = await startFakeHoncho();
+    const dir = makeTempDir("mcp-test-");
+    const h = start(baseEnv(dir, fake, { HONCHO_OBSERVE_OTHERS: "true" }));
+    try {
+      await h.init();
+      await h.rpc(2, "tools/call", { name: "mission", arguments: { id: "auth" } });
+      await h.rpc(3, "tools/call", {
+        name: "remember",
+        arguments: { fact: "waiting for the owner's word on 1.4", kind: "status" },
+      });
+      const r = await h.rpc(4, "tools/call", { name: "ask", arguments: { question: "anything", mission: "auth" } });
+      expect(r.result.isError).toBeUndefined();
+      expect(textOf(r)).toContain("- just now, status [recorded]");
+    } finally {
+      const c = await h.close();
+      expect(c.err).toBe("");
+      await fake.stop();
+    }
+  });
+
+  test("V2 ask: the answer carries [derived]; decisions carry their ledger kind class", async () => {
+    const fake = await startFakeHoncho();
+    const dir = makeTempDir("mcp-test-");
+    const h = start(baseEnv(dir, fake, { HONCHO_OBSERVE_OTHERS: "true" }));
+    try {
+      await h.init();
+      await h.rpc(2, "tools/call", { name: "mission", arguments: { id: "auth" } });
+      await h.rpc(3, "tools/call", { name: "remember", arguments: { fact: "auth is delegated to the gateway" } });
+      await h.rpc(4, "tools/call", {
+        name: "remember",
+        arguments: { fact: "release approved by the owner", kind: "approval" },
+      });
+      const r = await h.rpc(5, "tools/call", { name: "ask", arguments: { question: "how is auth handled", mission: "auth" } });
+      expect(r.result.isError).toBeUndefined();
+      const text = textOf(r);
+      const lines = text.split("\n");
+      expect(lines[0]).toBe("fake-honcho fixed answer");
+      expect(lines[1]).toBe("[derived]"); // the model answer is labelled once, below the line
+      expect(text).toContain("- just now [recorded]");
+      expect(text).toContain("- just now, approval [authoritative]");
     } finally {
       const c = await h.close();
       expect(c.err).toBe("");
@@ -437,7 +528,7 @@ describe("bin/mcp.ts rig_memory (T8)", () => {
       await h.init();
       const r = await h.rpc(2, "tools/call", { name: "ask", arguments: { question: "anything yet", mission: "ghost" } });
       expect(r.result.isError).toBeUndefined();
-      expect(textOf(r)).toBe("No memory recorded for mission ghost yet.");
+      expect(textOf(r)).toBe("No memory recorded for mission ghost yet.\n[derived]");
     } finally {
       const c = await h.close();
       expect(c.err).toBe("");
@@ -544,7 +635,7 @@ describe("bin/mcp.ts rig_memory (T8)", () => {
     try {
       await h.init();
       const r = await h.rpc(2, "tools/call", { name: "ask", arguments: { question: "where did we leave the auth work" } });
-      expect(textOf(r)).toBe("fake-honcho fixed answer");
+      expect(textOf(r)).toBe("fake-honcho fixed answer\n[derived]"); // V2: the answer line gains the label
       await h.rpc(3, "tools/call", { name: "ask", arguments: { question: "q", mission: "auth" } });
       const chats = fake.requests.filter((q) => q.path === `/v3/workspaces/${WS}/chat`);
       expect(chats.length).toBe(2);
@@ -658,7 +749,7 @@ describe("bin/mcp.ts rig_memory (T8)", () => {
       method: "tools/call",
       params: { name: "ask", arguments: { question: "q" } } });
     const r1 = JSON.parse((await handleLine(line, { config: cfg, client })) as string);
-    expect(r1.result.content[0].text).toBe("a");
+    expect(r1.result.content[0].text).toBe("a\n[derived]"); // V2 label line rides every ask answer
     const r2 = JSON.parse((await handleLine(line, { config: cfg, client, askTimeoutMs: 1234 })) as string);
     expect(r2.result.isError).toBeUndefined();
     expect(seen).toEqual([90_000, 1234]);
@@ -672,7 +763,8 @@ describe("bin/mcp.ts rig_memory (T8)", () => {
       await h.init();
       const r = await h.rpc(2, "tools/call", { name: "status", arguments: {} });
       const text = textOf(r);
-      const st = JSON.parse(text) as Record<string, any>;
+      expect(text.split("\n")[0]).toBe("[authoritative]"); // V2: status is OpenRig state
+      const st = JSON.parse(text.slice(text.indexOf("\n") + 1)) as Record<string, any>;
       expect(st.config).toEqual({
         host: new URL(fake.url).host,
         workspace: WS,
@@ -708,7 +800,9 @@ describe("bin/mcp.ts rig_memory (T8)", () => {
     try {
       await h.init();
       const r = await h.rpc(2, "tools/call", { name: "status", arguments: {} });
-      const st = JSON.parse(textOf(r)) as Record<string, any>;
+      const text = textOf(r);
+      expect(text.split("\n")[0]).toBe("[authoritative]"); // V2: status is OpenRig state
+      const st = JSON.parse(text.slice(text.indexOf("\n") + 1)) as Record<string, any>;
       expect(st.server).toEqual({ reachable: true, version: "fake-3.6.1" });
       expect(st.healthy).toBe(true);
       expect(st.problems).toEqual([]);

@@ -572,6 +572,33 @@ const o5rec = (over: Partial<OutcomeRecord>): OutcomeRecord => ({
   ...over,
 });
 
+// F8 (ADR-0017 d5, found while verifying V6): OpenRig's own housekeeping
+// follow-ons (stuck-sweep recovery rows, wake escalations) are not a rework
+// signal. The machinery test is the one V6 shares (isMachineryRow).
+describe("F8: follow-on share excludes OpenRig housekeeping", () => {
+  const REC1 = "qitem-recovery-00000000000000a1";
+  const ID_D = "qitem-20261110000004-dddddddddddddddd";
+  const ID_E = "qitem-20261110000005-eeeeeeeeeeeeeeee";
+  const ID_WAKE = "qitem-20261110000006-ffffffffffffffff";
+  const ID_GHOST = "qitem-20261110000007-9999999999999999"; // never in the log
+
+  test("recovery-only and wake follow-ons do not count; a review send-back and an absent plain id do", () => {
+    const s = summarize([
+      o5rec({ qitemId: ID_A, followOn: [REC1] }), // housekeeping only -> no
+      o5rec({ qitemId: REC1, source: "advisor@fixture-rig", tags: ["stuck-sweep-finding"] }),
+      o5rec({ qitemId: ID_B, followOn: [ID_C] }), // review sends work back -> yes
+      o5rec({ qitemId: ID_C, source: "review@fixture-rig" }),
+      o5rec({ qitemId: ID_D, followOn: [ID_WAKE] }), // wake escalation -> no
+      o5rec({ qitemId: ID_WAKE, source: "daemon@fixture-rig", tags: ["wake-escalation"] }),
+      o5rec({ qitemId: ID_E, followOn: [ID_GHOST] }), // absent: prefix alone speaks -> yes
+    ]);
+    expect(s[0]!.closed).toBe(7); // five parents + the two housekeeping rows themselves
+    expect(s[0]!.followOnShare).toBeCloseTo(2 / 7);
+    const line = summaryLines(s)[0]!;
+    expect(line).toContain("follow-on (excl. housekeeping) 29%");
+  });
+});
+
 describe("O5 F-A + N-A: pull rate over claimed rows; even median is a mean", () => {
   test("F-A: searched share divides by CLAIMED rows only, and the line says so", () => {
     const s = summarize([

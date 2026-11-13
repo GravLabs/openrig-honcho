@@ -1,4 +1,4 @@
-// T16f: the daemon client (fetchOutbox / fetchQueueItem) and the pure
+// T16f: the daemon client (fetchOutbox / fetchOpenWork) and the pure
 // outbox matcher. Fakes only - never the real daemon.
 
 import { describe, expect, test } from "bun:test";
@@ -6,7 +6,6 @@ import {
   DAEMON_TIMEOUT_MS,
   fetchOutbox,
   fetchOpenWork,
-  fetchQueueItem,
   matchesOutboxEntry,
   type OutboxEntry,
 } from "../../plugin/src/daemon.ts";
@@ -76,60 +75,6 @@ describe("fetchOutbox", () => {
   test("network: a closed port becomes kind network", async () => {
     const url = await deadDaemonUrl();
     expect(await fetchOutbox(url, "s@r")).toEqual({ ok: false, kind: "network" });
-  });
-});
-
-describe("fetchQueueItem", () => {
-  test("ok: sourceSession kept, only string tags survive", async () => {
-    const d = await startFakeDaemon({
-      item: { sourceSession: "arch-x@ws", tags: ["build", "mission:deploy", 42, null] },
-    });
-    try {
-      const r = await fetchQueueItem(d.url, "qitem-1");
-      expect(r.ok).toBe(true);
-      if (r.ok) {
-        expect(r.sourceSession).toBe("arch-x@ws");
-        expect(r.tags).toEqual(["build", "mission:deploy"]);
-      }
-    } finally {
-      d.close();
-    }
-  });
-
-  test("ok: the empty document gives tags [] and no sourceSession key", async () => {
-    const d = await startFakeDaemon({ item: {} });
-    try {
-      const r = await fetchQueueItem(d.url, "qitem-1");
-      expect(r.ok).toBe(true);
-      if (r.ok) {
-        expect(r.tags).toEqual([]);
-        expect("sourceSession" in r).toBe(false);
-      }
-    } finally {
-      d.close();
-    }
-  });
-
-  test("http: 404 becomes kind http with the status", async () => {
-    const d = await startFakeDaemon({ itemStatus: 404 });
-    try {
-      expect(await fetchQueueItem(d.url, "qitem-1")).toEqual({ ok: false, kind: "http", status: 404 });
-    } finally {
-      d.close();
-    }
-  });
-
-  test("parse: a non-object body becomes kind parse", async () => {
-    const d = await startFakeDaemon({ item: "nope" });
-    try {
-      expect(await fetchQueueItem(d.url, "qitem-1")).toEqual({ ok: false, kind: "parse" });
-    } finally {
-      d.close();
-    }
-  });
-
-  test("no-url short-circuits", async () => {
-    expect(await fetchQueueItem(undefined, "qitem-1")).toEqual({ ok: false, kind: "no-url" });
   });
 });
 

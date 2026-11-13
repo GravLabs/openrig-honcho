@@ -28,7 +28,8 @@ source that owns them; a late or empty part is left out:
 
 - `## Your open work`: your queue items, live from OpenRig.
 - `## Where you left off`: the summary of your last session in this mission.
-- `## Decisions in force`: the leader's current decisions, each with its id.
+- `## Decisions in force`: the leader's current decisions, each with its id;
+  status reports among them are marked `status`.
 - `## Approvals you hold`: approvals for you, or for a queue item you have open.
 - `## Since you were away`: what other seats learned about your work.
 - `## Restore map`: the path of your restore map after a compaction. Read its
@@ -59,7 +60,8 @@ from the leader's ledger, which nothing else can write to.
 - An approval for one queue item shows only while you have that item open. If your
   open work could not be read, approvals for items are left out, so a missing one
   does not mean it was refused.
-- `search` also finds old decisions marked `(superseded by d-...)` or `(retired)`.
+- `search` also finds old decisions marked `(superseded by d-...)` or `(retired)`;
+  an out-of-date status shows the same way, marked superseded by the newer one.
   They are history - pre-v0.3 ones too - not in force unless recorded again.
 
 ## The block when another seat writes to you
@@ -86,7 +88,7 @@ above: background, may lag, trust the live source when they disagree.
 |---|---|
 | `search(query, about?)` | The first stop for any lookup into past work or decisions; it answers in about a second. `about` is a peer id - with it the search also covers what this seat and the mission scope remember about that peer. For a question that needs reasoning over everything, not a lookup, use `ask`. |
 | `ask(question, mission?)` | Slow (30-50 s) reasoning over everything the rig remembers. Use it when `search` and the recall block were not enough. Pass `mission` to stay inside one mission; times out at 90 s; not on every turn. |
-| `remember(fact, reason?, scope?, supersedes?, kind?)` | Leader only. Record a decision the rig must keep ("we use X because Y"), in one clear sentence. Not for progress notes. `scope` is `rig`, `mission` (the default) or a queue item id. `supersedes` is the `d-...` id of the in-force entry this replaces. `kind` is `decision` (the default) or `approval`: use `approval` only on the owner's word, with the queue item as `scope` when it covers one item. The reply names the new id. |
+| `remember(fact, reason?, scope?, supersedes?, kind?)` | Leader only. Record a decision the rig must keep ("we use X because Y"), in one clear sentence. Not for progress notes. `scope` is `rig`, `mission` (the default) or a queue item id. `supersedes` is the `d-...` id of the in-force entry this replaces. `kind` is `decision` (the default), `approval` or `status`: use `approval` only on the owner's word, with the queue item as `scope` when it covers one item; record release, branch and waiting-for state as `status` - choices and rules stay `decision`. The newest status per scope and mission is the one in force; older ones are history, no retire needed. The reply names the new id. |
 | `retire(decision_id, reason)` | Leader only. End a decision or approval that no longer holds. It leaves the digest and stays findable as history. Prefer `supersedes` when something replaces it. |
 | `mission(id)` | The rig starts a different OpenRig mission; every seat's next message lands in it. Queue items tagged `mission:<id>` set it while it is still `general`. |
 | `status()` | Memory seems absent or wrong: shows the server, the active mission and session, held (unsent) messages and recent errors. Never shows keys. |

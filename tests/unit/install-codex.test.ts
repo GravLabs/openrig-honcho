@@ -13,6 +13,7 @@ import {
   readFileSync,
   readdirSync,
   realpathSync,
+  statSync,
   symlinkSync,
   writeFileSync,
 } from "node:fs";
@@ -457,5 +458,89 @@ describe("C5f F9: a seat inside a LINKED git worktree is refused", () => {
     const r = await run(dir, CODEX_INSTALL, env);
     expect(r.code, r.all).toBe(0);
     expect(existsSync(HOOKS(dir))).toBe(true);
+  });
+});
+
+describe("install-codex: F4 dir modes + stale temp sweep (ADR-0018)", () => {
+  const RECORD_DIR = (d: string) => join(d, ".codex", "openrig-honcho");
+
+  test("a pre-existing record or backups folder at 0755 is tightened to 0700 by install", async () => {
+    const seat = mkSeat();
+    mkdirSync(BACKUPS(seat.dir), { recursive: true }); // creates the record dir too
+    chmodSync(RECORD_DIR(seat.dir), 0o755);
+    chmodSync(BACKUPS(seat.dir), 0o755);
+    const r = await run(seat.dir, CODEX_INSTALL, seat.env);
+    expect(r.code, r.all).toBe(0);
+    expect(statSync(RECORD_DIR(seat.dir)).mode & 0o777).toBe(0o700);
+    expect(statSync(BACKUPS(seat.dir)).mode & 0o777).toBe(0o700);
+  });
+
+  test("a dead pid's temp is swept in the seat AND the Codex home; live pid and lookalike survive", async () => {
+    const seat = mkSeat();
+    mkdirSync(join(seat.dir, ".codex"), { recursive: true });
+    const dead = Bun.spawn(["true"]);
+    await dead.exited; // exited and reaped: kill(pid, 0) is ESRCH
+    // the review leak: config.toml.tmp-<pid>-<x> in the CODEX_HOME held the
+    // owner's merged config after a killed run; the seat's own temps too.
+    const staleUserFull = join(seat.codexHome, `config.toml.tmp-${dead.pid}-def456`);
+    const staleSeat = `${CONFIG(seat.dir)}.tmp-${dead.pid}-abc123`;
+    writeFileSync(staleUserFull, "stale-user\n");
+    writeFileSync(staleSeat, "stale-seat\n");
+    const live = `${HOOKS(seat.dir)}.tmp-${process.pid}-live01`;
+    writeFileSync(live, "live\n");
+    const lookalike = `${CONFIG(seat.dir)}.tmp-notes`;
+    writeFileSync(lookalike, "notes\n");
+    const r = await run(seat.dir, CODEX_INSTALL, seat.env);
+    expect(r.code, r.all).toBe(0);
+    expect(existsSync(staleUserFull)).toBe(false);
+    expect(existsSync(staleSeat)).toBe(false);
+    expect(r.all).toContain("stale"); // one line: count + names only, never contents
+    expect(readFileSync(live, "utf8")).toBe("live\n"); // live pid: still possibly mid-write
+    expect(readFileSync(lookalike, "utf8")).toBe("notes\n"); // not our name shape
+  });
+});
+
+describe("install-codex: F6 lock slot + stale wording (ADR-0018)", () => {
+  const USER_LOCK = (home: string) => join(home, "openrig-honcho-install.lock");
+
+  test("a DIRECTORY at the user-config lock slot is not a lock: refuse before any rename", async () => {
+    const seat = mkSeat();
+    mkdirSync(USER_LOCK(seat.codexHome), { recursive: true }); // a real folder at the slot
+    const keep = join(USER_LOCK(seat.codexHome), "keep.txt");
+    writeFileSync(keep, "keep\n");
+    const r = await run(seat.dir, CODEX_INSTALL, seat.env);
+    expect(r.code, r.all).toBe(1);
+    expect(r.all).toContain("is a directory");
+    expect(r.all).toContain("not a lock file");
+    expect(readFileSync(keep, "utf8")).toBe("keep\n"); // contents untouched
+    expect(existsSync(CONFIG(seat.dir))).toBe(false); // nothing written to the seat
+  });
+
+  test("a dead-pid user-config lock prints the AFTER-THE-FACT line and proceeds", async () => {
+    const seat = mkSeat();
+    const dead = Bun.spawn(["true"]);
+    await dead.exited; // reaped: the pid is gone
+    writeFileSync(
+      USER_LOCK(seat.codexHome),
+      JSON.stringify({ pid: dead.pid, at: "2026-11-13T02:00:00.000Z" }),
+      { mode: 0o600 },
+    );
+    const r = await run(seat.dir, CODEX_INSTALL, seat.env);
+    expect(r.code, r.all).toBe(0);
+    expect(r.all).toContain("Codex user config lock was stale");
+    expect(r.all).toContain("and taken");
+  });
+
+  test("a live user-config lock: waited on, then the held-by refusal, no stale claim", async () => {
+    const seat = mkSeat();
+    writeFileSync(
+      USER_LOCK(seat.codexHome),
+      JSON.stringify({ pid: process.pid, at: "2026-11-13T02:00:00.000Z" }),
+      { mode: 0o600 },
+    );
+    const r = await run(seat.dir, CODEX_INSTALL, { ...seat.env, HONCHO_CODEX_LOCK_WAIT_MS: "1" });
+    expect(r.code, r.all).toBe(1);
+    expect(r.all).toContain(`is held by pid ${process.pid}`);
+    expect(r.all).not.toContain("stale"); // unchanged: waited on, never judged stale
   });
 });

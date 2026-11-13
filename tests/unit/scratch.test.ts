@@ -220,19 +220,22 @@ describe("cleanupScratch mode switch (T8e-fix-3)", () => {
     });
   });
 
-  test(`light: still listed at the ${SCRATCH_DISAPPEAR_WINDOW_MS / 1000} s deadline -> throws naming them`, async () => {
+  test(`light: still listed at the ${SCRATCH_DISAPPEAR_WINDOW_MS / 1000} s deadline with DELETE accepted -> passes as purge-pending (F5)`, async () => {
+    // F5 (review R14 O3) FLIPS this pin: the DELETE here is accepted (202),
+    // so this state is the async purge lag the gate's leftovers step passes
+    // as "accepted deletes pending purge" - the light poll reaches the same
+    // verdict instead of throwing. release.ts stays the release backstop.
     await withFake(async (fake) => {
       const name = scratchName();
       fake.scriptPattern(`/${name}`, [202], { method: "DELETE" });
       const clock = { t: 0 };
-      let msg = "";
-      await cleanupScratch([name], {
+      const out = await cleanupScratch([name], {
         heavy: false,
         now: () => clock.t,
         sleep: async (ms) => void (clock.t += ms),
-        listWorkspaces: async () => [name] }).catch((e: unknown) => void (msg = e instanceof Error ? e.message : String(e)));
-      expect(msg).toContain(`still listed after ${SCRATCH_DISAPPEAR_WINDOW_MS / 1000} s: ${name}`);
-      expect(clock.t).toBe(SCRATCH_DISAPPEAR_WINDOW_MS); // the full window spent
+        listWorkspaces: async () => [name] });
+      expect(out).toBe("accepted"); // the gate's own verdict for this state
+      expect(clock.t).toBe(SCRATCH_DISAPPEAR_WINDOW_MS); // the full window still spent
     });
   });
 });

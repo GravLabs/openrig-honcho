@@ -4,7 +4,8 @@
 //
 // (a) secret scan: redact() over every tracked file (git ls-files) and every
 //     file under release/ when it exists. FAIL on the high-confidence kinds
-//     (anthropic, strata, jwt, pem, hex64, opaque, json-secret). assignment/
+//     (anthropic, strata, jwt, pem, hex64, opaque, json-secret, gittoken - F1,
+//     ADR-0018: GitHub and GitLab tokens, the redact.ts gittoken rule). assignment/
 //     bearer matches whose value is code (contains ( [ . $ / { or is an
 //     env-var-name token) are LISTED, not failed; any other such match fails.
 //     ZONES (ADR-0007, amended a9ee84a): under .claude/skills/ (vendored
@@ -46,7 +47,7 @@ export interface ScanResult {
   summary: string;
 }
 
-const HIGH = ["anthropic", "strata", "jwt", "pem", "hex64", "opaque", "json-secret"];
+const HIGH = ["anthropic", "strata", "jwt", "pem", "hex64", "opaque", "json-secret", "gittoken"];
 const TESTS_PREFIX = "tests/";
 const SKILLS_PREFIX = ".claude/skills/";
 /** Architect ruling 04:06Z (T9): release checksums ship lowercase "<64hex>

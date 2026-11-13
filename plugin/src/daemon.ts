@@ -121,26 +121,6 @@ export async function fetchOutbox(
   return { ok: true, entries };
 }
 
-/** One queue item's sourceSession + string tags (decision 3). */
-export async function fetchQueueItem(
-  daemonUrl: string | undefined,
-  qitemId: string,
-): Promise<{ ok: true; sourceSession?: string; tags: string[] } | DaemonFailure> {
-  if (daemonUrl === undefined || daemonUrl === "") return { ok: false, kind: "no-url" };
-  const r = await getJson(`${daemonUrl}/api/queue/${encodeURIComponent(qitemId)}`);
-  if (!r.ok) return r;
-  if (typeof r.json !== "object" || r.json === null) return { ok: false, kind: "parse" };
-  const doc = r.json as { sourceSession?: unknown; tags?: unknown };
-  const tags = Array.isArray(doc.tags) ? doc.tags.filter((t): t is string => typeof t === "string") : [];
-  return {
-    ok: true,
-    ...(typeof doc.sourceSession === "string" && doc.sourceSession !== ""
-      ? { sourceSession: doc.sourceSession }
-      : {}),
-    tags,
-  };
-}
-
 // T19b (ADR-0014 decision 1): the digest's open-work part. One unfiltered
 // destination fetch, filtered here - the wire answer for
 // GET {url}/api/queue/list?destination=<s> is a PLAIN ARRAY of queue docs

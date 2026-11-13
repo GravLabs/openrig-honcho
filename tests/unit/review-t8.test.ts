@@ -343,7 +343,7 @@ describe("T8 review: ask", () => {
         h.deps,
       );
       expect(r.result.isError).toBeUndefined();
-      expect(textOf(r)).toBe("fake-honcho fixed answer");
+      expect(textOf(r)).toBe("fake-honcho fixed answer\n[derived]"); // V2: the answer line gains the label
       const chat = h.fake.requests.find((rq) => rq.path.startsWith(P("/workspaces/ws/chat")));
       expect(chat).toBeDefined();
       const body = chat.body as Record<string, unknown>;
@@ -362,7 +362,7 @@ describe("T8 review: ask", () => {
     try {
       const r = await parse(callLine(1, "ask", { question: "status?", mission: "Slice 07!!" }), h.deps);
       expect(r.result.isError).toBeUndefined();
-      expect(textOf(r)).toBe("No memory recorded for mission slice-07 yet.");
+      expect(textOf(r)).toBe("No memory recorded for mission slice-07 yet.\n[derived]");
     } finally {
       await h.stop();
     }
@@ -432,7 +432,7 @@ describe("T8 review: ask", () => {
         metadata: { rig_peer: SELF, mission: "slice-07" } });
       const r = await parse(callLine(1, "ask", { question: "anything?", mission: "slice-07" }), h.deps);
       expect(r.result.isError).toBeUndefined();
-      expect(textOf(r)).toBe("fake-honcho fixed answer");
+      expect(textOf(r)).toBe("fake-honcho fixed answer\n[derived]"); // V2: the answer line gains the label
       expect(h.fake.requests.filter((rq) => rq.path.includes("/conclusions"))).toEqual([]);
     } finally {
       await h.stop();
@@ -585,7 +585,8 @@ describe("T8 review: status", () => {
       const r = await parse(callLine(1, "status"), h.deps);
       expect(r.result.isError).toBeUndefined();
       const text = textOf(r);
-      const out = JSON.parse(text);
+      expect(text.split("\n")[0]).toBe("[authoritative]"); // V2 trust class
+      const out = JSON.parse(text.slice(text.indexOf("\n") + 1));
       // O3 item 4: the report grew `outcomes` (collector state) - strict
       // list retargeted, same discipline as the T8c-fix note below.
       expect(Object.keys(out)).toEqual([
@@ -630,7 +631,9 @@ describe("T8 review: status", () => {
     try {
       const r = await parse(callLine(1, "status"), h.deps);
       expect(r.result.isError).toBeUndefined();
-      const out = JSON.parse(textOf(r));
+      const text = textOf(r);
+      expect(text.split("\n")[0]).toBe("[authoritative]"); // V2 trust class
+      const out = JSON.parse(text.slice(text.indexOf("\n") + 1));
       expect(out.server).toEqual({ reachable: true, version: "fake-3.6.1" });
       expect(out.problems).toEqual([]);
       expect(out.healthy).toBe(true);
@@ -670,7 +673,8 @@ describe("T8 review: status", () => {
         ].join("\n") + "\n",
       );
       const text = textOf(await parse(callLine(1, "status"), h.deps));
-      const out = JSON.parse(text);
+      expect(text.split("\n")[0]).toBe("[authoritative]"); // V2 trust class
+      const out = JSON.parse(text.slice(text.indexOf("\n") + 1));
       expect(out.session.session).toBe("build--general--1");
       expect(out.counters.written).toBe(3);
       expect(out.counters.redactions).toEqual({ key: 2 });
@@ -707,7 +711,8 @@ describe("T8 review: status", () => {
         JSON.stringify({ session: "build--general--1", messages: [{ peer_id: SELF, content: "canary SpoolCanaryFake0123456789abcdef body" }] }) + "\n",
       );
       const text = textOf(await parse(callLine(1, "status"), h.deps));
-      const out = JSON.parse(text);
+      expect(text.split("\n")[0]).toBe("[authoritative]"); // V2 trust class
+      const out = JSON.parse(text.slice(text.indexOf("\n") + 1));
       expect(out.spool.live.bytes).toBeGreaterThan(0); // the SIZE is reported...
       expect(out.spool.live.lines).toBe(1);
       expect(text).not.toContain("SpoolCanaryFake0123456789abcdef"); // ...never the body
@@ -723,7 +728,8 @@ describe("T8 review: status", () => {
       const r = await parse(callLine(1, "status"), h.deps);
       expect(r.result.isError).toBeUndefined();
       const text = textOf(r);
-      const out = JSON.parse(text);
+      expect(text.split("\n")[0]).toBe("[authoritative]"); // V2 trust class
+      const out = JSON.parse(text.slice(text.indexOf("\n") + 1));
       expect(out.server).toEqual({ reachable: false, version: null, error_class: "connect" });
       expect(out.queue).toEqual({ error_class: "connect" });
       expect(out.problems).toContain("server unreachable");

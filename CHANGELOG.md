@@ -1,5 +1,47 @@
 # Changelog
 
+## v0.5.3 (2026-11-13)
+
+Memory points out what has gone stale and suggests lessons after rework (ADR-0019).
+
+- **Stale proposals.** `bin/stale-check.ts`, run on demand (never from a hook), asks a
+  local OpenAI-compatible model which recorded entries a newer one has made stale. It
+  first sorts each entry once into a lasting rule or a report of current state, and only
+  state reports can be proposed. The lead seat's digest shows at most two proposals, each
+  with its reason and the exact `retire` call, and never changes anything itself. The key
+  is read from an environment variable you name and is never stored.
+- **Lesson suggestions.** When a seat's item was reopened, denied, failed or sent back by
+  another seat (OpenRig's own housekeeping rows excluded), its next digest suggests
+  writing a lesson in its own lore folder, once per item. The plugin never reads or writes
+  lore.
+- **Outcome summary.** The follow-on share no longer counts OpenRig's housekeeping rows.
+- **Installer.** A reinstall that changes nothing else still tightens the plugin's record
+  and backups folders to 0700.
+
+## v0.5.2 (2026-11-13)
+
+Seats pick up where they left off, see how far to trust each memory, and keep
+release state current; the installer is safer (ADR-0018, ADR-0019).
+
+- **Where you left off.** At the end of every turn the Stop hook saves the first
+  line of the seat's final reply on this machine (redacted, 200 characters). After a
+  compaction or resume, the digest shows it first, even when Honcho is unreachable.
+- **Trust labels.** Everything memory shows is tagged by where it came from:
+  `authoritative` (OpenRig state and the owner's approvals), `recorded` (what a seat
+  wrote: decisions, messages, checkpoints) or `derived` (what Honcho's model
+  concluded). The label follows the source, never the text.
+- **Status entries.** `remember` takes `kind: status` for release, branch and
+  waiting-for state. Only the newest status per scope and mission is in force, so
+  it goes stale by itself instead of lingering as a decision.
+- **Installer.** It claims a hook or server only when it names the plugin's own
+  folder exactly, so a neighbouring folder such as `openrig-honcho-old` keeps its
+  entries. Its record and backups folders are private (0700), and temp files left
+  by a failed install are removed by the next one. Lock messages say what happened,
+  and a folder in the lock's place is refused.
+- **Checks.** The repository scan now fails on GitHub and GitLab tokens. An unused
+  queue read without a size cap is gone. Test cleanup and the gate agree on a
+  deleted scratch workspace whose purge is still pending.
+
 ## v0.5.1 (2026-11-12)
 
 - **Accepts Honcho 3.6.x.** `status` now treats a server on either tested

@@ -14,6 +14,7 @@ import { UNKNOWN_SENDER_PEER } from "./attribute.ts";
 import { ageLabel, x3 } from "./inject.ts";
 import { scopeFor } from "./missions.ts";
 import { GENERIC, tokensOf } from "./terms.ts";
+import { trustTag } from "./trust.ts";
 
 /** ADR-0009 decision 2: the block's own header, wrapped like the
  * session-start block. */
@@ -344,8 +345,10 @@ function render(input: RecallRenderInput): RecallView {
   // the heading carries a server-derived id: x3 it, so a sender like "---"
   // can never sit unguarded at a line start
   const head = RECALL_HEADER;
-  const aboutHead = `\n## About ${x3(input.sender)}`;
-  const selfHead = "\n## You, earlier";
+  // V2 (ADR-0019 d2): both lists are all conclusions - the section is the
+  // labelling unit, the class rides on the heading once.
+  const aboutHead = `\n## About ${x3(input.sender)}${trustTag("conclusion")}`;
+  const selfHead = `\n## You, earlier${trustTag("conclusion")}`;
   let aboutLen = 0;
   let selfLen = 0;
   const shown: [number[], number[]] = [[], []];

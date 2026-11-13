@@ -308,6 +308,181 @@ describe("install-project: uninstall removes exactly ours", () => {
   });
 });
 
+describe("install-project: F3 whole-path ownership (ADR-0018)", () => {
+  // A sibling folder whose path STARTS with ours is NOT ours. The old
+  // substring match claimed these: install replaced the group, uninstall
+  // removed it. PLUGIN is the same realpath the bin computes (line 117).
+  const PLUGIN = realpathSync(join(REPO, "plugin"));
+  const sibOld = { hooks: [{ type: "command", command: `bun run "${PLUGIN}-old/bin/session-start.ts"` }] };
+  const sib2 = { hooks: [{ type: "command", command: `bun run ${PLUGIN}2/bin/stop.ts` }] };
+
+  test("sibling plugin-path hook groups survive install AND uninstall; ours still round-trips", async () => {
+    const dir = mkProject({
+      settings: { env: {}, hooks: { SessionStart: [sibOld], Stop: [sib2] }, enabledMcpjsonServers: [] as string[] },
+      mcp: { mcpServers: {} } });
+    const r = await run(dir, INSTALL);
+    expect(r.code, r.all).toBe(0);
+    let s = readJson(SETTINGS(dir));
+    // sibling kept FIRST (append rule), ours added beside it
+    expect(s.hooks.SessionStart.length).toBe(2);
+    expect(JSON.stringify(s.hooks.SessionStart[0])).toBe(JSON.stringify(sibOld));
+    expect(JSON.stringify(s.hooks.SessionStart[1])).toContain(join(PLUGIN, "bin", "session-start.ts"));
+    expect(s.hooks.Stop.length).toBe(2);
+    expect(JSON.stringify(s.hooks.Stop[0])).toBe(JSON.stringify(sib2));
+    expect(JSON.stringify(s.hooks.Stop[1])).toContain(join(PLUGIN, "bin", "stop.ts"));
+    const r2 = await run(dir, ["--uninstall"]);
+    expect(r2.code, r2.all).toBe(0);
+    s = readJson(SETTINGS(dir));
+    expect(s.hooks).toEqual({ SessionStart: [sibOld], Stop: [sib2], UserPromptSubmit: [] });
+    expect(readJson(MCP(dir))).toEqual({ mcpServers: {} });
+  });
+});
+
+describe("install-project: F4 dir modes + stale temp sweep (ADR-0018)", () => {
+  const RECORD_DIR = (d: string) => join(d, ".claude", "openrig-honcho");
+
+  test("a pre-existing record or backups folder at 0755 is tightened to 0700 by install", async () => {
+    const dir = mkProject({ settings: { env: {}, hooks: {}, enabledMcpjsonServers: [] as string[] }, mcp: { mcpServers: {} } });
+    mkdirSync(BACKUPS(dir), { recursive: true }); // creates the record dir too
+    chmodSync(RECORD_DIR(dir), 0o755);
+    chmodSync(BACKUPS(dir), 0o755);
+    const r = await run(dir, INSTALL);
+    expect(r.code, r.all).toBe(0);
+    expect(statSync(RECORD_DIR(dir)).mode & 0o777).toBe(0o700);
+    expect(statSync(BACKUPS(dir)).mode & 0o777).toBe(0o700);
+  });
+
+  test("a dead pid's temp is swept; a live pid's and a lookalike survive; --dry-run sweeps nothing", async () => {
+    const dir = mkProject({ settings: { env: {}, hooks: {}, enabledMcpjsonServers: [] as string[] }, mcp: { mcpServers: {} } });
+    const dead = Bun.spawn(["true"]);
+    await dead.exited; // exited and reaped: kill(pid, 0) is ESRCH
+    const stale = `${SETTINGS(dir)}.tmp-${dead.pid}-abc123`;
+    writeFileSync(stale, "stale\n");
+    const live = `${MCP(dir)}.tmp-${process.pid}-live01`;
+    writeFileSync(live, "live\n");
+    const lookalike = `${MCP(dir)}.tmp-notes`;
+    writeFileSync(lookalike, "notes\n");
+    const rd = await run(dir, [...INSTALL, "--dry-run"]);
+    expect(rd.code, rd.all).toBe(0);
+    expect(existsSync(stale)).toBe(true); // the dry-run takes no lock and writes NOTHING
+    const r = await run(dir, INSTALL);
+    expect(r.code, r.all).toBe(0);
+    expect(existsSync(stale)).toBe(false);
+    expect(r.all).toContain("stale"); // one line: count + names only, never contents
+    expect(readFileSync(live, "utf8")).toBe("live\n"); // live pid: still possibly mid-write
+    expect(readFileSync(lookalike, "utf8")).toBe("notes\n"); // not our name shape
+  });
+});
+
+describe("install-project: F6 lock slot + stale wording (ADR-0018)", () => {
+  const LOCK = (d: string) => join(d, ".claude", "openrig-honcho", "install.lock");
+  const plant = (d: string, body: string): void => {
+    mkdirSync(join(d, ".claude", "openrig-honcho"), { recursive: true });
+    writeFileSync(LOCK(d), body, { mode: 0o600 });
+  };
+
+  test("a DIRECTORY at the lock slot is not a lock: refuse before any rename, zero writes", async () => {
+    const dir = mkProject({ settings: settingsFixture, mcp: mcpFixture });
+    const before = readBytes(SETTINGS(dir));
+    mkdirSync(LOCK(dir), { recursive: true }); // someone's real folder sits at the slot
+    const keep = join(LOCK(dir), "keep.txt");
+    writeFileSync(keep, "keep\n");
+    const r = await run(dir, INSTALL);
+    expect(r.code, r.all).toBe(1);
+    expect(r.all).toContain("is a directory");
+    expect(r.all).toContain("not a lock file");
+    expect(readFileSync(keep, "utf8")).toBe("keep\n"); // contents untouched
+    expect(readBytes(SETTINGS(dir)).equals(before)).toBe(true); // nothing written
+    expect(backupNames(dir)).toEqual([]);
+  });
+
+  test("a dead-pid lock prints the AFTER-THE-FACT line: was stale, moved aside, taken", async () => {
+    const dead = Bun.spawn(["true"]);
+    await dead.exited; // reaped: the pid is gone
+    const dir = mkProject({ settings: settingsFixture, mcp: mcpFixture });
+    plant(dir, JSON.stringify({ pid: dead.pid, at: "2026-11-13T02:00:00.000Z" }));
+    const r = await run(dir, INSTALL);
+    expect(r.code, r.all).toBe(0);
+    expect(r.all).toContain("was stale");
+    expect(r.all).toContain("moved aside to");
+    expect(r.all).toContain("and taken");
+    expect(r.all).not.toContain("is stale"); // nothing claims a move before it can fail
+    expect(readJson(SETTINGS(dir)).env.HONCHO_URL).toBe("http://10.9.9.9/v3");
+  });
+
+  test("a live-pid lock keeps its refusal exactly: same message, no stale claim", async () => {
+    const dir = mkProject({ settings: settingsFixture, mcp: mcpFixture });
+    plant(dir, JSON.stringify({ pid: process.pid, at: "2026-11-13T02:00:00.000Z" }));
+    const r = await run(dir, INSTALL);
+    expect(r.code, r.all).toBe(1);
+    expect(r.all).toContain(`another install or uninstall is running in this project (pid ${process.pid})`);
+    expect(r.all).not.toContain("stale"); // unchanged: never judged, never announced
+  });
+});
+
+describe("install-project: F7 tighten existing folders on runs that skip the record branch", () => {
+  // F7 (operator finding, v0.5.2 pilots): ensureOurDir700 sat inside the
+  // record-write branch, so a skill-only or nothing-to-change re-run left a
+  // 0775 record/backups folder 0775. F4's pins only covered writes.
+  const RECORD_DIR = (d: string) => join(d, ".claude", "openrig-honcho");
+  const SKILLS = (d: string) => join(d, ".claude", "skills", "rig-memory");
+  const installOnce = async (dir: string): Promise<void> => {
+    const r = await run(dir, INSTALL);
+    expect(r.code, r.all).toBe(0);
+  };
+
+  test("a nothing-to-change reinstall tightens both 0775 folders to 0700 and names them", async () => {
+    const dir = mkProject({ settings: { env: {}, hooks: {}, enabledMcpjsonServers: [] as string[] }, mcp: { mcpServers: {} } });
+    await installOnce(dir);
+    chmodSync(RECORD_DIR(dir), 0o775);
+    chmodSync(BACKUPS(dir), 0o775);
+    const r2 = await run(dir, INSTALL);
+    expect(r2.code, r2.all).toBe(0);
+    expect(statSync(RECORD_DIR(dir)).mode & 0o777).toBe(0o700);
+    expect(statSync(BACKUPS(dir)).mode & 0o777).toBe(0o700);
+    expect(r2.all).toContain("tightened");
+    expect(r2.all).toContain("openrig-honcho/backups"); // names the folders
+    expect(r2.all).not.toContain("nothing to change"); // honest verdict instead
+  });
+
+  test("a skill-only reinstall (the v0.5.2 pilot case) tightens both folders", async () => {
+    const dir = mkProject({ settings: { env: {}, hooks: {}, enabledMcpjsonServers: [] as string[] }, mcp: { mcpServers: {} } });
+    await installOnce(dir);
+    rmSync(SKILLS(dir), { recursive: true, force: true }); // now ONLY skills plans
+    chmodSync(RECORD_DIR(dir), 0o775);
+    chmodSync(BACKUPS(dir), 0o775);
+    const r2 = await run(dir, INSTALL);
+    expect(r2.code, r2.all).toBe(0);
+    expect(r2.all).toContain("skills:"); // confirms the record branch was skipped
+    expect(statSync(RECORD_DIR(dir)).mode & 0o777).toBe(0o700);
+    expect(statSync(BACKUPS(dir)).mode & 0o777).toBe(0o700);
+  });
+
+  test("--dry-run leaves 0775 folders at 0775 and still says nothing to change", async () => {
+    const dir = mkProject({ settings: { env: {}, hooks: {}, enabledMcpjsonServers: [] as string[] }, mcp: { mcpServers: {} } });
+    await installOnce(dir);
+    chmodSync(RECORD_DIR(dir), 0o775);
+    chmodSync(BACKUPS(dir), 0o775);
+    const rd = await run(dir, [...INSTALL, "--dry-run"]);
+    expect(rd.code, rd.all).toBe(0);
+    expect(statSync(RECORD_DIR(dir)).mode & 0o777).toBe(0o775);
+    expect(statSync(BACKUPS(dir)).mode & 0o777).toBe(0o775);
+    expect(rd.all).toContain("nothing to change"); // unchanged verdict, untouched folders
+    expect(rd.all).not.toContain("tighten");
+  });
+
+  test("a nothing-to-change run creates nothing: a missing backups folder stays missing", async () => {
+    const dir = mkProject({ settings: { env: {}, hooks: {}, enabledMcpjsonServers: [] as string[] }, mcp: { mcpServers: {} } });
+    await installOnce(dir);
+    rmSync(BACKUPS(dir), { recursive: true, force: true });
+    const r2 = await run(dir, INSTALL);
+    expect(r2.code, r2.all).toBe(0);
+    expect(existsSync(BACKUPS(dir))).toBe(false); // F7 tightens, never creates
+    expect(r2.all).toContain("nothing to change");
+    expect(statSync(RECORD_DIR(dir)).mode & 0o777).toBe(0o700);
+  });
+});
+
 describe("install-project: T12c rules (F1-F4 + the container rule)", () => {
   test("F1 uninstall side too: wrong-typed hooks refuses the uninstall with zero writes", async () => {
     const dir = mkProject({ settings: { hooks: "foreign-string", env: { HONCHO_URL: "http://10.9.9.9/v3" } }, mcp: { mcpServers: {} } });

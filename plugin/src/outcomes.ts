@@ -587,6 +587,28 @@ export async function collectOutcomes(deps: CollectDeps): Promise<CollectResult 
 // Summary print - counts only, per destination seat (what the owner asked:
 // does the memory make the work better; the numbers come later).
 
+/** OpenRig housekeeping row - the ONE machinery test shared by V6 and F8
+ * (architect ruling 2026-11-13 15:29Z): a stuck-sweep recovery row (id
+ * qitem-recovery-...), a daemon-side wake escalation (source daemon@...),
+ * or any row tagged with "stuck-sweep" or "wake-" prefixes. */
+export function isMachineryRow(r: Pick<OutcomeRecord, "qitemId" | "source" | "tags">): boolean {
+  if (r.qitemId.startsWith("qitem-recovery-")) return true;
+  if (r.source !== null && r.source.startsWith("daemon@")) return true;
+  return r.tags.some((t) => t.startsWith("stuck-sweep") || t.startsWith("wake-"));
+}
+
+/** F8 (ADR-0017 d5): does this row have at least one follow-on that is not
+ * housekeeping? A follow-on id absent from the log speaks by its prefix
+ * alone (the architect's pilot-log script, 2026-11-13: an unknown plain id
+ * counts as real; a qitem-recovery- id never does). */
+export function hasRealFollowOn(r: OutcomeRecord, byId: Map<string, OutcomeRecord>): boolean {
+  return r.followOn.some((id) => {
+    if (id.startsWith("qitem-recovery-")) return false;
+    const g = byId.get(id);
+    return g === undefined || !isMachineryRow(g);
+  });
+}
+
 export interface SeatSummary {
   seat: string;
   closed: number;
@@ -596,6 +618,9 @@ export interface SeatSummary {
   claimedRows: number;
   medianClaimToCloseMs: number | null;
   badClosureShare: number; // denied / failed / canceled
+  /** F8 (ADR-0017 d5): rows with at least one NON-machinery follow-on -
+   * OpenRig housekeeping (recovery rows, wake escalations) is not a rework
+   * signal; the records themselves keep every id (the file stays rebuildable). */
   followOnShare: number;
   /** searched rows / claimed rows (ADR definition, not / closed rows). */
   searchedShare: number;
@@ -618,6 +643,7 @@ export function summarize(records: OutcomeRecord[]): SeatSummary[] {
     list.push(r);
     bySeat.set(seatKey, list);
   }
+  const byId = new Map(records.map((r) => [r.qitemId, r]));
   const out: SeatSummary[] = [];
   for (const seat of [...bySeat.keys()].sort()) {
     const rs = bySeat.get(seat) as OutcomeRecord[];
@@ -634,7 +660,7 @@ export function summarize(records: OutcomeRecord[]): SeatSummary[] {
       claimedRows: claimedRows.length,
       medianClaimToCloseMs: median(spans),
       badClosureShare: share((r) => r.closureReason === "denied" || r.closureReason === "failed" || r.closureReason === "canceled"),
-      followOnShare: share((r) => r.followOn.length > 0),
+      followOnShare: share((r) => hasRealFollowOn(r, byId)), // F8
       searchedShare:
         claimedRows.length === 0
           ? 0
@@ -652,7 +678,7 @@ export function summaryLines(summaries: SeatSummary[]): string[] {
       `seat ${sanitizeVisible(s.seat)}: closed ${s.closed}` +
       ` | median claim->close ${s.medianClaimToCloseMs === null ? "-" : `${Math.round(s.medianClaimToCloseMs / 1000)}s`}` +
       ` | denied|failed|canceled ${(s.badClosureShare * 100).toFixed(0)}%` +
-      ` | follow-on ${(s.followOnShare * 100).toFixed(0)}%` +
+      ` | follow-on (excl. housekeeping) ${(s.followOnShare * 100).toFixed(0)}%` +
       ` | searched ${(s.searchedShare * 100).toFixed(0)}% of ${s.claimedRows} claimed`,
   );
 }

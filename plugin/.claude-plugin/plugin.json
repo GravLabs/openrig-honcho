@@ -1,6 +1,6 @@
 {
   "name": "openrig-honcho",
-  "version": "0.5.1",
+  "version": "0.5.3",
   "description": "Shared per-rig memory for OpenRig seats on a self-hosted Honcho server",
   "mcpServers": "./mcp-servers.json",
   "skills": "./skills/",

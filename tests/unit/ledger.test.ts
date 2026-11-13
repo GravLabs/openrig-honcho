@@ -241,3 +241,125 @@ describe("T19a toEntries and the in-force view", () => {
     expect(entryBody(dec("d-x", "use LoRa"))).toBe("use LoRa");
   });
 });
+
+describe("V3 (ADR-0019 d3): status entries", () => {
+  const st = (id: string, fact: string, over: Partial<LedgerEntry> = {}): LedgerEntry =>
+    dec(id, fact, { kind: "status", ...over });
+  const concl = (
+    id: string,
+    content: string,
+    session: string,
+    created_at = "2026-11-01T00:00:00Z",
+  ) => ({ id, content, session_id: session, created_at });
+
+  test("the newest status per (scope, mission) is the only one in force", () => {
+    const entries = [
+      st("d-22222222", "main at 1.3", { at: "2026-11-02T00:00:00Z" }),
+      st("d-11111111", "main at 1.2"),
+    ];
+    expect(currentLedger(entries).map((e) => e.id)).toEqual(["d-22222222"]);
+    expect(inForceFor(entries, "sensor").map((e) => e.id)).toEqual(["d-22222222"]);
+  });
+
+  test("different mission or different scope stay in force side by side", () => {
+    const cur = currentLedger([
+      st("d-33333333", "widget at 1.3", { mission: "widget" }),
+      st("d-22222222", "main at 1.3", { at: "2026-11-02T00:00:00Z" }),
+      st("d-11111111", "main at 1.2"),
+      st("d-44444444", "release train at 1.3", { scope: "rig", at: "2026-11-02T00:00:00Z" }),
+    ]);
+    expect(cur.map((e) => e.id).sort()).toEqual(["d-22222222", "d-33333333", "d-44444444"]);
+  });
+
+  test("a status never ends a decision: an older decision of the same scope stands", () => {
+    const cur = currentLedger([
+      st("d-22222222", "main at 1.3", { at: "2026-11-02T00:00:00Z" }),
+      dec("d-55555555", "use LoRa"),
+    ]);
+    expect(cur.map((e) => e.id)).toEqual(["d-22222222", "d-55555555"]);
+  });
+
+  test("newest is by time, not by list order", () => {
+    const cur = currentLedger([
+      st("d-11111111", "main at 1.2"),
+      st("d-22222222", "main at 1.3", { at: "2026-11-02T00:00:00Z" }),
+    ]);
+    expect(cur.map((e) => e.id)).toEqual(["d-22222222"]);
+  });
+
+  test("a retire ends the newest status; the older one does not come back", () => {
+    const cur = currentLedger([
+      { ...dec("r1", "obsolete"), kind: "retire", target: "d-22222222", fact: "" },
+      st("d-22222222", "main at 1.3", { at: "2026-11-02T00:00:00Z" }),
+      st("d-11111111", "main at 1.2"),
+    ]);
+    expect(cur).toEqual([]);
+  });
+
+  test("supersedes still ends a status explicitly", () => {
+    const cur = currentLedger([
+      st("d-22222222", "main at 1.3", { supersedes: "d-11111111" }),
+      st("d-11111111", "main at 1.2", { at: "2026-10-31T00:00:00Z" }),
+    ]);
+    expect(cur.map((e) => e.id)).toEqual(["d-22222222"]);
+  });
+
+  test("search marks an out-of-date status with the newer one; the newest is unmarked", () => {
+    const m = supersededMap([
+      st("d-22222222", "main at 1.3", { at: "2026-11-02T00:00:00Z" }),
+      st("d-11111111", "main at 1.2"),
+    ]);
+    expect(m.get("d-11111111")).toBe("d-22222222");
+    expect(m.has("d-22222222")).toBe(false);
+  });
+
+  test("a two-kind (decision/approval) ledger parses and computes exactly as before", () => {
+    const entries = toEntries([
+      concl(
+        "c1",
+        formatEntry({
+          kind: "approval",
+          id: "d-a1a10003",
+          scope: "qitem-20261103024649-e25e8b91965dce3a",
+          fact: "ship 1.3",
+        }),
+        "lead--sensor--2",
+        "2026-11-03T00:00:00Z",
+      ),
+      concl(
+        "c2",
+        formatEntry({ kind: "decision", id: "d-a1a10002", scope: "mission", supersedes: "d-a1a10001", fact: "915" }),
+        "lead--sensor--1",
+        "2026-11-02T00:00:00Z",
+      ),
+      concl("c3", formatEntry({ kind: "decision", id: "d-a1a10001", scope: "mission", fact: "868" }), "lead--sensor--1"),
+      concl("c4", formatRetire("d-a1a10003", "shipped"), "lead--sensor--2", "2026-11-04T00:00:00Z"),
+    ]);
+    expect(currentLedger(entries).map((e) => e.id)).toEqual(["d-a1a10002"]);
+    expect(inForceFor(entries, "sensor").map((e) => e.id)).toEqual(["d-a1a10002"]);
+    expect(inForceFor(entries, "power").map((e) => e.id)).toEqual([]);
+  });
+
+  test("a status entry round-trips through format and parse", () => {
+    const content = formatEntry({
+      kind: "status",
+      id: "d-1a2b3c4d",
+      scope: "rig",
+      fact: "release 1.3 published",
+      reason: "owner OK",
+    });
+    expect(content).toBe("[status d-1a2b3c4d · scope rig] release 1.3 published (reason: owner OK)");
+    const p = parseEntry(content);
+    expect(p.kind).toBe("status");
+    if (p.kind !== "plain" && p.kind !== "retire") {
+      expect(p.id).toBe("d-1a2b3c4d");
+      expect(p.scope).toBe("rig");
+      expect(p.fact).toBe("release 1.3 published");
+      expect(p.reason).toBe("owner OK");
+    }
+  });
+
+  test("an unknown kind word is still plain", () => {
+    expect(parseEntry("[note d-aaaaaaaa · scope mission] reminder").kind).toBe("plain");
+  });
+});

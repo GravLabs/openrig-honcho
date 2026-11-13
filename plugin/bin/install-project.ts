@@ -390,8 +390,26 @@ function releaseLockOwned(path: string, lockBytes: string): void {
  * steal a live holder's lock (the empty lock stays garbage: no pid inside
  * means no holder to be alive, and after the atomic create OUR installers
  * never leave one mid-fill anyway).
+ * F6 (review R13): before any reading, lstat the slot. A non-REGULAR file
+ * there - a directory is the R13 case - can never be our lock, so return
+ * notLock with gone=false and judged=null: callers refuse BEFORE any rename
+ * and write nothing. The ENOENT and regular-file flows below are unchanged.
  */
-function judgeLock(path: string): { pid: number | null; why: string; gone: boolean; judged: string | null } {
+function judgeLock(path: string): {
+  pid: number | null;
+  why: string;
+  gone: boolean;
+  judged: string | null;
+  notLock: string | null;
+} {
+  let notLock: string | null = null;
+  try {
+    const st = lstatSync(path);
+    if (!st.isFile()) notLock = st.isDirectory() ? "a directory" : "not a regular file";
+  } catch {
+    // unreadable slot (incl. ENOENT): today's read loop judges it as before
+  }
+  if (notLock !== null) return { pid: null, why: "", gone: false, judged: null, notLock };
   let pid: number | null = null;
   let why = "it is not readable JSON";
   let gone = false;
@@ -424,7 +442,7 @@ function judgeLock(path: string): { pid: number | null; why: string; gone: boole
       if (reads < 2) nap(50);
     }
   }
-  return { pid, why, gone, judged };
+  return { pid, why, gone, judged, notLock: null };
 }
 
 /**
@@ -436,7 +454,12 @@ function judgeLock(path: string): { pid: number | null; why: string; gone: boole
  * nothing written. A lock released while we look (ENOENT on the read) is
  * taken by ONE exclusive create, never by removing first (T14e(a): rm would
  * delete a third racer's lock created in that window). A dead-pid or garbage
- * lock is stale: announced, then moved aside by an ATOMIC rename to
+ * lock is stale: moved aside, then - only after the move AND the take have
+ * succeeded - said on ONE after-the-fact line (F6, review R13: the old
+ * announce promised "taking it" before a move that can fail, and named a
+ * wrong cause when it did). A non-regular file at the slot (a directory is
+ * the R13 case) is not a lock at all: refuse before any rename, zero writes.
+ * The move is an ATOMIC rename to
  * install.lock.stale-<pid> (T14e(b): two losers can no longer both rm+create
  * the same stale lock); if the renamed bytes are not what we judged, the
  * file is a fresher lock - rename it back when the slot is free and refuse.
@@ -463,7 +486,7 @@ function takeInstallLock(recordDir: string, what: string): { path: string; relea
   const seam = (phase: number): void => {
     if (seamMs === 0) return;
     try {
-      mkdirSync(recordDir, { recursive: true });
+      mkdirSync(recordDir, { recursive: true, mode: 0o700 }); // F4: ours means 700
       writeFileSync(join(recordDir, `install.seam${phase}.${process.pid}`), `${process.pid}\n`);
     } catch {
       // the marker is best effort; the pause is the point
@@ -478,9 +501,10 @@ function takeInstallLock(recordDir: string, what: string): { path: string; relea
       if (r !== "enoent") return r;
       if (tries === 1) die("install.lock: our folder cannot be created (ENOENT) - refusing, nothing written");
       // our folder (rule 1) is not there yet - the only write a refusal
-      // could ever leave behind is this empty folder, never a file
+      // could ever leave behind is this empty folder (F4: at 700), never a
+      // file; tightening a PRE-EXISTING one happens later, at apply time
       try {
-        mkdirSync(recordDir, { recursive: true });
+        mkdirSync(recordDir, { recursive: true, mode: 0o700 });
       } catch (e2) {
         const c2 = (e2 as { code?: string }).code;
         die(`install.lock: our folder cannot be created (${c2 ?? "error"}) - refusing, nothing written`);
@@ -500,7 +524,12 @@ function takeInstallLock(recordDir: string, what: string): { path: string; relea
     // anything), and C5l2 - a partly-written lock with a visible pid
     // belongs to a holder that is alive or dead, never stale while it
     // lives, never moved aside.
-    const { pid, why, gone, judged } = judgeLock(path);
+    const { pid, why, gone, judged, notLock } = judgeLock(path);
+    if (notLock !== null) {
+      // F6 (review R13): a directory (or any non-regular file) at the slot
+      // is not a stale lock - refuse with the true cause BEFORE touching it.
+      die(`install.lock: ${path} is in the lock slot but is ${notLock} - not a lock file: refusing, nothing written`);
+    }
     if (!gone && pid !== null && pidAlive(pid)) {
       die(`install.lock: another install or uninstall is running in this project (pid ${pid}) - refusing, nothing written`);
     }
@@ -512,9 +541,8 @@ function takeInstallLock(recordDir: string, what: string): { path: string; relea
       // One exclusive create: ours if the slot is free, refuse otherwise.
       if (create()) return held();
     } else {
-      console.log(
-        `[${what}] install.lock is stale (${why || `pid ${pid} is not running`}): moving it aside and taking it`,
-      );
+      // F6: no announce here - the stale line is printed only after the
+      // move-aside AND the take have both succeeded (below).
       // T14e(b): the atomic rename replaces rm+create - two losers that both
       // judged the same file stale can now never both hold: only one rename
       // wins; the other sees ENOENT (or the winner's fresh lock) and takes
@@ -555,7 +583,13 @@ function takeInstallLock(recordDir: string, what: string): { path: string; relea
         } catch {
           // nothing dangerous can remain: the bytes were stale
         }
-        if (create()) return held();
+        if (create()) {
+          // F6: after the fact - the folder WAS moved aside and the lock IS ours.
+          console.log(
+            `[${what}] install.lock was stale (${why || `pid ${pid} is not running`}): moved aside to ${basename(aside)} and taken`,
+          );
+          return held();
+        }
       }
     }
   }
@@ -576,7 +610,10 @@ function takeInstallLock(recordDir: string, what: string): { path: string; relea
  * with the T14e rules of the seat lock: fill-window re-reads, ENOENT means
  * free, and only the bytes we judged stale may be removed. Lock order is
  * one-way - user-config lock here, the seat's install.lock later, never the
- * reverse - so two installs can never cycle on each other.
+ * reverse - so two installs can never cycle on each other. F6 (review R13)
+ * applies the seat lock's two rules here too: the stale line is said only
+ * after the move AND the take succeeded, and a non-regular file at the slot
+ * (a directory) refuses before any rename with its own message, zero writes.
  */
 function takeUserConfigLock(what: string): { path: string; release: () => void } {
   const dir = codexUserHome();
@@ -584,7 +621,6 @@ function takeUserConfigLock(what: string): { path: string; release: () => void }
   const rawWait = (process.env.HONCHO_CODEX_LOCK_WAIT_MS ?? "").trim();
   const waitMs =
     /^\d{1,5}$/.test(rawWait) && Number(rawWait) >= 1 && Number(rawWait) <= 60_000 ? Number(rawWait) : 60_000;
-  void what; // kept in the signature for symmetry with takeInstallLock; the path names itself
   // OWNED release and ATOMIC appearance (C5l) - since C5l2 shared with the
   // seat lock through createLockAtomic / releaseLockOwned / judgeLock, see
   // their doc for the two races they close (empty-lock mid-fill judged
@@ -612,8 +648,13 @@ function takeUserConfigLock(what: string): { path: string; release: () => void }
   const deadline = Date.now() + waitMs;
   for (;;) {
     if (create()) return held();
-    const { pid, why, gone, judged } = judgeLock(path);
+    const { pid, why, gone, judged, notLock } = judgeLock(path);
     if (gone) continue; // released between the collide and the read: the slot is free
+    if (notLock !== null) {
+      // F6 (review R13): a directory (or any non-regular file) at the slot
+      // is not a stale lock - refuse with the true cause BEFORE touching it.
+      die(`Codex user config lock: ${path} is in the lock slot but is ${notLock} - not a lock file: refusing, nothing written`);
+    }
     if (pid !== null && pidAlive(pid)) {
       if (Date.now() >= deadline) {
         die(`Codex user config lock: ${path} is held by pid ${pid} for over ${waitMs} ms - refusing, nothing written`);
@@ -621,9 +662,8 @@ function takeUserConfigLock(what: string): { path: string; release: () => void }
       nap(50);
       continue;
     }
-    console.log(
-      `[${what}] Codex user config lock is stale (${why || `pid ${pid} is not running`}): moving it aside and taking it`,
-    );
+    // F6: no announce here - the stale line is printed only after the
+    // move-aside AND the take have both succeeded (below).
     const aside = `${path}.stale-${process.pid}`;
     let renamed = false;
     try {
@@ -658,7 +698,13 @@ function takeUserConfigLock(what: string): { path: string; release: () => void }
       } catch {
         /* the bytes were stale; nothing dangerous can remain */
       }
-      if (create()) return held();
+      if (create()) {
+        // F6: after the fact - the file WAS moved aside and the lock IS ours.
+        console.log(
+          `[${what}] Codex user config lock was stale (${why || `pid ${pid} is not running`}): moved aside to ${basename(aside)} and taken`,
+        );
+        return held();
+      }
     }
   }
 }
@@ -773,6 +819,83 @@ function writeTemp(path: string, content: string, mode: number): string {
   return tmp;
 }
 
+/** F4 (ADR-0018): our folders are mode 700. Created at 0700 (the mkdir mode
+ * is umask-filtered, so a wider result is pinned below); a pre-existing one
+ * with ANY group/other bit is tightened to 0700. A pre-existing one already
+ * narrow is left exactly as its owner set it. */
+function ensureOurDir700(dir: string): void {
+  try {
+    mkdirSync(dir, { recursive: true, mode: 0o700 });
+  } catch {
+    // an existing folder or a racing creator: the tightening below decides
+  }
+  try {
+    if ((statSync(dir).mode & 0o077) !== 0) chmodSync(dir, 0o700);
+  } catch {
+    // best effort against a racing installer; we never follow a folder we
+    // could not stat
+  }
+}
+
+/** F7: tighten ALREADY EXISTING folders of ours to 0700 without ever creating
+ * them (an idempotent nothing-to-change run must still create nothing). The
+ * v0.5.2 pilots kept 0775 record/backups folders because ensureOurDir700 sat
+ * inside the record-write branch; a no-write or skill-only run never reached
+ * it. Returns the RELATIVE names of folders whose mode was actually tightened. */
+function tightenExistingOurs(dirs: [string, string][]): string[] {
+  const names: string[] = [];
+  for (const [dir, rel] of dirs) {
+    try {
+      const st = statSync(dir);
+      if (st.isDirectory() && (st.mode & 0o077) !== 0) {
+        chmodSync(dir, 0o700);
+        names.push(rel);
+      }
+    } catch {
+      // no such folder (ENOENT: the normal case here) or a racing installer
+    }
+  }
+  return names;
+}
+
+/** F4: the sweep reuses pidAlive (T14c, above): EPERM counts as running, only
+ * ESRCH means dead. The exact suffix writeTemp produces: .tmp-<digits>-<lowercase base36>. */
+const TMP_SUFFIX_RE = /^\.tmp-(\d+)-[0-9a-z]+$/;
+
+/** F4: a killed install leaves our own temps behind (the review saw
+ * config.toml.tmp-* in the Codex home holding the owner's merged config).
+ * Sweep ONLY files named exactly <ours>.tmp-<pid>-<rand> in the folders we
+ * write, and only when that pid is dead; every other name is left untouched.
+ * Returns the swept basenames - never contents. */
+function sweepStaleTemps(targets: string[]): string[] {
+  const swept: string[] = [];
+  for (const target of targets) {
+    const dir = dirname(target);
+    const base = basename(target);
+    let names: string[];
+    try {
+      names = readdirSync(dir);
+    } catch {
+      continue; // the folder is not there (yet): nothing of ours can be in it
+    }
+    for (const name of names) {
+      if (!name.startsWith(base)) continue;
+      const m = TMP_SUFFIX_RE.exec(name.slice(base.length));
+      if (m === null) continue;
+      try {
+        const full = join(dir, name);
+        if (!statSync(full).isFile()) continue; // folders are never touched
+        if (pidAlive(Number(m[1]))) continue; // live: possibly mid-write
+        unlinkSync(full); // a planted symlink is removed, never followed
+        swept.push(name);
+      } catch {
+        // racing installer won the file first: best effort
+      }
+    }
+  }
+  return swept;
+}
+
 /** Deep-replace ${CLAUDE_PLUGIN_ROOT} in every string of a JSON value. */
 function subst(v: unknown): unknown {
   if (typeof v === "string") return v.replaceAll("${CLAUDE_PLUGIN_ROOT}", PLUGIN_DIR);
@@ -787,9 +910,19 @@ function subst(v: unknown): unknown {
 
 const deepEqual = (a: unknown, b: unknown): boolean => JSON.stringify(a) === JSON.stringify(b);
 
-/** Our hook group / server iff any string value contains the plugin path. */
+/** F3 (ADR-0018): OUR plugin path as a WHOLE path, never a substring. A
+ * sibling folder whose path merely STARTS with ours (<...>/openrig-honcho-
+ * old, <...>/openrig-honcho2) is NOT ours - the old substring match claimed
+ * it, so install replaced it and uninstall removed it. A match counts only
+ * when PLUGIN_DIR is followed by a path separator, the end of the string,
+ * or a character that cannot continue a path segment (quote, whitespace,
+ * punctuation). PLUGIN_DIR is regex-escaped. */
+const escapeRe = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+const OUR_PATH_RE = new RegExp(`${escapeRe(PLUGIN_DIR)}(?![A-Za-z0-9._\\-])`);
+
+/** Our hook group / server iff any string value names the plugin path. */
 function namesPlugin(v: unknown): boolean {
-  if (typeof v === "string") return v.includes(PLUGIN_DIR);
+  if (typeof v === "string") return OUR_PATH_RE.test(v);
   if (Array.isArray(v)) return v.some(namesPlugin);
   if (isJsonObject(v)) return Object.values(v).some(namesPlugin);
   return false;
@@ -1231,7 +1364,14 @@ function main(): void {
     : planInstall(cur, args.flags, fragments, record, record === null && proof, ancestorHooksDir);
 
   if (plan.lines.length === 0) {
-    console.log(`${what} ${args.dir}: nothing to change (already ${args.uninstall ? "clean" : "installed"})`);
+    // F7: a run that writes nothing else still closes our existing folders;
+    // never creates them, never runs on --dry-run (review D6 stands).
+    const tightened = args.dryRun ? [] : tightenExistingOurs([[recordDir, RECORD_DIR_REL], [backupsDir, BACKUPS_REL]]);
+    if (tightened.length > 0) {
+      console.log(`${what} ${args.dir}: tightened ${tightened.join(" and ")} to mode 700; nothing else to change`);
+    } else {
+      console.log(`${what} ${args.dir}: nothing to change (already ${args.uninstall ? "clean" : "installed"})`);
+    }
     return;
   }
   for (const l of plan.lines) console.log(`[${args.dryRun ? "dry-run" : what}] ${l}`);
@@ -1245,6 +1385,13 @@ function main(): void {
   // releases it; the exit hook registered at take-off covers die() paths
   // (the F3 preflight refusal below exits without running finally blocks).
   const lock = takeInstallLock(recordDir, what);
+
+  // F4: sweep our own temp files left by a dead installer (exact name shape,
+  // dead pid only, files only). The dry-run returned before the lock, so a
+  // dry-run can never reach this. One line printed, only when names were
+  // removed, and it names files - never contents.
+  const swept = sweepStaleTemps([settingsPath, mcpPath, recordPath]);
+  if (swept.length > 0) console.log(`${what}: swept ${swept.length} stale temp file(s): ${swept.join(", ")}`);
 
   // F3 preflight: every write this run will make must be possible NOW, or we
   // refuse with nothing written.
@@ -1265,6 +1412,13 @@ function main(): void {
     if (existsSync(recordPath)) ensureFileWritable(recordPath, INSTALL_JSON_REL);
   }
   if (plan.settings !== null || plan.mcp !== null) ensureDirWritable(backupsDir, BACKUPS_REL);
+
+  // F7: this run writes something but may skip the record branch below (the
+  // skill-only v0.5.2 reinstall): existing folders of ours still get tightened
+  // here, without creating anything (the branch creates them when it runs).
+  // After the F3 preflight, so a refusal still writes nothing at all.
+  const tightened = tightenExistingOurs([[recordDir, RECORD_DIR_REL], [backupsDir, BACKUPS_REL]]);
+  if (tightened.length > 0) console.log(`${what}: tightened ${tightened.join(" and ")} to mode 700`);
 
   // staged apply (F3): all temp files first, then backups, then renames,
   // then the skill copy, then the record removal. A late failure names
@@ -1292,8 +1446,8 @@ function main(): void {
     // the one folder of ours (rule 1); .gitignore is written only when
     // absent, so an idempotent re-run still writes nothing
     if (plan.settings !== null || plan.mcp !== null || plan.nextRecord !== undefined || plan.removeRecord) {
-      mkdirSync(recordDir, { recursive: true });
-      mkdirSync(backupsDir, { recursive: true });
+      ensureOurDir700(recordDir); // F4: ours means 700, wider pre-existing gets tightened
+      ensureOurDir700(backupsDir);
       const gitignore = join(recordDir, ".gitignore");
       if (!existsSync(gitignore)) writeFileSync(gitignore, "*\n");
     }
@@ -2366,7 +2520,7 @@ function mainCodex(args: Args): void {
           `worktree; this installer never writes into the main checkout. Refusing, nothing written`,
       );
     }
-    if (hooksCur !== undefined && runsOurHooksText(JSON.stringify(hooksCur)) && !JSON.stringify(hooksCur).includes(PLUGIN_DIR)) {
+    if (hooksCur !== undefined && runsOurHooksText(JSON.stringify(hooksCur)) && !OUR_PATH_RE.test(JSON.stringify(hooksCur))) {
       die(`${CODEX_HOOKS_REL}: openrig-honcho hooks from a different plugin folder are installed - refusing, nothing written`);
     }
     if (configText !== undefined) {
@@ -2379,7 +2533,7 @@ function mainCodex(args: Args): void {
       }
       if (block !== null) {
         const inner = configText.split("\n").slice(block.begin, block.end + 1).join("\n");
-        if (!inner.includes(PLUGIN_DIR)) {
+        if (!OUR_PATH_RE.test(inner)) {
           die(`${CODEX_CONFIG_REL}: the managed block exists but is not ours - refusing, nothing written`);
         }
       }
@@ -2822,6 +2976,12 @@ function mainCodex(args: Args): void {
 
   const lock = takeInstallLock(recordDir, what);
 
+  // F4: the same sweep as the Claude path; the user layer is a target too -
+  // that CODEX_HOME is where a killed run left config.toml.tmp-* holding the
+  // owner's merged config. One line, names only, only when names were removed.
+  const swept = sweepStaleTemps([settingsPath, hooksPath, configPath, userConfigPath, recordPath]);
+  if (swept.length > 0) console.log(`${what}: swept ${swept.length} stale temp file(s): ${swept.join(", ")}`);
+
   // F3 preflight: every write this run makes must be possible now.
   if (hooksNext !== null || hooksRemoved) {
     ensureDirWritable(join(dir, ".codex"), CODEX_HOOKS_REL);
@@ -2907,8 +3067,8 @@ function mainCodex(args: Args): void {
   // mode 600), plus the seat's own temps, invisible to later installs and
   // to --uninstall. The same exit belt the two locks use covers every
   // die()/process.exit path; it does NOT cover SIGKILL - a kill -9
-  // mid-apply still leaves a temp, and only a startup sweep of stale
-  // *.tmp-* could clean it (v0.5 by the architect's call, not here).
+  // mid-apply still leaves a temp; the F4 sweep after the lock (ADR-0018)
+  // removes it on the next install or uninstall once its pid is dead.
   let beltOn = false;
   const armTempBelt = (): void => {
     if (!beltOn) {
@@ -2924,14 +3084,13 @@ function mainCodex(args: Args): void {
   };
   try {
     armTempBelt(); // before the first temp can exist; no-op if there are none
-    mkdirSync(recordDir, { recursive: true });
-    mkdirSync(backupsDir, { recursive: true });
+    ensureOurDir700(recordDir); // F4: ours means 700, wider pre-existing gets tightened
+    ensureOurDir700(backupsDir);
     const gitignore = join(recordDir, ".gitignore");
     if (!existsSync(gitignore)) writeFileSync(gitignore, "*\n");
 
     if (settingsNext !== null) {
-      mkdirSync(recordDir, { recursive: true });
-      settingsTmp = writeTemp(settingsPath, settingsNext, 0o600);
+      settingsTmp = writeTemp(settingsPath, settingsNext, 0o600); // recordDir exists (above)
     }
     if (hooksNext !== null) {
       mkdirSync(join(dir, ".codex"), { recursive: true });
