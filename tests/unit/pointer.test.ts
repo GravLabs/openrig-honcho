@@ -242,8 +242,8 @@ describe("pointerArm (the exact recall T18b formula - one prompt, one arm)", () 
   });
 });
 
-describe("fetchQueuePointerRow (body never read, summary capped)", () => {
-  test("returns pointers only: no body, summary capped at 200", async () => {
+describe("fetchQueuePointerRow (bounded first body line only, summary capped)", () => {
+  test("returns pointers only: first body line bounded, everything past it never travels", async () => {
     const daemon: FakeDaemon = await startFakeDaemon({
       item: {
         qitemId: "qitem-20261110194213-c286d1fd69407185",
@@ -251,7 +251,7 @@ describe("fetchQueuePointerRow (body never read, summary capped)", () => {
         destinationSession: "build@ws",
         tags: ["v0.5", "mission:x"],
         summary: "s".repeat(300),
-        body: "CANARY-4f2a body text that must never travel",
+        body: "CANARY-4f2a first line rides the risk text\nSECOND-CANARY-8b1d must never travel",
       },
     });
     try {
@@ -262,7 +262,12 @@ describe("fetchQueuePointerRow (body never read, summary capped)", () => {
       expect(r.destinationSession).toBe("build@ws"); // O4 L3: the gate's input
       expect(r.tags).toEqual(["v0.5", "mission:x"]);
       expect(r.summary.length).toBe(200);
-      expect(JSON.stringify(r)).not.toContain("CANARY-4f2a");
+      // V5 CONTRACT FLIP (ADR-0019 d5, V5 row): the BOUNDED first body line
+      // now leaves the fetch as firstBodyLine - the row's risk text, never
+      // shown and never logged. Everything from line two on still never
+      // travels (the pin this replaces over-pinned the first line too).
+      expect(r.firstBodyLine).toBe("CANARY-4f2a first line rides the risk text");
+      expect(JSON.stringify(r)).not.toContain("SECOND-CANARY-8b1d");
     } finally {
       daemon.close();
     }
@@ -278,8 +283,9 @@ describe("fetchQueuePointerRow (body never read, summary capped)", () => {
   });
 
   // O3 item 5: rows created without a summary fall back to the body's FIRST
-  // line as the query source. The one place a body line is read; only the
-  // first line, capped at 200, never logged or stored (the bin's pin below).
+  // line as the query source: only the first line, capped at 200, never
+  // logged or stored (the bin's pin below). V5 reads that same bounded line
+  // always (firstBodyLine, the risk text) - still never logged or stored.
   test("item 5: no summary -> querySource is the body FIRST line only", async () => {
     const daemon: FakeDaemon = await startFakeDaemon({
       item: {
@@ -300,7 +306,7 @@ describe("fetchQueuePointerRow (body never read, summary capped)", () => {
     }
   });
 
-  test("item 5: first line caps at 200; a present summary wins and the body stays unread", async () => {
+  test("item 5: first line caps at 200; a present summary wins the query (V5: the bounded first line still rides the risk text)", async () => {
     const d1: FakeDaemon = await startFakeDaemon({
       item: { qitemId: "qitem-x2", body: `${"t".repeat(300)}\nTAIL-CANARY-1e77` },
     });
@@ -317,7 +323,10 @@ describe("fetchQueuePointerRow (body never read, summary capped)", () => {
       expect(r2.ok).toBe(true);
       if (!r2.ok) return;
       expect(r2.querySource).toBe("S".repeat(200)); // capped like the summary
-      expect(JSON.stringify(r2)).not.toContain("BODY-CANARY-2a88");
+      // V5 flip: the first line travels for the RISK text even when the
+      // summary wins the query; the second line never does.
+      expect(r2.firstBodyLine).toBe("BODY-CANARY-2a88");
+      expect(JSON.stringify(r2)).not.toContain("second");
     } finally {
       d1.close();
       d2.close();

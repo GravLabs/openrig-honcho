@@ -114,6 +114,9 @@ export interface LogEvent {
   n_approvals?: number;
   n_away?: number;
   has_pointer?: boolean;
+  /** V5 (ADR-0019 decision 5): lesson lines shown beside the pointer -
+   * a COUNT only, never a slug or lore text (X1). */
+  lessons?: number;
   /** T24 F2: ledger-pair read hit the page cap; value is the total count. */
   ledger_capped?: number;
   /** T22b: shape of an outbox body mismatch - COUNTS and one character
@@ -213,6 +216,7 @@ export function logEvent(config: LogTarget, e: LogEvent): void {
     if (e.n_approvals !== undefined) line.n_approvals = e.n_approvals;
     if (e.n_away !== undefined) line.n_away = e.n_away;
     if (e.has_pointer !== undefined) line.has_pointer = e.has_pointer;
+    if (e.lessons !== undefined) line.lessons = e.lessons;
     if (e.ledger_capped !== undefined) line.ledger_capped = e.ledger_capped;
     if (e.stored_len !== undefined) line.stored_len = e.stored_len;
     if (e.delivered_len !== undefined) line.delivered_len = e.delivered_len;

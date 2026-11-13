@@ -1,5 +1,16 @@
 # Changelog
 
+## v0.5.4 (2026-11-13)
+
+- **Lessons when work names a risky action.** When a seat picks up a verified queue
+  hand-off whose summary or first line names a risky action (publish, release, push,
+  force, delete, remove, rm, drop, deploy, tag, reset), it sees up to two of its own
+  lessons whose file name or Moment matches, beside the claim pointer, as a pointer to
+  the lore file and its Moment line. Read from the seat's own lore folder on disk inside
+  the pointer's time budget and holdout; it never blocks a command, uses no model or
+  network, and never copies lore. `HONCHO_TOPOLOGY_ROOT` overrides where the topology
+  lives (default `$OPENRIG_HOME/topology`, then `~/.openrig/topology`).
+
 ## v0.5.3 (2026-11-13)
 
 Memory points out what has gone stale and suggests lessons after rework (ADR-0019).

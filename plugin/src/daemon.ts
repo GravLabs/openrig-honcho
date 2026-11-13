@@ -316,8 +316,11 @@ export async function outboxDelivered(
  * O2 (ADR-0017 decision 7): the row view the claim-time pointer needs:
  * tags + the summary field, capped. The daemon answers the same full
  * document as `rig queue show`; only these fields leave this function -
- * the body never does (it must never be shown, and the pointer's query is
- * shown in the exact search call).
+ * the body never does in bulk (it must never be shown, and the pointer's
+ * query is shown in the exact search call). V5 added one bounded exception,
+ * `firstBodyLine` (the same O7 N3 400-char slice, capped 200): the row's
+ * risk text. It is never shown and never logged - the shown surfaces are
+ * the summary query and the seat's own lesson Moment lines.
  */
 /** O8 item 3 (R17): the pointer row read is capped so a huge body cannot
  * make JSON.parse scale - the hook fails closed to ordinary recall past
@@ -328,7 +331,7 @@ const POINTER_ROW_MAX_BYTES = 256 * 1024;
 export async function fetchQueuePointerRow(
   daemonUrl: string | undefined,
   qitemId: string,
-): Promise<{ ok: true; sourceSession?: string; destinationSession: string; tags: string[]; summary: string; querySource: string } | DaemonFailure> {
+): Promise<{ ok: true; sourceSession?: string; destinationSession: string; tags: string[]; summary: string; querySource: string; firstBodyLine: string } | DaemonFailure> {
   if (daemonUrl === undefined || daemonUrl === "") return { ok: false, kind: "no-url" };
   const r = await getJson(`${daemonUrl}/api/queue/${encodeURIComponent(qitemId)}`, POINTER_ROW_MAX_BYTES);
   if (!r.ok) return r;
@@ -345,23 +348,27 @@ export async function fetchQueuePointerRow(
   // fall back to the FIRST LINE of the body ("O2: the claim-time memory
   // pointer") as the query source - the one place a body line is read,
   // never logged, never stored, sanitised by the caller's sanitizeQuery.
-  // With a summary the body is not read at all.
-  let querySource = summary;
-  if (querySource === "" && typeof doc.body === "string") {
-    // O7 N3 (second security pass): never split() the whole body - a 150 MB
-    // one built a 75 M-element array (~2.6 s) and blew the synchronous
-    // hook's budget. Bound the read first: 400 chars, cut at the first
-    // newline, trim, cap 200. Output-identical to the old code (the cap
-    // lives inside the 400-char window). Honest scope (O8 item 3, R17
-    // note): this slice itself no longer scales with the body, but the
-    // WHOLE JSON was still parsed before reaching here (0.57 s at 80 MB).
-    // The response cap on the getJson above closes that: beyond 256 KB the
-    // read fails closed (kind too-big) before any parse.
+  // V5 (ADR-0019 decision 5) reads that same bounded first line ALWAYS, as
+  // the row's risk text (a brief names a risky action in its body line).
+  // It is never shown and never logged: the pointer shows its own summary
+  // query; lessons show only their own Moment line; the log carries counts.
+  // O7 N3 (second security pass): never split() the whole body - a 150 MB
+  // one built a 75 M-element array (~2.6 s) and blew the synchronous
+  // hook's budget. Bound the read first: 400 chars, cut at the first
+  // newline, trim, cap 200. Output-identical to the old code (the cap
+  // lives inside the 400-char window). Honest scope (O8 item 3, R17
+  // note): this slice itself no longer scales with the body, but the
+  // WHOLE JSON was still parsed before reaching here (0.57 s at 80 MB).
+  // The response cap on the getJson above closes that: beyond 256 KB the
+  // read fails closed (kind too-big) before any parse.
+  let firstBodyLine = "";
+  if (typeof doc.body === "string") {
     const head = doc.body.slice(0, 400);
     const nl = head.indexOf("\n");
     const first = (nl === -1 ? head : head.slice(0, nl)).trim();
-    querySource = first.length > 200 ? first.slice(0, 200) : first;
+    firstBodyLine = first.length > 200 ? first.slice(0, 200) : first;
   }
+  const querySource = summary !== "" ? summary : firstBodyLine;
   return {
     ok: true,
     ...(typeof doc.sourceSession === "string" && doc.sourceSession !== ""
@@ -374,6 +381,7 @@ export async function fetchQueuePointerRow(
     tags,
     summary,
     querySource,
+    firstBodyLine,
   };
 }
 

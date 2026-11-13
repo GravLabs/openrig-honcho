@@ -29,6 +29,7 @@ export type TrustSource =
   | "message"
   | "checkpoint"
   | "restoreMap"
+  | "lore"
   | "conclusion"
   | "summary"
   | "ask"
@@ -44,6 +45,10 @@ const CLASSES: Record<TrustSource, TrustClass> = {
   message: "recorded",
   checkpoint: "recorded",
   restoreMap: "recorded",
+  // V5: the seat's own lore (its earned position words, shown by address) -
+  // what a seat wrote, like the checkpoint and the restore map, never a
+  // model product and never OpenRig state.
+  lore: "recorded",
   conclusion: "derived",
   summary: "derived",
   ask: "derived",

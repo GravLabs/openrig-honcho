@@ -63,6 +63,13 @@ export interface Config {
    */
   sessionName?: string;
   /**
+   * V5 (ADR-0019 decision 5): the topology root the seat's OWN lore folder
+   * is read from - HONCHO_TOPOLOGY_ROOT, else $OPENRIG_HOME/topology, else
+   * $HOME/.openrig/topology. Unset only when none of the three can resolve
+   * (no HOME): lessons then read nothing, silently.
+   */
+  topologyRoot?: string;
+  /**
    * T19b (ADR-0014 decision 1): the session-start block is the continuity
    * digest; HONCHO_DIGEST=off gives the old block. loadConfig always sets
    * it true unless switched off; the field is optional only so the
@@ -281,6 +288,19 @@ export function loadConfig(
     if (ID_RE.test(part)) rig = part;
   }
 
+  // V5 (ADR-0019 decision 5): the topology root for the seat's own lore.
+  // An explicit HONCHO_TOPOLOGY_ROOT wins; else $OPENRIG_HOME/topology; else
+  // $HOME/.openrig/topology. No new failure mode: a value that cannot
+  // resolve leaves the field absent (lessons read nothing, silently) - it
+  // must never disable the plugin (the OPENRIG_URL rule, T16f).
+  const homeRoot = (env.OPENRIG_HOME ?? "").trim().replace(/\/+$/, "");
+  const userHome = (env.HOME ?? "").trim().replace(/\/+$/, "");
+  let topologyRoot: string | undefined;
+  const rawTopo = (env.HONCHO_TOPOLOGY_ROOT ?? "").trim().replace(/\/+$/, "");
+  if (rawTopo !== "") topologyRoot = rawTopo;
+  else if (homeRoot !== "") topologyRoot = `${homeRoot}/topology`;
+  else if (userHome !== "") topologyRoot = `${userHome}/.openrig/topology`;
+
   // T16f (ADR-0012 decision 2): the daemon API base. Only an http(s) URL
   // that parses is accepted; anything else behaves exactly like unset
   // (verification reports unchecked, never an error). Trailing slashes
@@ -321,6 +341,9 @@ export function loadConfig(
     ...(rig !== undefined ? { rig } : {}),
     ...(daemonUrl !== undefined ? { daemonUrl } : {}),
     ...(sessionName !== "" ? { sessionName } : {}),
+    // V5: the lore root chain, resolved in this one place (pure env reads;
+    // a Codex settings file carries HONCHO_TOPOLOGY_ROOT like any HONCHO_*).
+    ...(topologyRoot !== undefined ? { topologyRoot } : {}),
     // T19b: on by default; HONCHO_DIGEST=off/false/0/no gives the old block.
     digest: readBool(env.HONCHO_DIGEST, true),
     novel: readBool(env.HONCHO_RECALL_NOVELTY, true),

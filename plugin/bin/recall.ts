@@ -23,6 +23,7 @@ import { attribute, stripLeadingReminders } from "../src/attribute.ts";
 import type { Config } from "../src/env.ts";
 import { isKillSwitch, loadConfig } from "../src/env.ts";
 import { fetchQueuePointerRow, outboxDelivered } from "../src/daemon.ts";
+import { pointerLessons } from "../src/lessons.ts";
 import { parseEnvelope } from "../src/envelope.ts";
 import { appendHeld, heldPath } from "../src/held.ts";
 import { createClient } from "../src/honcho.ts";
@@ -127,18 +128,34 @@ function writeSeen(file: string, state: { session: string; ids: string[]; hashes
  * silentExit=true (the skip path) there is NO recall to fall back to, so
  * even a thrown search ends the run after its none line; with
  * silentExit=false (the peer join) a thrown search logs and RETURNS so
- * ordinary recall still renders - the pointer never silences memory. */
+ * ordinary recall still renders - the pointer never silences memory.
+ * V5 (ADR-0019 d5): the row's risk text (summary + first body line, both
+ * bounded by the fetch) may add up to two lesson lines beside the block -
+ * local disk reads only, inside this same 1 s wall. The HELD arm never
+ * reaches this function, so held runs show no lessons either; the log
+ * carries a lessons COUNT, never lore text. When the pointer itself has
+ * nothing to show, the lessons still show (DECISION on the row: the risky
+ * moment is the trigger) - stated for the architect's ruling. */
 async function pointerSearchExit(
   c: Config,
   nudgeId: string,
-  querySource: string,
+  row: { summary: string; querySource: string; firstBodyLine: string },
   tN: number,
   t0: number,
   logP: (over: Record<string, unknown>) => void,
   silentExit: boolean,
 ): Promise<void> {
-  const pQuery = pointerQuery(querySource);
+  // V5: lesson lines ride this run (shown arm only). Local IO only - any
+  // failure inside pointerLessons is a silent empty block.
+  const lessons = pointerLessons(c, `${row.summary}\n${row.firstBodyLine}`);
+  const lessonFields = lessons.count > 0 ? { lessons: lessons.count } : {};
+  const pQuery = pointerQuery(row.querySource);
   if (pQuery === "") {
+    if (lessons.count > 0) {
+      writeHookJson("UserPromptSubmit", lessons.text);
+      logP({ n_items: 0, ...lessonFields });
+      process.exit(0);
+    }
     logP({});
     process.exit(0);
   }
@@ -168,23 +185,28 @@ async function pointerSearchExit(
       ...snap.memories.map((m) => ({ ...m, kind: "conclusion" as const })),
       ...snap.messages.map((m) => ({ ...m, kind: "message" as const })),
     ]);
-    if (text === "") {
-      logP({ n_items: count });
+    // V5: the lesson lines ride beside the block (or alone when the block
+    // is empty - the DECISION in the header). With no lessons the bytes and
+    // the event line are today's, byte for byte.
+    const composed = [text, lessons.text].filter((s) => s !== "").join("\n");
+    if (composed === "") {
+      logP({ n_items: count, ...lessonFields });
       process.exit(0);
     }
-    writeHookJson("UserPromptSubmit", text);
+    writeHookJson("UserPromptSubmit", composed);
     logEvent(c, {
       hook: "recall",
       event: "pointer",
       ok: true,
       ms: Date.now() - t0,
-      pointer: "shown",
+      pointer: text !== "" ? "shown" : "none",
       n_items: count,
       qitem: nudgeId,
+      ...lessonFields,
     });
     process.exit(0);
   } catch {
-    logP({ error_class: "other" });
+    logP({ error_class: "other", ...lessonFields });
     if (silentExit) process.exit(0);
   }
 }
@@ -383,7 +405,7 @@ async function main(): Promise<void> {
               // every gate + shown: the pointer owns this run, shown or
               // silent. There is no recall here to fall back to, so even a
               // thrown search ends with this run's one pointer line.
-              await pointerSearchExit(c, nudgeId, r.querySource, tN, t0, logSkipPointer, true);
+              await pointerSearchExit(c, nudgeId, r, tN, t0, logSkipPointer, true);
               process.exit(0); // pointerSearchExit always exits; TS signpost
             }
           }
@@ -498,7 +520,7 @@ async function main(): Promise<void> {
           // exit). A thrown search logs its none line and RETURNS: today's
           // recall, if it answered, still renders (the pointer must never
           // silence memory).
-          await pointerSearchExit(c, nudgeId, winner.r.querySource, tN, t0, logP, false);
+          await pointerSearchExit(c, nudgeId, winner.r, tN, t0, logP, false);
         }
       }
       // row unreadable, absent, answered for another seat, or the pointer

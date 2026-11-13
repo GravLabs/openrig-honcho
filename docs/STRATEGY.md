@@ -290,6 +290,25 @@ flowchart LR
     claim-pointer quality with and without it on the retrieval benchmark;
   - pull the parent along: when recall returns a decision, also return the row
     it came from and whatever superseded it, from the graph's links.
+  SkillMAS (arXiv 2605.09341, owner 2026-11-13) evolves skills and agent roles from
+  verified outcomes; its evidence is weak (no controlled ablations, best round picked
+  on the training split), but its negative results matter: a grown skill library put
+  into the original team did worse than the start, and one more agent cut a score from
+  51 to 32 of 74. Four ideas are borrowed for the lessons loop, each measured first:
+  - credit a lesson only when it was used: the Stop hook records whether the seat's tool
+    calls or reply touched the lesson's lore path, so items split into shown-and-used,
+    shown-not-used and held, not just "shown";
+  - a usefulness score per lesson and tag, a running mean of queue outcomes (no rework)
+    over the items where it was used, computed by code and never by a model; V5 ranks by
+    it, then by date;
+  - new lessons wait for evidence, and the gate changes at most one lesson per lesson
+    group per review window, with no change as the default; a low score becomes a
+    retire proposal to the owning seat, never an edit;
+  - what is shown is a budget: keep the caps (2 lessons, 2 stale proposals) and raise
+    one only after a holdout comparison shows it helps.
+  Not borrowed: model-written skills (only the owning seat writes lore) and automatic
+  team restructuring (topology stays with people and the architect). Per-seat outcome
+  numbers by tag may later inform routing advice to the people who design the team.
   Store test result (2026-11-13, docs/store-test-2026-11.md): Graphiti is not
   the store for what is in force, so the rig stays on Honcho with no second store;
   the ledger's own supersedes links carry TreeAgent idea 3. Kept from the test: a
