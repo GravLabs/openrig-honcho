@@ -700,6 +700,25 @@ describe("bin/mcp.ts rig_memory (T8)", () => {
     }
   });
 
+  // O9: the same status contract next to the 3.5.0 pin, with the fake answering 3.6.1.
+  test("O9: status against a 3.6.1 fake is healthy with the 3.6.1 version", async () => {
+    const fake = await startFakeHoncho({ version: "fake-3.6.1" });
+    const dir = makeTempDir("mcp-test-");
+    const h = start(baseEnv(dir, fake, { HONCHO_API_KEY: "sk-ant-FAKEDONOTLEAK000000" })); // fake-secret
+    try {
+      await h.init();
+      const r = await h.rpc(2, "tools/call", { name: "status", arguments: {} });
+      const st = JSON.parse(textOf(r)) as Record<string, any>;
+      expect(st.server).toEqual({ reachable: true, version: "fake-3.6.1" });
+      expect(st.healthy).toBe(true);
+      expect(st.problems).toEqual([]);
+    } finally {
+      const c = await h.close();
+      expect(c.err).toBe("");
+      await fake.stop();
+    }
+  });
+
   test("F-T8-1: id-less messages are notifications - silent, and tools/call does not execute", async () => {
     const dir = makeTempDir("mcp-test-");
     const cfg: Config = {

@@ -248,12 +248,53 @@ flowchart LR
 - v0.5: **first** the outcome log and seats pulling memory when they claim work
   (ADR-0017, owner 2026-11-10), so every later item can be measured; then lessons
   as itemized lore updates, lessons shown before risky actions, trust classes,
-  local checkpoints; a test run of other stores alongside.
+  local checkpoints.
   A checkpoint is a short line the Stop hook saves from a seat's final reply, in
   local state, with no model involved. The digest shows it first, so "where you
   left off" still works when Honcho is behind.
 - v0.6: proposed lessons, a promotion gate with rollback, standing attack tests,
-  the store decision.
+  the store decision. The store decision rests on one test (owner, 2026-11-11):
+  Graphiti as a **second layer, not a replacement**. Honcho keeps conversations and
+  each seat's view of its peers. A time-aware graph would hold decisions, outcomes
+  and lessons, and the OpenRig queue stays the outside source of what happened.
+  The test, on scratch data only:
+  - load the real decision ledger and outcome records as JSON episodes into a
+    scratch graph: FalkorDBLite, the embedded FalkorDB that runs inside the test
+    process with its data in a scratch folder, so no container or server is
+    added (owner, 2026-11-11). If supersession queries or full-text search
+    misbehave there, rerun the same records on Neo4j Community 5.26 in a
+    throwaway container before judging Graphiti; that container needs the
+    owner's OK. A production second layer would be the FalkorDB server (SSPL,
+    fine for self-hosting). Neptune (cloud-only) and Kuzu (deprecated) are out,
+    and so is a custom store of our own (owner, 2026-11-11): only FalkorDB or
+    Neo4j. If Graphiti fails on both, the rig stays on Honcho alone;
+  - measure extraction quality on the local model, model calls and slot time per
+    episode, and query latency;
+  - check that "what is in force now" and "what was in force at time T" come out
+    right, superseded decisions included, with every fact traced to its episode;
+  - check whether structured episodes can skip model extraction (direct edges).
+  Before it runs, it needs the owner's OK for the extra load on the shared model
+  server. Caura is not benchmarked; its ideas
+  are borrowed instead: trust tiers, contradiction flags with supersession chains,
+  preventive rule memories from failures, and per-seat retrieval tuning. Its
+  outcome learning is kept on outside evidence, never on agents judging
+  themselves.
+  TreeAgent (arXiv 2611.13946, owner 2026-11-12) is not a memory layer: it
+  reads one long structured input inside a single question. Three of its
+  ideas are borrowed, each measured before it stays:
+  - never split a record: a queue row, decision or outcome goes into the graph
+    as one whole episode, and into Honcho as one whole message, never cut into
+    chunks (its largest gain came from this alone);
+  - store the path with the item: prefix what is stored and searched with where
+    it sits (rig, mission, queue item, seat), and compare search and
+    claim-pointer quality with and without it on the retrieval benchmark;
+  - pull the parent along: when recall returns a decision, also return the row
+    it came from and whatever superseded it, from the graph's links.
+  Server baseline (owner, 2026-11-12): Honcho 3.6.1. The 3.6.0 schema changes
+  (tenant_id on tenant-scoped tables, with multi-tenancy off, and new message
+  text-search indexes) passed the full gate against 3.6.1 apart from the
+  version pin. v0.5.1 accepts 3.5.x and 3.6.x, so a rollback to 3.5.0 stays
+  healthy. v0.6 work, the Graphiti test included, is built and gated on 3.6.x.
 - v0.7: self-tuning, only if O7 and O8 have held.
 
 **Later, not scheduled:**

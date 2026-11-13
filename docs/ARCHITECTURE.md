@@ -146,7 +146,7 @@ flowchart LR
   V5["v0.5: capture and deliver<br/>outcome log and pull at claim first,<br/>then lessons in seat lore,<br/>lessons before risky actions, trust classes,<br/>local checkpoints"]
   V6["v0.6: learn safely<br/>proposed lessons, promotion gate,<br/>attack tests, store decision"]
   V7["v0.7: self-tuning<br/>under the same gate"]
-  ST["Store test run:<br/>Caura, Hindsight, Graphiti, MemOS"]
+  ST["Store test:<br/>Graphiti as a second layer<br/>for decisions, outcomes, lessons"]
   V3 --> V4 --> V5 --> V6
   V6 -- "only if O7 and O8 held" --> V7
   V5 -.-> ST

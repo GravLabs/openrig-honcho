@@ -72,8 +72,8 @@ interface H {
   stop(): Promise<void>;
 }
 
-async function mk(cfgOver: Partial<Config> = {}, depsOver: { askTimeoutMs?: number } = {}): Promise<H> {
-  const fake = await startFakeHoncho();
+async function mk(cfgOver: Partial<Config> = {}, depsOver: { askTimeoutMs?: number } = {}, fakeOpts: { version?: string } = {}): Promise<H> {
+  const fake = await startFakeHoncho(fakeOpts); // O9: optional answered version
   const dir = makeTempDir("rev-t8-");
   const config: Config = {
     enabled: true,
@@ -598,7 +598,7 @@ describe("T8 review: status", () => {
         peer: SELF,
         leader: null,
         profile_workspace: null });
-      // fake-3.5.0 endsWith "3.5.0" -> the expected-version check passes
+      // fake-3.5.0 ends on the tested line 3.5.x -> the version check passes (O9 wording)
       expect(out.server).toEqual({ reachable: true, version: "fake-3.5.0" });
       expect(out.session).toEqual({ mission: "general", session: null });
       // T8c-fix: SeatStats grew `sanitized` - strict toEqual, retargeted at
@@ -619,6 +619,21 @@ describe("T8 review: status", () => {
       // E10: the key value is never reported, and the section never names the field
       expect(text).not.toContain(APIKEY);
       expect(text).not.toContain("apiKey");
+    } finally {
+      await h.stop();
+    }
+  });
+
+  // O9: the 3.6.x line beside the O3 3.5.0 pin - same harness, version answer widened.
+  test("O3 status: a 3.6.1 server is healthy and reported verbatim", async () => {
+    const h = await mk({}, {}, { version: "fake-3.6.1" });
+    try {
+      const r = await parse(callLine(1, "status"), h.deps);
+      expect(r.result.isError).toBeUndefined();
+      const out = JSON.parse(textOf(r));
+      expect(out.server).toEqual({ reachable: true, version: "fake-3.6.1" });
+      expect(out.problems).toEqual([]);
+      expect(out.healthy).toBe(true);
     } finally {
       await h.stop();
     }

@@ -21,7 +21,7 @@ import { createClient } from "../../plugin/src/honcho.ts";
 import { errorClassFrom, logEvent, readLogTail, type LogTarget } from "../../plugin/src/log.ts";
 import { handleLine } from "../../plugin/src/mcp.ts";
 import { readRigMission, readSeatState, seatStatePath } from "../../plugin/src/missions.ts";
-import { collectStatus } from "../../plugin/src/status.ts";
+import { collectStatus, versionAccepted } from "../../plugin/src/status.ts";
 import { statsFrom } from "../../plugin/src/stats.ts";
 import { recordPrompt } from "../../plugin/src/writer.ts";
 import { startFakeHoncho, type FakeHoncho } from "../support/fake-honcho.ts";
@@ -409,6 +409,28 @@ describe("status: MCP tool + bin (O3)", () => {
     }
   }, 15000);
 
+  // O9: the same bin contract next to the 3.5.0 pin, against a fake answering 3.6.1.
+  test("bin: healthy 3.6.1 fake -> 0; --json healthy with the 3.6.1 version", async () => {
+    const fake = await startFakeHoncho({ version: "fake-3.6.1" });
+    const dir = makeTempDir("obs-bin-");
+    try {
+      const env = {
+        HOME: dir, HONCHO_STATE_DIR: dir, HONCHO_ENABLED: "true",
+        HONCHO_URL: fake.url, HONCHO_WORKSPACE: WS, HONCHO_PEER: SELF };
+      const human = await runBin("status.ts", env, "");
+      expect(human.code).toBe(0);
+      expect(human.out).toContain("memory: OK");
+      const j = await runBin("status.ts", env, "", ["--json"]);
+      expect(j.code).toBe(0);
+      const st = JSON.parse(j.out) as Record<string, any>;
+      expect(st.healthy).toBe(true);
+      expect(st.server).toEqual({ reachable: true, version: "fake-3.6.1" });
+      expect(st.problems).toEqual([]);
+    } finally {
+      await fake.stop();
+    }
+  }, 15000);
+
   // O3 item 4 (ADR-0017 decision 4): status reports the outcome collector's
   // last run and its record count for THIS workspace, or that it never ran.
   test("O3 item 4: outcomes - never run is a fact, after a run it is mtime + count", async () => {
@@ -509,9 +531,66 @@ describe("status: MCP tool + bin (O3)", () => {
       const client = createClient({ url: config.url, workspace: WS, apiKey: "k", timeoutMs: 2000 });
       const st = await collectStatus(config, client);
       expect(st.healthy).toBe(false);
-      expect(st.problems.some((p) => p.includes("3.5.0"))).toBe(true);
+      // O9 retarget (forced flip): the 3.5.0-only message is gone by design;
+      // the tested-version wording is the new canonical phrase.
+      expect(st.problems.some((p) => p.includes("is not a tested version"))).toBe(true);
     } finally {
       bad.stop();
+    }
+  });
+
+  // O9 (qitem-...5f9e58): written FIRST, against the 3.5.0-only pin, to show
+  // the live-3.6.1 UNHEALTHY bug as a test failure before the fix exists.
+  test("O9 red-first: a 3.6.1 server is healthy", async () => {
+    const good = miniServer("3.6.1");
+    const dir = makeTempDir("obs-collect-");
+    try {
+      const config: Config = {
+        enabled: true, url: `http://127.0.0.1:${good.port}/v3`, workspace: WS, peer: SELF,
+        observeOthers: false, ownerPeer: "owner", profileWorkspace: null, recordAutomation: true,
+        apiKey: "k", stateDir: dir, timeoutMs: 2000 };
+      const client = createClient({ url: config.url, workspace: WS, apiKey: "k", timeoutMs: 2000 });
+      const st = await collectStatus(config, client);
+      expect(st.problems).toEqual([]);
+      expect(st.healthy).toBe(true);
+    } finally {
+      good.stop();
+    }
+  });
+
+  test("O9: versionAccepted parses major.minor - the endsWith regressions stay dead", () => {
+    expect(versionAccepted("3.6.1")).toBe(true);
+    expect(versionAccepted("fake-3.6.1")).toBe(true); // test doubles answer this (pin)
+    expect(versionAccepted("3.5.0")).toBe(true);
+    expect(versionAccepted("fake-3.5.0")).toBe(true);
+    expect(versionAccepted("3.6.14")).toBe(true);
+    expect(versionAccepted("3.5.99")).toBe(true);
+    expect(versionAccepted("3.7.0")).toBe(false);
+    expect(versionAccepted("13.6.1")).toBe(false); // a suffix match would accept it (O9)
+    expect(versionAccepted("13.5.0")).toBe(false); // the old endsWith("3.5.0") accepted this (O9)
+    expect(versionAccepted("3.6")).toBe(false);
+    expect(versionAccepted(null)).toBe(false);
+    expect(versionAccepted(undefined)).toBe(false);
+  });
+
+  test("O9: off-line versions report the exact message naming the lines", async () => {
+    for (const [version, accepted] of [["3.7.0", false], ["13.6.1", false], ["fake-3.6.1", true]] as [string, boolean][]) {
+      const srv = miniServer(version);
+      const dir = makeTempDir("obs-collect-");
+      try {
+        const config: Config = {
+          enabled: true, url: `http://127.0.0.1:${srv.port}/v3`, workspace: WS, peer: SELF,
+          observeOthers: false, ownerPeer: "owner", profileWorkspace: null, recordAutomation: true,
+          apiKey: "k", stateDir: dir, timeoutMs: 2000 };
+        const client = createClient({ url: config.url, workspace: WS, apiKey: "k", timeoutMs: 2000 });
+        const st = await collectStatus(config, client);
+        expect(st.healthy).toBe(accepted);
+        const msg = st.problems.find((p) => p.includes("server version"));
+        if (accepted) expect(msg).toBeUndefined();
+        else expect(msg).toBe(`server version ${version} is not a tested version (3.5.x, 3.6.x)`);
+      } finally {
+        srv.stop();
+      }
     }
   });
 

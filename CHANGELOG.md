@@ -1,5 +1,12 @@
 # Changelog
 
+## v0.5.1 (2026-11-12)
+
+- **Accepts Honcho 3.6.x.** `status` now treats a server on either tested
+  line (3.5.x or 3.6.x) as healthy, matches the version by parsing the
+  trailing major.minor rather than by a suffix match, and names the tested
+  lines when a server is outside both.
+
 ## v0.5.0 (2026-11-11)
 
 Measure whether memory helps, and get seats to look things up themselves (ADR-0017).

@@ -217,6 +217,14 @@ On 2026-11-08 the owner frontloaded Codex seats as v0.4 (ADR-0016), so each late
 row moves one release: these v0.4 items are now v0.5, and so on. STRATEGY.md has the
 current numbering.
 
+**Update 2026-11-11 (owner):** the bake-off narrows to one test, in v0.6: Graphiti
+as a second layer for decisions, outcomes and lessons, beside Honcho rather than
+replacing it. Honcho has the peer model the hooks are built on, which Graphiti
+lacks; Graphiti has bi-temporal supersession and per-fact provenance, which the
+learning loop needs. Caura is not benchmarked; its ideas are borrowed (trust tiers,
+supersession chains, preventive rules from failures, per-seat retrieval tuning),
+with outcomes kept on outside evidence. STRATEGY.md, v0.6, has the test plan.
+
 ## 6. What to reuse
 
 **Rule (owner, 2026-11-05): never copy verbatim. Study the idea, then write our own

@@ -18,7 +18,7 @@ How to install, run and look after the plugin. For what it is, start with the
 
 ## Requirements
 
-- A self-hosted **Honcho v3** server (tested against 3.5.0), with the deriver
+- A self-hosted **Honcho v3** server (tested against 3.5 and 3.6), with the deriver
   enabled and an embedding model configured. Recall and `search` use Honcho's
   semantic search. Plastic Labs' hosted cloud (`*.honcho.dev`) is refused on
   purpose: this plugin is built for a server you run.

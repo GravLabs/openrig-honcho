@@ -8,17 +8,19 @@
 // path+method must exist in the live OpenAPI; every request body field we
 // send must exist in the request schema with a compatible type; every query
 // param we set must be declared; every response field we read must exist.
-// info.version must be 3.5.0 — that is the version the plugin is tested
-// against, and a server upgrade that changes the version FAILS this gate by
-// design, so the drift is caught before users hit it.
+// info.version must be on a tested line (3.5.x or 3.6.x, O9) — the same exact
+// major.minor rule as the status report (versionAccepted below, imported, not
+// copied), and a server upgrade onto any other line FAILS this gate by design,
+// so the drift is caught before users hit it.
 //
 // When the server is unreachable the tests SKIP with a clear message; the
 // gate treats a skip as a failure, so a dead server still stops the release.
 
 import { describe, expect, test } from "bun:test";
 
+import { versionAccepted } from "../../plugin/src/status.ts";
+
 const SPEC_URL = (process.env.HONCHO_URL ?? process.env.HONCHO_TEST_URL ?? "http://localhost:8000/v3").replace(/\/v3\/?$/, "") + "/openapi.json";
-const EXPECTED_VERSION = "3.5.0";
 
 type Kind = "string" | "boolean" | "integer" | "number" | "object" | "array[string]" | "array[object]";
 
@@ -292,8 +294,8 @@ describe("contract: real server OpenAPI (read-only) vs plugin/src/honcho.ts", ()
     expect(calls.length).toBe(CALLS.length);
   });
 
-  t("info.version is the tested version 3.5.0 (drift fails the gate by design)", () => {
-    expect(spec?.info?.version).toBe(EXPECTED_VERSION);
+  t("info.version is on a tested line - 3.5.x or 3.6.x (drift off the lines fails the gate by design)", () => {
+    expect(versionAccepted(spec?.info?.version)).toBe(true);
   });
 
   for (const c of CALLS) {

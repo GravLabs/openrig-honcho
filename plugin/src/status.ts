@@ -15,8 +15,19 @@ import { normalizeMission, readRigMission, readSeatState, seatStatePath } from "
 import { outcomesFile } from "./outcomes.ts";
 import { statsFrom, type SeatStats } from "./stats.ts";
 
-/** The Honcho server version this plugin is built against (ADR-0006 O3). */
-export const EXPECTED_VERSION = "3.5.0";
+/** The Honcho server version lines this plugin is tested against
+ * (ADR-0006 O3; O9 widened 3.5.0-only to these two lines, so a live 3.6.x
+ * server - and an operator rollback to 3.5.0 - both stay healthy). */
+export const TESTED_VERSION_LINES = ["3.5", "3.6"];
+
+/** True when v ends in a full X.Y.Z whose major.minor is a tested line.
+ * Parsed, never a suffix match: endsWith("3.5.0") accepted "13.5.0" (O9),
+ * and test doubles legitimately answer "fake-3.6.1" (pin, O9). */
+export function versionAccepted(v: string | null | undefined): boolean {
+  if (typeof v !== "string") return false;
+  const m = /(\d+)\.(\d+)\.(\d+)$/.exec(v);
+  return m !== null && TESTED_VERSION_LINES.includes(`${m[1]}.${m[2]}`);
+}
 
 /** Unhealthy when live + replay spool pass 80% of their combined 10 MB. */
 export const SPOOL_UNHEALTHY_BYTES = 8_000_000;
@@ -151,8 +162,10 @@ export async function collectStatus(config: Config, client: HonchoClient): Promi
   if (!report.server.reachable) problems.push("server unreachable");
   else {
     const v = report.server.version;
-    if (typeof v !== "string" || !v.endsWith(EXPECTED_VERSION)) {
-      problems.push(`server version ${v ?? "unknown"} is not ${EXPECTED_VERSION}`);
+    if (!versionAccepted(v)) {
+      problems.push(
+        `server version ${v ?? "unknown"} is not a tested version (${TESTED_VERSION_LINES.map((l) => `${l}.x`).join(", ")})`,
+      );
     }
   }
 

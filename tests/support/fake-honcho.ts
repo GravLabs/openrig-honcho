@@ -101,7 +101,7 @@ export interface FakeHoncho {
   stop(): Promise<void>;
 }
 
-export async function startFakeHoncho(): Promise<FakeHoncho> {
+export async function startFakeHoncho(opts?: { version?: string }): Promise<FakeHoncho> {
   const requests: FakeRequest[] = [];
   const state: FakeState = {
     workspaces: new Set(),
@@ -692,9 +692,10 @@ export async function startFakeHoncho(): Promise<FakeHoncho> {
     }
 
     // the status tool reads the version from the ORIGIN's openapi.json, like
-    // the real server serves it outside /v3 (probed 2026-10-28)
+    // the real server serves it outside /v3 (probed 2026-10-28). O9: callers
+    // may pick the answered version (default keeps fake-3.5.0).
     if (u.pathname === "/openapi.json") {
-      return Response.json({ openapi: "3.1.0", info: { title: "fake-honcho", version: "fake-3.5.0" } });
+      return Response.json({ openapi: "3.1.0", info: { title: "fake-honcho", version: opts?.version ?? "fake-3.5.0" } });
     }
     if (!u.pathname.startsWith("/v3/")) return notFound();
     let segs: string[];
