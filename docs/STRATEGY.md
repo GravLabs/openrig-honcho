@@ -335,6 +335,19 @@ flowchart LR
 - Support for more agent harnesses beyond Claude Code and Codex. Each harness
   needs its own way to hook the moments memory is shown, and the core should stay
   shared across them.
+- Work with multi-agent systems other than OpenRig (owner, 2026-11-13). Today the
+  plugin reads OpenRig directly for five things: who a seat is and which rig it is in
+  (the session name), the message envelope and sender check, the queue (hand-offs,
+  their delivery record, the claim pointer and the outcome log), the topology folders
+  (seat lore), and the install layout. The memory core does not depend on any of it:
+  Honcho, the ledger, recall, the digest, trust classes and status entries. The work
+  is one small adapter interface for those five, with OpenRig as the first adapter and
+  a plain "no orchestrator" adapter (identity from settings, no queue, lessons from a
+  configured folder) as the second, so a single agent or another framework gets the
+  memory core without the queue features. Each further system (for example a team
+  framework with its own task board) is then one adapter, measured on the same
+  benchmark and scenario tests. Its features that need outside evidence (outcomes,
+  lesson credit) work only where that system records task outcomes.
 
 **Throughout:**
 - Store state as links, not copies.
