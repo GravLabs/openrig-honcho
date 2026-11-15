@@ -25,6 +25,9 @@ import {
   newDecisionId,
   parseEntry,
   supersededMap,
+  supersedeMarker,
+  ownerChecked,
+  ownerMark,
   toEntries,
   validId,
   validScope,
@@ -32,6 +35,9 @@ import {
 } from "./ledger.ts";
 import { collectStatus } from "./status.ts";
 import { classTag, trustClass, trustTag, type TrustClass } from "./trust.ts";
+import { ownerTurnCheck, readTurn } from "./turn.ts";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { ensureSession, freeN, recordBody } from "./writer.ts";
 
 export interface McpDeps {
@@ -151,7 +157,7 @@ function toolList(deps: McpDeps): unknown[] {
     tools.push({
       name: "remember",
       description:
-        "Record an explicit decision, owner approval or status report (leader only) into shared memory. Optional: reason, scope (rig | mission | a qitem id; default mission), supersedes (an in-force d-id this replaces), kind (decision default | approval | status; the newest status per scope and mission is the one in force). The reply names the new decision id.",
+        "Record an explicit decision, owner approval or status report (leader only) into shared memory. Optional: reason, scope (rig | mission | a qitem id; default mission), supersedes (an in-force d-id this replaces), kind (decision default | approval | status; the newest status per scope and mission is the one in force). kind approval, and superseding an approval, are accepted only on a turn the owner started. The reply names the new decision id.",
       inputSchema: {
         type: "object",
         properties: {
@@ -251,13 +257,13 @@ async function callAsk(deps: McpDeps, args: Record<string, unknown>): Promise<To
           // exactly as before.
           const label = [
             ageLabel(now, d.at) ?? "undated",
-            d.kind === "approval" ? "approval" : d.kind === "status" ? "status" : "",
+            d.kind === "approval" ? (d.ownerChecked === false ? "approval, owner not checked" : "approval") : d.kind === "status" ? "status" : "",
             forScopeLabel(d),
           ]
             .filter((x) => x !== "")
             .join(", ");
           lines.push(
-            `- ${label}${d.kind === "approval" ? trustTag("approval") : d.kind === "status" ? trustTag("status") : trustTag("decision")}`,
+            `- ${label}${d.kind === "approval" ? trustTag(d.ownerChecked === false ? "uncheckedApproval" : "approval") : d.kind === "status" ? trustTag("status") : trustTag("decision")}`,
           );
           lines.push(...x3(d.content).split("\n"));
         }
@@ -268,18 +274,6 @@ async function callAsk(deps: McpDeps, args: Record<string, unknown>): Promise<To
     }
   }
   return textResult(base);
-}
-
-/** T19a (fixed point 4): the search marker for a superseded or retired
- * ledger entry's content; "" for anything else (plain, retire entries
- * themselves, unknown ids, no ledger knowledge). */
-function supersedeMarker(content: string, superseded: Map<string, string> | undefined): string {
-  if (superseded === undefined) return "";
-  const p = parseEntry(content);
-  if (p.kind === "plain" || p.kind === "retire") return "";
-  const by = superseded.get(p.id);
-  if (by === undefined) return "";
-  return by === "retired" ? " (retired)" : ` (superseded by ${by})`;
 }
 
 /** True when every job settled within `ms`; jobs swallow their own errors.
@@ -337,8 +331,10 @@ export type SearchMemory = Conclusion & { trust: TrustClass };
  * else on the pair (decision, status, plain, retire) is a seat's write
  * (recorded). */
 const ledgerTrust = (content: string): TrustClass => {
-  const k = parseEntry(content).kind;
-  return k === "approval" ? trustClass("approval") : trustClass(k === "status" ? "status" : "decision");
+  const p = parseEntry(content);
+  const k = p.kind;
+  if (k === "approval") return trustClass(ownerChecked(p) ? "approval" : "uncheckedApproval");
+  return trustClass(k === "status" ? "status" : "decision");
 };
 
 export async function searchSnapshot(
@@ -470,7 +466,9 @@ async function callSearch(deps: McpDeps, args: Record<string, unknown>): Promise
   if (memories.length === 0) lines.push("(none)");
   for (const m of memories) {
     lines.push(`- ${ageLabel(now, String(m.created_at ?? "")) ?? "undated"}${classTag(m.trust)}`);
-    lines.push(...x3(redact(m.content).text + supersedeMarker(m.content, superseded)).split("\n"));
+    // v0.5.5: an unstamped approval on the ledger pair says so in words too
+    const om = m.trust === "derived" ? "" : ownerMark(m.content);
+    lines.push(...x3(redact(m.content).text + supersedeMarker(m.content, superseded) + om).split("\n"));
   }
   lines.push("Messages:");
   if (messages.length === 0) lines.push("(none)");
@@ -575,6 +573,22 @@ function parseLedgerArgs(args: Record<string, unknown>):
   };
 }
 
+/** v0.5.5: the plain refusal when an owner approval is written, replaced or
+ * retired on a turn the owner did not start. Logged as refused (counts). */
+const OWNER_REFUSAL_PREFIX = "refused, owner approval:";
+function ownerRefusal(op: "approval" | "supersede" | "retire", why: string, target?: string): ToolResult {
+  const what =
+    op === "approval"
+      ? "an approval is recorded only on a turn the owner started"
+      : `${target} is an owner-checked approval; only the owner can ${op === "retire" ? "retire" : "replace"} it`;
+  return textResult(
+    `${OWNER_REFUSAL_PREFIX} ${what}, and ${why}. Record it as a decision, or ask the owner to say it in their own words.`,
+    true,
+  );
+}
+const isOwnerRefusal = (r: ToolResult): boolean =>
+  r.isError === true && (r.content?.[0]?.text ?? "").startsWith(OWNER_REFUSAL_PREFIX);
+
 async function callRemember(deps: McpDeps, args: Record<string, unknown>): Promise<ToolResult> {
   const config = deps.config;
   const client = deps.client;
@@ -588,13 +602,23 @@ async function callRemember(deps: McpDeps, args: Record<string, unknown>): Promi
   const content0 = redact(args.fact).text;
   const reason = led.reason !== undefined ? redact(led.reason).text : undefined;
   const now = (deps.now ?? (() => new Date().toISOString()))();
+  // v0.5.5 (ADR-0019 amended 2026-11-14): an owner approval only on a turn
+  // the owner started, read from the prompt hook's local turn record - never
+  // from the model's word. Checked before any network call or write.
+  const turn = ownerTurnCheck(readTurn(config.stateDir, config.workspace, config.peer), Date.parse(now), config.ownerPeer);
+  if (led.kind === "approval" && !turn.ok) return ownerRefusal("approval", turn.why);
   try {
     // supersedes must name an entry IN the current ledger; checked against
     // the server BEFORE anything is written - a bad id writes nothing.
     if (led.supersedes !== undefined) {
       const cur = currentLedger(await ledgerFromServer(client, config.peer));
-      if (!cur.some((e) => e.id === led.supersedes))
+      const target = cur.find((e) => e.id === led.supersedes);
+      if (target === undefined)
         return textResult(`remember: supersedes ${led.supersedes} is not in the current ledger`, true);
+      // v0.5.5: replacing an owner approval is the owner's call too. R19
+      // F-N5: only a STAMPED one - an unstamped (pre-v0.5.5) approval is a
+      // recorded entry, which its own seat may end like a decision.
+      if (ownerChecked(target) && !turn.ok) return ownerRefusal("supersede", turn.why, target.id);
     }
     const id = newDecisionId(config.peer, now, content0);
     const content = formatEntry({
@@ -602,6 +626,7 @@ async function callRemember(deps: McpDeps, args: Record<string, unknown>): Promi
       id,
       scope: led.scope,
       ...(led.supersedes !== undefined ? { supersedes: led.supersedes } : {}),
+      ...(led.kind === "approval" && turn.ok ? { owner: turn.promptHash } : {}),
       fact: content0,
       ...(reason !== undefined ? { reason } : {}),
     });
@@ -676,8 +701,14 @@ async function callRetire(deps: McpDeps, args: Record<string, unknown>): Promise
   const now = (deps.now ?? (() => new Date().toISOString()))();
   try {
     const cur = currentLedger(await ledgerFromServer(client, config.peer));
-    if (!cur.some((e) => e.id === target))
-      return textResult(`retire: ${target} is not in the current ledger`, true);
+    const entry = cur.find((e) => e.id === target);
+    if (entry === undefined) return textResult(`retire: ${target} is not in the current ledger`, true);
+    // v0.5.5 (ADR-0019 amended 2026-11-14): ending an owner approval is the
+    // owner's call - same turn-record check as writing one.
+    if (ownerChecked(entry)) {
+      const turn = ownerTurnCheck(readTurn(config.stateDir, config.workspace, config.peer), Date.parse(now), config.ownerPeer);
+      if (!turn.ok) return ownerRefusal("retire", turn.why, target);
+    }
     const content = formatRetire(target, reasonR);
     const sess = await leaderSession(client, config, now);
     if (!sess.ok) return textResult(`memory unavailable: ${sess.why}`, true);
@@ -736,6 +767,29 @@ async function callMission(deps: McpDeps, args: Record<string, unknown>): Promis
   return { res: textResult(JSON.stringify({ ok: r.ok, mission: r.mission, scope: r.scope })), refused: false };
 }
 
+/** v0.5.5: the plugin version in the installed plugin.json, or null. A
+ * running rig_memory server keeps the code it started with, so a reinstall
+ * under it changes nothing until the seat restarts (found 2026-11-14: every
+ * Claude-seat server on both pilots was still on pre-v0.5.1 code). */
+export function installedVersion(pluginDir: string): string | null {
+  try {
+    const v = (JSON.parse(readFileSync(join(pluginDir, ".claude-plugin", "plugin.json"), "utf8")) as { version?: unknown }).version;
+    return typeof v === "string" && v !== "" ? v : null;
+  } catch {
+    return null;
+  }
+}
+const PLUGIN_DIR = join(import.meta.dir, "..");
+/** The version this server process loaded at start. */
+const LOADED_VERSION = installedVersion(PLUGIN_DIR);
+
+/** v0.5.5: the status problem when this server runs older code than the
+ * installed plugin; null when they match or either side is unknown. */
+export function staleServerProblem(loaded: string | null, installed: string | null): string | null {
+  if (loaded === null || installed === null || loaded === installed) return null;
+  return `this rig_memory server is running v${loaded} code but v${installed} is installed: restart the seat (keeping its conversation) to load it`;
+}
+
 async function callStatus(deps: McpDeps): Promise<ToolResult> {
   const config = deps.config;
   const client = deps.client;
@@ -744,7 +798,13 @@ async function callStatus(deps: McpDeps): Promise<ToolResult> {
   // lines and no raw error strings anywhere in it.
   // V2 (ADR-0019 d2): one label line above the JSON - status reports OpenRig
   // state (authoritative); the JSON bytes and the bin (collectStatus) unchanged.
-  return textResult(`[${trustClass("state")}]\n${JSON.stringify(await collectStatus(config, client), null, 2)}`);
+  const report = await collectStatus(config, client);
+  const stale = staleServerProblem(LOADED_VERSION, installedVersion(PLUGIN_DIR));
+  if (stale !== null) {
+    report.problems.push(stale);
+    report.healthy = false;
+  }
+  return textResult(`[${trustClass("state")}]\n${JSON.stringify(report, null, 2)}`);
 }
 
 interface CallOutcome {
@@ -783,7 +843,8 @@ async function handleCall(deps: McpDeps, params: unknown): Promise<CallOutcome> 
       if (!isLeaderSeat(deps.config)) {
         return { res: textResult("remember is leader-only", true), refused: true };
       }
-      return { res: await callRemember(deps, args), refused: false };
+      const res = await callRemember(deps, args);
+      return { res, refused: isOwnerRefusal(res) };
     }
     case "retire": {
       // same shape as remember: off means off; a non-leader by name gets the
@@ -792,7 +853,8 @@ async function handleCall(deps: McpDeps, params: unknown): Promise<CallOutcome> 
       if (!isLeaderSeat(deps.config)) {
         return { res: textResult("retire is leader-only", true), refused: true };
       }
-      return { res: await callRetire(deps, args), refused: false };
+      const res = await callRetire(deps, args);
+      return { res, refused: isOwnerRefusal(res) };
     }
     case "mission":
       return await callMission(deps, args);

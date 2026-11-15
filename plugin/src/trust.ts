@@ -24,6 +24,7 @@ export type TrustSource =
   | "queue"
   | "outcome"
   | "approval"
+  | "uncheckedApproval"
   | "decision"
   | "status"
   | "message"
@@ -40,6 +41,9 @@ const CLASSES: Record<TrustSource, TrustClass> = {
   queue: "authoritative",
   outcome: "authoritative",
   approval: "authoritative",
+  // v0.5.5 (ADR-0019 amended 2026-11-14): an approval without the owner-turn
+  // stamp - written before v0.5.5, or past remember - is a seat's write.
+  uncheckedApproval: "recorded",
   decision: "recorded",
   status: "recorded",
   message: "recorded",

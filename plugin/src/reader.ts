@@ -18,11 +18,11 @@ import type { Config } from "./env.ts";
 import { type Conclusion, type HonchoClient } from "./honcho.ts";
 import { readSeatState, resolveSession, normalizeMission, readRigMission, seatStatePath, scopeFor } from "./missions.ts";
 import { ensureSession, freeN } from "./writer.ts";
-import { currentLedger, entryBody, inForceFor, LEDGER_PEER, toEntries } from "./ledger.ts";
+import { currentLedger, entryBody, inForceFor, LEDGER_PEER, ownerChecked, toEntries } from "./ledger.ts";
 import { readStaleState, staleStateExists, takeStaleForDigest, writeStaleState } from "./stale.ts";
 import { maybeLessonSuggestion } from "./lesson.ts";
 import { DAEMON_TIMEOUT_MS, fetchOpenWork } from "./daemon.ts";
-import { isItemScope, renderContinuity, renderInjection, type InjectionAwayConclusion, type InjectionDecision, type InjectionDigestEntry, type InjectionInput, type InjectionMissionSummary, type InjectionSessionSummary, type InjectionSource } from "./inject.ts";
+import { isItemScope, renderContinuityShown, renderInjection, type InjectionAwayConclusion, type InjectionDecision, type InjectionDigestEntry, type InjectionInput, type InjectionMissionSummary, type InjectionSessionSummary, type InjectionSource } from "./inject.ts";
 
 /** T19b: the digest counts logged (counts only, X1) with moment "continuity". */
 export interface ContinuityStats {
@@ -36,6 +36,11 @@ export interface ContinuityStats {
    * mid-read page failure, or no finite total answered) - the count known
    * from the server, 0 when the end was never answered. Never content. */
   ledger_capped?: number;
+  /** v0.5.5: lines actually shown after the fill budget (inject.renderContinuityShown) -
+   * the checkpoint (0/1), stale proposals (0-2), the lesson suggestion (0/1). */
+  n_checkpoint: number;
+  n_stale: number;
+  n_lesson: number;
 }
 
 export interface ReaderDeps {
@@ -179,6 +184,7 @@ export async function fetchMissionDecisions(
     // T19b: scope lets the digest match approvals to open items; the old
     // renderer and the ask tool ignore it.
     scope: e.scope,
+    ...(e.kind === "approval" ? { ownerChecked: ownerChecked(e) } : {}),
   }));
 }
 
@@ -553,7 +559,7 @@ async function buildContinuity(a: {
     a.source === "startup" && config.sessionName !== undefined
       ? maybeLessonSuggestion(config.stateDir, config.workspace, config.sessionName, config.peer, now)
       : undefined;
-  const text = renderContinuity({
+  const { text, shown } = renderContinuityShown({
     now,
     ...(checkpoint !== null ? { checkpoint } : {}),
     ...(openItems.length > 0 ? { openWork: openItems } : {}),
@@ -577,6 +583,7 @@ async function buildContinuity(a: {
     n_away: away.length,
     has_pointer: pointer !== undefined,
     ...(cappedTotal !== undefined ? { ledger_capped: cappedTotal } : {}),
+    ...shown,
   });
   return text;
 }

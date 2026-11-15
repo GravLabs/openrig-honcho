@@ -1,5 +1,32 @@
 # Changelog
 
+## v0.5.5 (2026-11-14)
+
+Two fixes found by reading the 2026 work on revoked memory and memory authority.
+
+- **The claim pointer shows ledger state.** A pointer title now carries the entry's real
+  trust class and the same `(retired)` or `(superseded by d-...)` mark `search` shows. A
+  `[retire ...]` entry is never shown as a title. Before, a retired decision could appear
+  as a plain `[derived]` title.
+- **Owner approvals only on the owner's turn.** The prompt hook records locally where each
+  turn came from (the owner, a peer, or OpenRig automation). `remember` with
+  `kind: approval`, and replacing or retiring an approval, are refused unless the owner
+  started the current turn within the last 30 minutes. A peer message, a hand-off or a
+  recalled note saying "the owner approved" can no longer become an approval. Accepted
+  approvals carry an owner stamp; approvals recorded before v0.5.5 still show, marked
+  `owner not checked`, with class `recorded`. Not covered: a prompt typed straight into
+  the lead seat's terminal without a rig envelope still counts as the owner's, and every
+  seat shares one workspace key.
+- **The digest log says what a seat was shown.** Each digest's log line now counts the
+  lines that survived into the text the seat saw: the "where you left off" checkpoint
+  (`n_checkpoint`), stale proposals (`n_stale`) and the lesson suggestion (`n_lesson`).
+  Counts only, never content; a part cut by the size budget counts as not shown.
+- **`status` says when the memory server is out of date.** A running `rig_memory` server
+  keeps the code it started with, so reinstalling the plugin does not reach it until the
+  seat restarts. `status` now reports "running vX code but vY is installed" and turns
+  unhealthy until the seat is restarted. (Found on the pilots: every Claude seat's server
+  was still on code from before v0.5.1.)
+
 ## v0.5.4 (2026-11-13)
 
 - **Lessons when work names a risky action.** When a seat picks up a verified queue

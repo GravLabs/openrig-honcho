@@ -28,6 +28,7 @@ import {
   POINTER_BLOCK_HEADER,
   pointerArm,
   pointerBlock,
+  pointerItems,
   pointerQuery,
   sanitizeQuery,
   sanitizeVisible,
@@ -1398,3 +1399,89 @@ describe("O8 F-K: real hand-off shapes arm the pointer", () => {
 // fetches (~90 ms) and legitimately forfeits, so the bin cannot
 // discriminate; the unit pin measures the read that was the bug. Since O8
 // item 3 the huge-body case fails closed (too-big) before any parse.
+
+// v0.5.5 fix 1 (ADR-0019 amended 2026-11-14): the pointer keeps the ledger
+// marks and classes its search snapshot already computed. Before the fix
+// bin/recall.ts relabelled every memory "conclusion" and pointerBlock took no
+// marks, so a retired decision showed as a plain [derived] title.
+describe("v0.5.5 pointer keeps ledger marks and classes", () => {
+  const dec = "[decision d-11111111 · scope mission] use bun for tests";
+  const dec2 = "[decision d-22222222 · scope mission · supersedes d-11111111] use bun 1.3 for tests";
+  const appr = "[approval d-33333333 · scope rig] owner approved the v1 release";
+  const apprStamped = "[approval d-33333334 · scope rig · owner 0123abcd] owner approved the v1 release";
+  const ret = "[retire d-44444444] no longer needed";
+  const snap = (memories: { id: string; content: string; trust: "authoritative" | "recorded" | "derived" }[], superseded?: Map<string, string>) => ({
+    memories,
+    messages: [] as { id: string; content: string }[],
+    superseded,
+  });
+
+  test("a superseded decision carries the same marker search shows, and its real class", () => {
+    const items = pointerItems(snap([{ id: "c1", content: dec, trust: "recorded" }], new Map([["d-11111111", "d-22222222"]])));
+    const b = pointerBlock("q", 1, items);
+    expect(b).toContain("(superseded by d-22222222) [recorded]");
+    expect(b).not.toContain("[derived]");
+  });
+
+  test("a retired decision is marked (retired)", () => {
+    const items = pointerItems(snap([{ id: "c1", content: dec, trust: "recorded" }], new Map([["d-11111111", "retired"]])));
+    expect(pointerBlock("q", 1, items)).toContain("(retired) [recorded]");
+  });
+
+  test("v0.5.5: an unstamped approval on the ledger pair says owner not checked", () => {
+    const items = pointerItems(snap([{ id: "c8", content: appr, trust: "recorded" }], new Map()));
+    expect(pointerBlock("q", 1, items)).toContain("(owner not checked) [recorded]");
+  });
+
+  test("an approval keeps its class", () => {
+    const items = pointerItems(snap([{ id: "c3", content: apprStamped, trust: "authoritative" }], new Map()));
+    const b = pointerBlock("q", 1, items);
+    expect(b).toContain("[authoritative]");
+    expect(b).not.toContain("owner not checked");
+  });
+
+  test("a retire entry is never a title; the next item takes the slot", () => {
+    const items = pointerItems(
+      snap(
+        [
+          { id: "c4", content: ret, trust: "recorded" },
+          { id: "c2", content: dec2, trust: "recorded" },
+          { id: "c5", content: "plain conclusion text", trust: "derived" },
+        ],
+        new Map([["d-44444444", "retired"]]),
+      ),
+    );
+    const b = pointerBlock("q", 3, items);
+    expect(b).not.toContain("no longer needed");
+    expect(b).not.toContain("- c4:");
+    expect(b).toContain("- c2:");
+    expect(b).toContain("- c5: plain conclusion text [derived]");
+  });
+
+  test("a plain conclusion and a message are byte-for-byte today's titles", () => {
+    const items = pointerItems({
+      memories: [{ id: "c6", content: "a conclusion", trust: "derived" }],
+      messages: [{ id: "m1", content: "a message" }],
+      superseded: undefined,
+    });
+    const today = pointerBlock("q", 2, [
+      { id: "c6", content: "a conclusion", kind: "conclusion" },
+      { id: "m1", content: "a message", kind: "message" },
+    ]);
+    expect(pointerBlock("q", 2, items)).toBe(today);
+  });
+
+  test("R19 N-N8: a ledger-header look-alike off the ledger pair is quoted", () => {
+    const items = pointerItems(snap([{ id: "c9", content: dec, trust: "derived" }], undefined));
+    expect(pointerBlock("q", 1, items)).toContain("- c9: > [decision d-11111111");
+    const onLedger = pointerItems(snap([{ id: "c10", content: dec, trust: "recorded" }], undefined));
+    expect(pointerBlock("q", 1, onLedger)).toContain("- c10: [decision d-11111111");
+  });
+
+  test("ledger text on a non-ledger pair stays derived (class by path, not text)", () => {
+    const items = pointerItems(snap([{ id: "c7", content: dec, trust: "derived" }], new Map([["d-11111111", "retired"]])));
+    const b = pointerBlock("q", 1, items);
+    expect(b).toContain("[derived]");
+    expect(b).not.toContain("[recorded]");
+  });
+});

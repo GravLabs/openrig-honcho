@@ -21,9 +21,13 @@ import { readRigMission } from "../../plugin/src/missions.ts";
 import { startFakeHoncho, type FakeHoncho } from "../support/fake-honcho.ts";
 import { startFakeDaemon } from "../support/fake-daemon.ts";
 import { LEDGER_PEER } from "../../plugin/src/ledger.ts";
+import { saveTurn } from "../../plugin/src/turn.ts";
 
 const WS = "ws";
 const SELF = "build";
+/** v0.5.5: the prompt hook's record of an owner turn, as recall.ts writes it. */
+const ownerTurn = (dir: string): boolean =>
+  saveTurn(dir, WS, SELF, { origin: "owner", peer: "owner", at: new Date().toISOString(), promptHash: "0123abcd" });
 const REPO = join(import.meta.dir, "..", "..");
 const BIN = join(REPO, "plugin/bin/mcp.ts");
 
@@ -281,6 +285,7 @@ describe("bin/mcp.ts rig_memory (T8)", () => {
     const h = start(baseEnv(dir, fake, { HONCHO_OBSERVE_OTHERS: "true" }));
     try {
       await h.init();
+      expect(ownerTurn(dir)).toBe(true);
       const a = await h.rpc(2, "tools/call", { name: "remember", arguments: { fact: "run on 868" } });
       const idA = /\((d-[0-9a-f]{8})\)$/.exec(textOf(a))![1];
       const b = await h.rpc(3, "tools/call", {
@@ -299,7 +304,7 @@ describe("bin/mcp.ts rig_memory (T8)", () => {
       expect(concl.length).toBe(2);
       const c1 = String((concl[1] as Record<string, unknown>).content);
       expect(
-        c1.startsWith(`[approval ${idB} · scope rig · supersedes ${idA}] run on 915 (reason: owner approved [REDACTED`),
+        c1.startsWith(`[approval ${idB} · scope rig · supersedes ${idA} · owner 0123abcd] run on 915 (reason: owner approved [REDACTED`),
       ).toBe(true);
       expect(c1).not.toContain("FAKETHISIS");
       const msgs = fake.state.messages.get(`${WS}/build--general--1`) ?? [];
@@ -451,6 +456,7 @@ describe("bin/mcp.ts rig_memory (T8)", () => {
     const h = start(baseEnv(dir, fake, { HONCHO_OBSERVE_OTHERS: "true" }));
     try {
       await h.init();
+      expect(ownerTurn(dir)).toBe(true);
       await h.rpc(2, "tools/call", { name: "mission", arguments: { id: "auth" } });
       await h.rpc(3, "tools/call", { name: "remember", arguments: { fact: "auth is delegated to the gateway" } });
       await h.rpc(5, "tools/call", {
@@ -499,6 +505,7 @@ describe("bin/mcp.ts rig_memory (T8)", () => {
     const h = start(baseEnv(dir, fake, { HONCHO_OBSERVE_OTHERS: "true" }));
     try {
       await h.init();
+      expect(ownerTurn(dir)).toBe(true);
       await h.rpc(2, "tools/call", { name: "mission", arguments: { id: "auth" } });
       await h.rpc(3, "tools/call", { name: "remember", arguments: { fact: "auth is delegated to the gateway" } });
       await h.rpc(4, "tools/call", {

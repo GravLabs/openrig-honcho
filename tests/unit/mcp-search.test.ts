@@ -233,7 +233,7 @@ describe("search tool (T16d)", () => {
         created_at: ago(HOUR),
       });
       h.fake.addConclusion(WS, {
-        content: "[approval d-cafe0001 · scope mission] Ship the radio pilot.",
+        content: "[approval d-cafe0001 · scope mission · owner 0123abcd] Ship the radio pilot.",
         observer_id: SELF,
         observed_id: LEDGER_PEER,
         created_at: ago(HOUR),

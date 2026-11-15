@@ -94,6 +94,46 @@ delete, force), beside the claim pointer, read from the seat's own lore files on
 It never blocks a command. A pre-tool hook may add the same pointer as reinforcement,
 knowing it reaches the model with the tool result. Each is a short build row with a failing test first.
 
+**Amended 2026-11-14 (v0.5.5, owner: "yes, ship v0.5.5 with both fixes").** A deep reading
+of ten 2026 papers (revocation, origin-bound authority, gates) found two gaps in what
+shipped:
+
+- **The claim pointer drops ledger state.** Its search snapshot reads the ledger pair and
+  knows which entries are retired or superseded, but the pointer relabels every hit
+  `derived` and shows a retired decision as a plain title. The pointer now shows each
+  title with its real class and the same "(retired)" / "(superseded by …)" marker `search`
+  uses, and never uses a retire entry as a title. An agent shown a revoked record acted on
+  it in 43% of trials in 2609.08258; a read-time mark is the cheap part of the fix (v0.6
+  extends it to every surface).
+- **Decision 2 held only for reading.** `remember` took `kind: approval` from the lead
+  seat's model with no check that the owner said it, so a peer message or a Honcho
+  conclusion saying "the owner approved X" could become an authoritative approval. Now
+  the prompt hook records where the current turn came from (owner, peer, automation) in
+  local state, and `remember` accepts an approval only when the current turn is the
+  owner's and recent; retiring or superseding an approval needs the same. The entry is
+  stamped as owner-checked. Approvals without the stamp (all earlier ones) stay visible
+  but show as "owner not checked" with class `recorded`, not `authoritative`.
+  Residuals, stated rather than fixed: a prompt with no rig envelope still counts as the
+  owner's (a peer typing raw keys into the lead pane passes), and every seat shares one
+  workspace key, so a process that writes to the server directly, bypassing `remember`,
+  can still forge an entry, stamp included. The stamp closes the model-laundering path,
+  not the shared-key path; per-seat keys would need a server change and the owner's OK.
+
+  Rulings from the attack review (R19, 2026-11-15): only an approval carrying the owner
+  stamp needs an owner turn to retire or replace; an unstamped one is a recorded entry its
+  own seat may end like a decision, or every pre-v0.5.5 approval would be stuck until the
+  owner typed in the lead pane. The 30-minute limit stays: a long owner-started turn that
+  outlives it is refused and the seat asks the owner again. A record dated more than a
+  minute ahead never counts, and an owner record must name the owner peer. Stated
+  residual: the prompt hook's two exits before its configuration loads (a broken settings
+  file, an unknown harness) write no record, so the previous turn's stands; that needs a
+  settings file broken after the seat's MCP server started (a broken file at start
+  disables the server too), and the 30-minute limit still bounds it.
+- **A running MCP server keeps its old code** (found 2026-11-14: every Claude seat's server
+  on both pilots predated v0.5.1). Installs that change server code ask for a
+  keep-conversation restart of each seat, and `status` now reports "running vX code but
+  vY is installed".
+
 ## Not doing
 
 - Writing, editing or mining lore from the plugin, or copying lore text to Honcho.

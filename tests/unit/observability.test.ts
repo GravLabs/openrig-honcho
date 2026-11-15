@@ -87,6 +87,9 @@ const LOG_KEYS = new Set([
   "n_approvals",
   "n_away",
   "has_pointer",
+  "n_checkpoint",
+  "n_stale",
+  "n_lesson",
 ]);
 
 const readLogLines = (dir: string, ws = WS): Record<string, unknown>[] => {

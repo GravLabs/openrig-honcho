@@ -20,7 +20,8 @@
 
 import { createHash } from "node:crypto";
 import { redact } from "./redact.ts";
-import { trustTag } from "./trust.ts";
+import { ownerMark, parseEntry, supersedeMarker } from "./ledger.ts";
+import { classTag, trustTag, type TrustClass } from "./trust.ts";
 
 /** The wall cap for the pointer's search. Recall's fetch budget is 2500 ms;
  * the pointer keeps the whole ADDED work under 1 s (the ADR "How we'll
@@ -124,6 +125,34 @@ export interface PointerItem {
    * (plugin/bin/recall.ts) sets it from the snapshot arrays; absent is
    * read as "conclusion" (derived), the historical default shape. */
   kind?: "conclusion" | "message";
+  /** v0.5.5 (ADR-0019 amended 2026-11-14): the class the search snapshot
+   * set by fetch path (ledger pair by entry kind, other pairs derived).
+   * Absent = classed by `kind`, the pre-v0.5.5 shape. */
+  trust?: TrustClass;
+  /** v0.5.5: the ledger marker search shows (" (retired)", " (superseded
+   * by d-...)") - computed by code from ledger state, never item text. */
+  mark?: string;
+}
+
+/**
+ * v0.5.5: the pointer's items from the shared search snapshot, keeping what
+ * the snapshot already knew - each memory's class and the ledger's
+ * retired/superseded marks - so a pointer title says what search would.
+ * Conclusions first, then messages (today's order).
+ */
+export function pointerItems(snap: {
+  memories: { id?: unknown; content?: unknown; trust: TrustClass }[];
+  messages: { id?: unknown; content?: unknown }[];
+  superseded: Map<string, string> | undefined;
+}): PointerItem[] {
+  return [
+    ...snap.memories.map((m) => {
+      const c = String(m.content ?? "");
+      const mark = supersedeMarker(c, snap.superseded) + (m.trust === "derived" ? "" : ownerMark(c));
+      return { id: m.id, content: m.content, kind: "conclusion" as const, trust: m.trust, ...(mark !== "" ? { mark } : {}) };
+    }),
+    ...snap.messages.map((m) => ({ id: m.id, content: m.content, kind: "message" as const })),
+  ];
 }
 
 /**
@@ -154,15 +183,26 @@ export function pointerBlock(query: string, count: number, items: PointerItem[])
   const head = `memory: ${count} item${count === 1 ? "" : "s"} relate to this queue item - search("${query}") to see more`;
   const titles: string[] = [];
   for (const it of items) {
-    const t = oneLine(it.content); // first line, X1 redact + invisible strip + x3 quote
+    // v0.5.5: a "[retire d-...]" entry is an act on another entry, not a
+    // memory - never a title (it still counts in the total, as in search).
+    if (parseEntry(String(it.content ?? "")).kind === "retire") continue;
+    let t = oneLine(it.content); // first line, X1 redact + invisible strip + x3 quote
     if (t === "") continue;
+    // R19 N-N8: a ledger-header look-alike that did NOT come off the ledger
+    // pair (a derived conclusion or a message) is quoted, so it can never
+    // read as a ledger entry; its class tag already says derived/message.
+    const offLedger = it.kind === "message" || it.trust === undefined || it.trust === "derived";
+    if (offLedger && /^\[(decision|approval|status|retire) d-[0-9a-f]{8}/.test(t)) t = `> ${t}`;
     // F-F (R15 Part 2): the id is Honcho-side text like the content - it
     // gets the same invisible/control strip so it cannot open a new block
     // line or forge a header shape. Empty after sanitising -> "unknown".
     const idPart = sanitizeVisible(it.id ?? "") === "" ? "unknown" : sanitizeVisible(it.id);
     // V2: the class rides the title AFTER the 80-char cut (outside content
     // truncation), set by kind - the code path, never the text.
-    titles.push(`- ${idPart}: ${t}${trustTag(it.kind === "message" ? "message" : "conclusion")}`);
+    // v0.5.5: the snapshot's class when it set one; the ledger mark rides
+    // after the cut too, so truncation can never drop it.
+    const tag = it.trust !== undefined ? classTag(it.trust) : trustTag(it.kind === "message" ? "message" : "conclusion");
+    titles.push(`- ${idPart}: ${t}${it.mark ?? ""}${tag}`);
     if (titles.length >= 2) break;
   }
   let lines = [POINTER_BLOCK_HEADER, head, ...titles];

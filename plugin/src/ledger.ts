@@ -38,7 +38,7 @@ export type LedgerKind = "decision" | "approval" | "status";
 /** An entry as parsed/stored; retire entries carry their target, nothing else. */
 export type ParsedEntry =
   | { kind: "plain"; fact: string }
-  | { kind: LedgerKind; id: string; scope: string; supersedes?: string; fact: string; reason?: string }
+  | { kind: LedgerKind; id: string; scope: string; supersedes?: string; owner?: string; fact: string; reason?: string }
   | { kind: "retire"; target: string };
 
 /** A ledger entry with its derived storage context (mission, time). */
@@ -47,6 +47,9 @@ export type LedgerEntry = {
   kind: LedgerKind | "retire";
   scope: string;
   supersedes?: string;
+  /** v0.5.5: an approval written on an owner turn carries the turn's prompt
+   * hash; absent = not checked against the owner (every earlier approval). */
+  owner?: string;
   /** the mission parsed from the session the conclusion lives in ("unknown" if untagged) */
   mission: string;
   fact: string;
@@ -80,10 +83,12 @@ export const newDecisionId = (peer: string, at: string, fact: string): string =>
 export const derivedId = (conclusionId: string): string => `d-${sha8(conclusionId)}`;
 
 // The header grammar. Fields after kind+id are optional but canonical in
-// order (scope, then supersedes); format() always writes scope, so parse and
-// format round-trip what the plugin itself wrote. Anything else stays plain.
+// order (scope, then supersedes, then owner); format() always writes scope,
+// so parse and format round-trip what the plugin itself wrote. Anything else
+// stays plain. v0.5.5: " · owner <8 hex>" stamps an approval accepted on an
+// owner turn (ADR-0019 amended 2026-11-14); older headers parse unchanged.
 const HEADER_RE =
-  /^\[(decision|approval|status|retire) (d-[0-9a-f]{8})(?: · scope ([^\s·\]]+))?(?: · supersedes (d-[0-9a-f]{8}))?\][ \t]*([\s\S]*)$/;
+  /^\[(decision|approval|status|retire) (d-[0-9a-f]{8})(?: · scope ([^\s·\]]+))?(?: · supersedes (d-[0-9a-f]{8}))?(?: · owner ([0-9a-f]{8}))?\][ \t]*([\s\S]*)$/;
 
 /** " <fact>" plus " (reason: <r>)" - the body that follows the header. */
 function formatBody(fact: string, reason?: string): string {
@@ -96,12 +101,14 @@ export function formatEntry(e: {
   id: string;
   scope: string;
   supersedes?: string;
+  owner?: string;
   fact: string;
   reason?: string;
 }): string {
   return (
     `[${e.kind} ${e.id} · scope ${e.scope}` +
     (e.supersedes !== undefined ? ` · supersedes ${e.supersedes}` : "") +
+    (e.owner !== undefined ? ` · owner ${e.owner}` : "") +
     `] ${formatBody(e.fact, e.reason)}`
   );
 }
@@ -120,7 +127,7 @@ export const formatRetire = (target: string, reason: string): string =>
 export function parseEntry(content: string): ParsedEntry {
   const m = HEADER_RE.exec(content);
   if (m === null) return { kind: "plain", fact: content };
-  const [, kindWord, id, scope, supersedes, rest] = m as unknown as (string | undefined)[];
+  const [, kindWord, id, scope, supersedes, owner, rest] = m as unknown as (string | undefined)[];
   const body = rest ?? "";
   if (kindWord === "retire") return { kind: "retire", target: id as string };
   let fact = body;
@@ -138,6 +145,7 @@ export function parseEntry(content: string): ParsedEntry {
     id: id as string,
     scope: scope ?? "mission",
     ...(supersedes !== undefined ? { supersedes } : {}),
+    ...(owner !== undefined ? { owner } : {}),
     fact,
     ...(reason !== undefined ? { reason } : {}),
   };
@@ -173,6 +181,7 @@ export function toEntries(
         kind: p.kind,
         scope: p.scope,
         ...(p.supersedes !== undefined ? { supersedes: p.supersedes } : {}),
+        ...(p.owner !== undefined ? { owner: p.owner } : {}),
         mission,
         fact: p.fact,
         ...(p.reason !== undefined ? { reason: p.reason } : {}),
@@ -259,3 +268,28 @@ export function inForceFor(entries: LedgerEntry[], mission: string): LedgerEntry
 
 /** The body an in-force view shows: the fact, plus its reason if any. */
 export const entryBody = (e: LedgerEntry): string => formatBody(e.fact, e.reason);
+
+/** T19a (fixed point 4): the search marker for a superseded or retired
+ * ledger entry's content; "" for anything else (plain, retire entries
+ * themselves, unknown ids, no ledger knowledge). */
+export function supersedeMarker(content: string, superseded: Map<string, string> | undefined): string {
+  if (superseded === undefined) return "";
+  const p = parseEntry(content);
+  if (p.kind === "plain" || p.kind === "retire") return "";
+  const by = superseded.get(p.id);
+  if (by === undefined) return "";
+  return by === "retired" ? " (retired)" : ` (superseded by ${by})`;
+}
+
+/** v0.5.5 (ADR-0019 amended 2026-11-14): an approval counts as the owner's
+ * (authoritative) only when it carries the owner-turn stamp; an unstamped
+ * one is shown as "owner not checked" with class recorded. */
+export const ownerChecked = (e: { kind: string; owner?: string }): boolean =>
+  e.kind === "approval" && typeof e.owner === "string" && /^[0-9a-f]{8}$/.test(e.owner);
+
+/** v0.5.5: " (owner not checked)" for an unstamped approval's content, ""
+ * for anything else - the visible words beside the recorded class. */
+export function ownerMark(content: string): string {
+  const p = parseEntry(content);
+  return p.kind === "approval" && !ownerChecked(p) ? " (owner not checked)" : "";
+}

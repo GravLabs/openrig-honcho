@@ -15,6 +15,7 @@ import type { Config } from "../../plugin/src/env.ts";
 import type { HonchoClient } from "../../plugin/src/honcho.ts";
 import { handleLine } from "../../plugin/src/mcp.ts";
 import { buildInjection } from "../../plugin/src/reader.ts";
+import { saveTurn } from "../../plugin/src/turn.ts";
 import {
   cleanupScratch,
   SCRATCH_DISAPPEAR_WINDOW_MS,
@@ -114,6 +115,13 @@ test(
     const decId = idOf(
       await callTool(deps, "remember", { fact: "DIGEST-IT use LoRa at 868 for the pilot" }),
     );
+    // v0.5.5: an approval needs an owner turn - the record the prompt hook
+    // writes when the owner types in this seat (plugin/src/turn.ts).
+    expect(
+      saveTurn(deps.config.stateDir, deps.config.workspace, SELF, {
+        origin: "owner", peer: "owner", at: new Date().toISOString(), promptHash: "0123abcd",
+      }),
+    ).toBe(true);
     const appId = idOf(
       await callTool(deps, "remember", {
         fact: "DIGEST-IT ship the pilot build",

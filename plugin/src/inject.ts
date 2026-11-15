@@ -39,6 +39,9 @@ export interface InjectionDecision {
    * match approvals to open queue items. The old renderer ignores it.
    */
   scope?: string;
+  /** v0.5.5 (ADR-0019 amended 2026-11-14): approvals only - false when the
+   * entry carries no owner-turn stamp ("owner not checked", class recorded). */
+  ownerChecked?: boolean;
 }
 
 /** T19b: one open queue item for the digest's first part. */
@@ -368,7 +371,7 @@ function fillSections(sections: string[], header: string, cap: number, hint: str
 function decisionLabel(now: string, d: InjectionDecision, extra?: string): string {
   return [
     isText(d.id) ? d.id : "",
-    d.kind === "approval" ? "approval" : d.kind === "status" ? "status" : "",
+    d.kind === "approval" ? (d.ownerChecked === false ? "approval, owner not checked" : "approval") : d.kind === "status" ? "status" : "",
     ageLabel(now, d.at) ?? "",
     extra !== undefined && extra !== "" ? extra : "",
   ]
@@ -401,6 +404,36 @@ export function forScopeLabel(d: InjectionDecision, openIds?: Set<string>): stri
  * escape and when there is nothing to say.
  */
 export function renderContinuity(input: ContinuityInput): string {
+  return renderContinuityInner(input, { checkpoint: [], stale: [], lesson: [] });
+}
+
+/** v0.5.5: the plugin-authored lines this render built, per part. */
+interface AuthoredLines {
+  checkpoint: string[];
+  stale: string[];
+  lesson: string[];
+}
+
+/**
+ * v0.5.5 (owner 2026-11-14): the digest plus which plugin-authored lines a
+ * seat was actually SHOWN - counted against the exact lines this render
+ * built, after the fill budget cut parts, so a cut part or a remembered text
+ * that imitates these lines does not count. Counts only, never content.
+ */
+export function renderContinuityShown(input: ContinuityInput): {
+  text: string;
+  shown: { n_checkpoint: number; n_stale: number; n_lesson: number };
+} {
+  const authored: AuthoredLines = { checkpoint: [], stale: [], lesson: [] };
+  const text = renderContinuityInner(input, authored);
+  const out = text.split("\n");
+  // each authored line counts once, and only if the output has it as a whole
+  // line; a quoted copy of the same bytes is indistinguishable and harmless
+  const count = (ls: string[]): number => ls.filter((l) => out.includes(l)).length;
+  return { text, shown: { n_checkpoint: count(authored.checkpoint), n_stale: count(authored.stale), n_lesson: count(authored.lesson) } };
+}
+
+function renderContinuityInner(input: ContinuityInput, authored: AuthoredLines): string {
   try {
     const now = typeof input.now === "string" ? input.now : "";
     const sections: string[] = [];
@@ -412,7 +445,9 @@ export function renderContinuity(input: ContinuityInput): string {
     // whatever the Honcho parts did, including all of them failing.
     const cp = input.checkpoint;
     if (cp && isText(cp.line) && !tooOld(now, cp.at)) {
-      sections.push(`Where you left off${suffix(ageLabel(now, cp.at))}: ${cp.line}${trustTag("checkpoint")}`);
+      const cpl = `Where you left off${suffix(ageLabel(now, cp.at))}: ${cp.line}${trustTag("checkpoint")}`;
+      authored.checkpoint.push(cpl);
+      sections.push(cpl);
     }
 
     // 1. Your open work - live queue, in-progress order already applied.
@@ -491,6 +526,7 @@ export function renderContinuity(input: ContinuityInput): string {
         const id = x3(p.oldId);
         slines.push(`Possibly stale${suffix(ageLabel(now, p.oldAt))}: ${id} - ${why} - if so: retire(${id})${trustTag("staleProposal")}`);
       }
+      authored.stale.push(...slines);
       if (slines.length > 0) sections.push(section("Stale proposals", slines));
     }
 
@@ -503,9 +539,9 @@ export function renderContinuity(input: ContinuityInput): string {
     // by hand - it never touches that file itself.
     const ls = input.lesson;
     if (ls && isText(ls.qitemId) && isText(ls.reason) && isText(ls.seat)) {
-      sections.push(
-        `Lesson worth writing? ${ls.qitemId} needed rework (${ls.reason}). If something would have prevented it, write it as seats/${ls.seat}/lore/<slug>.md (the OpenRig lore template)${trustTag("outcome")}`,
-      );
+      const lsl = `Lesson worth writing? ${ls.qitemId} needed rework (${ls.reason}). If something would have prevented it, write it as seats/${ls.seat}/lore/<slug>.md (the OpenRig lore template)${trustTag("outcome")}`;
+      authored.lesson.push(lsl);
+      sections.push(lsl);
     }
 
     // 4. Approvals you hold. T24 F3: no render slice here - held approvals
@@ -513,7 +549,9 @@ export function renderContinuity(input: ContinuityInput): string {
     // 2500 fill budget still bounds the block.
     if (ap.length > 0) {
       sections.push(
-        section(`Approvals you hold${trustTag("approval")}`, [...ap.flatMap((d) => item(decisionLabel(now, d), d.content)), LEDGER_NOTE]),
+        // v0.5.5: the heading's class is the section's weakest - any
+        // unstamped approval makes it [recorded]; each item says which.
+        section(`Approvals you hold${trustTag(ap.every((d) => d.ownerChecked !== false) ? "approval" : "uncheckedApproval")}`, [...ap.flatMap((d) => item(decisionLabel(now, d), d.content)), LEDGER_NOTE]),
       );
     }
 

@@ -298,17 +298,63 @@ flowchart LR
   - credit a lesson only when it was used: the Stop hook records whether the seat's tool
     calls or reply touched the lesson's lore path, so items split into shown-and-used,
     shown-not-used and held, not just "shown";
-  - a usefulness score per lesson and tag, a running mean of queue outcomes (no rework)
-    over the items where it was used, computed by code and never by a model; V5 ranks by
-    it, then by date;
+  - a usefulness score per lesson and tag from queue outcomes (no rework) over the items
+    where it was used, computed by code and never by a model; V5 ranks by it, then by
+    date (the score's form is set below, from the 2026-11-14 paper reading);
   - new lessons wait for evidence, and the gate changes at most one lesson per lesson
     group per review window, with no change as the default; a low score becomes a
     retire proposal to the owning seat, never an edit;
-  - what is shown is a budget: keep the caps (2 lessons, 2 stale proposals) and raise
-    one only after a holdout comparison shows it helps.
+  - what is shown is a budget: keep the caps (2 lessons, 2 stale proposals); see below
+    for why the holdout cannot yet authorize raising one.
   Not borrowed: model-written skills (only the owning seat writes lore) and automatic
   team restructuring (topology stays with people and the architect). Per-seat outcome
   numbers by tag may later inform routing advice to the people who design the team.
+  A deep reading of ten 2026 papers (owner, 2026-11-14; revocation, origin-bound
+  authority, self-improvement gates, lesson scoring) fixed two shipped gaps in v0.5.5
+  (ADR-0019, amended 2026-11-14) and adds this v0.6 work, in order:
+  - **Retired decisions marked on every surface.** v0.5.5 marks them in the claim
+    pointer; they still reach seats through recall conclusions, search messages, `ask`
+    and the digest's summaries. A local revocation index, built from the ledger read
+    that already happens, marks exact hits (a message carrying a retired entry's id)
+    and flags close restatements as "may restate retired d-X", never hiding anything;
+    the replacement entry is shown beside the stale one, and the digest says when the
+    ledger changed after its "where you left off" summary. A filter at read time took
+    unsafe actions on revoked records from 43% to 0 in 2609.08258; telling the model to
+    ignore old facts did not (37%).
+  - **Evidence that cannot be quietly edited, before any gate.** The outcome log records
+    which seat closed each row (the daemon already returns it) and flags rows a seat
+    closed itself; outcomes are checked by rebuilding them from the daemon; the gate and
+    its tests are pinned by hash and fail on a drop in test count; the holdout arm gets
+    a per-install secret so a seat cannot compute it (2609.00069, 2607.24300).
+  - **The per-lesson score replaces the running mean.** At our base rate (about 7%
+    rework), a lesson with no effect scores a perfect mean after 5 uses 70% of the
+    time. The score is a rework rate shrunk toward the same seat's rate on similar work
+    (a Beta prior of strength 10), counted only on items old enough for late follow-ons,
+    and restarted when the lore file's content changes. A retire proposal needs at least
+    5 uses, 3 distinct reworked items, a 95% posterior that the lesson is worse than the
+    base rate, and no other lesson shown in 70% of the same items; the evidence is used
+    up once the seat decides (2604.12007, 2608.07196). Seats never see the score.
+  - **The caps stay fixed.** Detecting a halving of rework takes about 640 items per
+    holdout arm and the busier pilot has 172 rows, so the holdout reports a trend to the
+    owner but does not authorize raising a cap.
+  - **The promotion gate.** It promotes a versioned list of which lesson file, at which
+    content hash, may be shown; it never edits lore. It runs offline as plain code, in
+    a fixed order (integrity checks, enough used and held items, no self-closed rows,
+    non-regression against the held comparison with a set slack, at most one change
+    per lesson group per window), with rejection as the default and rollback to the
+    previous list. Seats see only a state (live, candidate, retire proposed); the owner
+    sees the numbers and which check decided. Before it is trusted, it is checked
+    against about 10 cases the owner labels, never against its own trend, and it raises
+    a flag if it accepts or rejects everything (2610.11464).
+  - **The attack suite by channel and surface.** Laundering channels (a lead seat
+    paraphrasing a peer, an echo through `ask` or recall, a derived conclusion quoting a
+    ledger header, a forged envelope) against each surface (digest, recall, search,
+    pointer, lessons), measuring how much useful content survives as well as attack
+    success. Trust labels stay capped sections, never rank weights: a trust weight is
+    either inert or quietly hides everything untrusted (2608.21230).
+  Not borrowed: model judges or auditors, trust weights, cryptographic provenance, a
+  grader that changes itself, automatic retires or edits. Reports:
+  the architect's `paper-evals-2026-11/` scratch folder.
   Store test result (2026-11-13, docs/store-test-2026-11.md): Graphiti is not
   the store for what is in force, so the rig stays on Honcho with no second store;
   the ledger's own supersedes links carry TreeAgent idea 3. Kept from the test: a

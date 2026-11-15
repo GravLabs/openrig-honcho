@@ -148,6 +148,9 @@ async function main(): Promise<void> {
             n_approvals: continuity.n_approvals,
             n_away: continuity.n_away,
             has_pointer: continuity.has_pointer,
+            n_checkpoint: continuity.n_checkpoint,
+            n_stale: continuity.n_stale,
+            n_lesson: continuity.n_lesson,
           }
         : {}),
       bytes: text.length,

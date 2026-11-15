@@ -114,6 +114,11 @@ export interface LogEvent {
   n_approvals?: number;
   n_away?: number;
   has_pointer?: boolean;
+  /** v0.5.5: digest lines actually shown (counts): checkpoint, stale
+   * proposals, lesson suggestion. */
+  n_checkpoint?: number;
+  n_stale?: number;
+  n_lesson?: number;
   /** V5 (ADR-0019 decision 5): lesson lines shown beside the pointer -
    * a COUNT only, never a slug or lore text (X1). */
   lessons?: number;
@@ -216,6 +221,9 @@ export function logEvent(config: LogTarget, e: LogEvent): void {
     if (e.n_approvals !== undefined) line.n_approvals = e.n_approvals;
     if (e.n_away !== undefined) line.n_away = e.n_away;
     if (e.has_pointer !== undefined) line.has_pointer = e.has_pointer;
+    if (e.n_checkpoint !== undefined) line.n_checkpoint = e.n_checkpoint;
+    if (e.n_stale !== undefined) line.n_stale = e.n_stale;
+    if (e.n_lesson !== undefined) line.n_lesson = e.n_lesson;
     if (e.lessons !== undefined) line.lessons = e.lessons;
     if (e.ledger_capped !== undefined) line.ledger_capped = e.ledger_capped;
     if (e.stored_len !== undefined) line.stored_len = e.stored_len;

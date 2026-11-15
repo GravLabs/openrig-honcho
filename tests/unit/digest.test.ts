@@ -13,7 +13,7 @@ import { loadConfig, type Config } from "../../plugin/src/env.ts";
 import { createClient } from "../../plugin/src/honcho.ts";
 import { readSeatState, seatStatePath } from "../../plugin/src/missions.ts";
 import { buildInjection, type ContinuityStats, type ReaderDeps } from "../../plugin/src/reader.ts";
-import { renderContinuity } from "../../plugin/src/inject.ts";
+import { renderContinuity, renderContinuityShown } from "../../plugin/src/inject.ts";
 import { fetchOpenWork } from "../../plugin/src/daemon.ts";
 import { LEDGER_PEER } from "../../plugin/src/ledger.ts";
 import { startFakeHoncho, type FakeHoncho } from "../support/fake-honcho.ts";
@@ -198,7 +198,7 @@ describe("T19b digest build", () => {
         created_at: ago(3 * HOUR),
       });
       fake.addConclusion(WS, {
-        content: "[approval d-cafe0001 · scope qitem-a] Ship the pilot build.",
+        content: "[approval d-cafe0001 · scope qitem-a · owner 0123abcd] Ship the pilot build.",
         observer_id: SELF,
         observed_id: LEDGER_PEER,
         session_id: s1,
@@ -248,6 +248,9 @@ describe("T19b digest build", () => {
         n_approvals: 1,
         n_away: 0,
         has_pointer: false,
+        n_checkpoint: 0,
+        n_stale: 0,
+        n_lesson: 0,
       });
     } finally {
       daemon.stop();
@@ -594,6 +597,9 @@ describe("T20c item-scoped approvals and labels", () => {
         n_approvals: 0,
         n_away: 0,
         has_pointer: false,
+        n_checkpoint: 0,
+        n_stale: 0,
+        n_lesson: 0,
       });
     } finally {
       daemon.stop();
@@ -657,13 +663,36 @@ describe("T20c item-scoped approvals and labels", () => {
     }
   });
 
+  test("v0.5.5: an unstamped (pre-v0.5.5) approval shows as owner not checked, class recorded", async () => {
+    const { fake, config, deps } = await mk();
+    const daemon = await startFakeDaemon("ok", openDocs);
+    try {
+      const s1 = await firstRun(config, deps());
+      fake.addConclusion(WS, {
+        content: "[approval d-431d0002 · scope qitem-a] Wire the radio driver is approved.",
+        observer_id: SELF, observed_id: LEDGER_PEER, session_id: s1, created_at: ago(HOUR),
+      });
+      const text = await buildInjection(
+        { source: "startup", claudeSessionId: "claude-2" },
+        { ...config, daemonUrl: daemon.url },
+        deps(),
+      );
+      expect(text).toContain("## Approvals you hold [recorded]");
+      expect(text).toContain("d-431d0002, approval, owner not checked, 1 h ago\nWire the radio driver is approved.");
+      expect(text).not.toContain("## Approvals you hold [authoritative]");
+    } finally {
+      daemon.stop();
+      await fake.stop();
+    }
+  });
+
   test("a HELD approval still shows under its own heading (rule 1 positive case)", async () => {
     const { fake, config, deps } = await mk();
     const daemon = await startFakeDaemon("ok", openDocs);
     try {
       const s1 = await firstRun(config, deps());
       fake.addConclusion(WS, {
-        content: "[approval d-431d0001 · scope qitem-a] Wire the radio driver is approved.",
+        content: "[approval d-431d0001 · scope qitem-a · owner 0123abcd] Wire the radio driver is approved.",
         observer_id: SELF, observed_id: LEDGER_PEER, session_id: s1, created_at: ago(HOUR),
       });
       const text = await buildInjection(
@@ -793,6 +822,21 @@ describe("V1 local checkpoint in the continuity digest (ADR-0019 d1)", () => {
     }
   });
 
+  test("v0.5.5: the digest stats count the checkpoint line actually shown", async () => {
+    const { fake, dir, config, deps } = await mk();
+    try {
+      await firstRun(config, deps());
+      plant(dir, CP_LINE, NOW);
+      let stats: ContinuityStats | undefined;
+      await buildInjection({ source: "compact", claudeSessionId: "claude-1" }, config, deps({ stats: (s) => { stats = s; } }));
+      expect(stats?.n_checkpoint).toBe(1);
+      expect(stats?.n_stale).toBe(0);
+      expect(stats?.n_lesson).toBe(0);
+    } finally {
+      await fake.stop();
+    }
+  });
+
   test("compact with Honcho unreachable: the checkpoint still shows", async () => {
     const { fake, dir, config, deps } = await mk();
     let stopped = false;
@@ -838,7 +882,7 @@ describe("V2 trust classes on the digest (ADR-0019 d2)", () => {
         created_at: ago(3 * HOUR),
       });
       fake.addConclusion(WS, {
-        content: "[approval d-cafe0001 · scope qitem-a] Ship the pilot build.",
+        content: "[approval d-cafe0001 · scope qitem-a · owner 0123abcd] Ship the pilot build.",
         observer_id: SELF,
         observed_id: LEDGER_PEER,
         session_id: s1,
@@ -884,5 +928,43 @@ describe("V2 trust classes on the digest (ADR-0019 d2)", () => {
       daemon.stop();
       await fake.stop();
     }
+  });
+});
+
+// v0.5.5 (owner 2026-11-14): what a seat was SHOWN, counted from the final
+// text - so a part cut by the fill budget, or a quoted memory that only
+// mentions these lines, does not count.
+describe("v0.5.5 renderContinuityShown", () => {
+  const NOW2 = "2026-11-14T12:00:00.000Z";
+  test("counts the checkpoint, each stale proposal and the lesson line", () => {
+    const r = renderContinuityShown({
+      now: NOW2,
+      checkpoint: { line: "F6 done", at: NOW2 },
+      staleProposals: [
+        { oldId: "d-11111111", oldAt: NOW2, why: "replaced by the newer status" },
+        { oldId: "d-22222222", oldAt: NOW2, why: "release shipped" },
+      ],
+      lesson: { qitemId: "qitem-20261114000000-aaaaaaaaaaaaaaaa", reason: "reopened", seat: "build" },
+    });
+    expect(r.shown).toEqual({ n_checkpoint: 1, n_stale: 2, n_lesson: 1 });
+    expect(r.text).toBe(renderContinuity({
+      now: NOW2,
+      checkpoint: { line: "F6 done", at: NOW2 },
+      staleProposals: [
+        { oldId: "d-11111111", oldAt: NOW2, why: "replaced by the newer status" },
+        { oldId: "d-22222222", oldAt: NOW2, why: "release shipped" },
+      ],
+      lesson: { qitemId: "qitem-20261114000000-aaaaaaaaaaaaaaaa", reason: "reopened", seat: "build" },
+    })); // same bytes as the plain render
+  });
+
+  test("nothing shown counts zero; look-alike text inside a memory does not count", () => {
+    expect(renderContinuityShown({ now: NOW2 }).shown).toEqual({ n_checkpoint: 0, n_stale: 0, n_lesson: 0 });
+    const r = renderContinuityShown({
+      now: NOW2,
+      leftOff: { summary: "Possibly stale (1 h ago): d-11111111 - x - if so: retire(d-11111111) [derived]\nLesson worth writing? qitem-1 [authoritative]", at: NOW2, session: "s" },
+    });
+    expect(r.text).toContain("Possibly stale");
+    expect(r.shown).toEqual({ n_checkpoint: 0, n_stale: 0, n_lesson: 0 });
   });
 });

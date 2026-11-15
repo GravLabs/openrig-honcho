@@ -19,7 +19,7 @@
 // value or unset is on. It lives here, not in env.ts Config: the flag means
 // nothing to any other hook, and Config is the shared contract every hook
 // fixture builds.
-import { attribute, stripLeadingReminders } from "../src/attribute.ts";
+import { attribute, stripLeadingReminders, type Attribution } from "../src/attribute.ts";
 import type { Config } from "../src/env.ts";
 import { isKillSwitch, loadConfig } from "../src/env.ts";
 import { fetchQueuePointerRow, outboxDelivered } from "../src/daemon.ts";
@@ -35,11 +35,13 @@ import {
   POINTER_BUDGET_MS,
   pointerArm,
   pointerBlock,
+  pointerItems,
   pointerQuery,
 } from "../src/pointer.ts";
 import { bindEventFields, errorClassFrom, logConfigProblem, logEvent } from "../src/log.ts";
 import { normalizeMission, readRigMission, readSeatState, seatStatePath } from "../src/missions.ts";
 import { takeOnce } from "../src/once.ts";
+import { saveTurn, turnFrom } from "../src/turn.ts";
 import {
   isTerseBody,
   nextSeen,
@@ -181,10 +183,8 @@ async function pointerSearchExit(
     const count = snap.memories.length + snap.messages.length;
     // V2 (ADR-0019 d2): the title class comes from the array the item came
     // from - conclusions are model products, messages verbatim seat words.
-    const text = pointerBlock(pQuery, count, [
-      ...snap.memories.map((m) => ({ ...m, kind: "conclusion" as const })),
-      ...snap.messages.map((m) => ({ ...m, kind: "message" as const })),
-    ]);
+    // v0.5.5: keep the snapshot's per-memory class and ledger marks.
+    const text = pointerBlock(pQuery, count, pointerItems(snap));
     // V5: the lesson lines ride beside the block (or alone when the block
     // is empty - the DECISION in the header). With no lessons the bytes and
     // the event line are today's, byte for byte.
@@ -209,6 +209,44 @@ async function pointerSearchExit(
     logP({ error_class: "other", ...lessonFields });
     if (silentExit) process.exit(0);
   }
+}
+
+/** v0.5.5: the turn record on a recall-off seat - same attribution as the
+ * main path, nothing logged, never throws. Plugin off = nothing written. */
+function recordTurnQuiet(env: Record<string, string | undefined>, raw: string): void {
+  try {
+    const c = loadConfig(env);
+    if (!c.enabled) return;
+    let input: { prompt?: unknown; session_id?: unknown } = {};
+    let parsed = true;
+    try {
+      input = JSON.parse(raw) as typeof input;
+    } catch {
+      parsed = false; // R19 F-N1: unparseable stdin records automation
+    }
+    const prompt = parsed && typeof input.prompt === "string" ? input.prompt : "";
+    const attr: Attribution = parsed ? attribute(prompt, attrCtx(c)) : { kind: "skip" };
+    saveTurn(c.stateDir, c.workspace, c.peer, turnFrom(attr, prompt, new Date().toISOString(), typeof input.session_id === "string" ? input.session_id : undefined));
+  } catch {
+    // best effort: no record = approvals fail closed
+  }
+}
+
+/** The attribution context recall and the turn record share. */
+function attrCtx(cfg: Config): Parameters<typeof attribute>[1] {
+  return {
+    selfPeer: cfg.peer,
+    ownerPeer: cfg.ownerPeer,
+    rig: cfg.rig ?? cfg.workspace,
+    recordAutomation: cfg.recordAutomation,
+    isExistingPath: (p) => {
+      try {
+        return existsSync(p);
+      } catch {
+        return false;
+      }
+    },
+  };
 }
 
 async function main(): Promise<void> {
@@ -242,7 +280,12 @@ async function main(): Promise<void> {
       logConfigProblem(process.env, "UserPromptSubmit", harnessProblem);
       process.exit(0);
     }
-    if (recallOff(env)) process.exit(0); // off for this hook only: silent, unlogged
+    if (recallOff(env)) {
+      // v0.5.5: the turn record is an authority record, not recall - an
+      // approval needs it even on a seat with recall off. Silent, unlogged.
+      recordTurnQuiet(env, raw);
+      process.exit(0); // off for this hook only: silent, unlogged
+    }
     const loaded = loadConfig(env);
     if (!loaded.enabled) {
       if (!isKillSwitch(loaded.reason)) {
@@ -255,34 +298,33 @@ async function main(): Promise<void> {
     // event (two installs, byte-identical stdin) leaves silently. The
     // HONCHO_RECALL flag and the kill switch above are checked first: off
     // means off, unlogged, exactly as before.
-    if (!takeOnce(cfg.stateDir, cfg.workspace, "recall", raw)) {
-      logEvent(cfg, { hook: "recall", event: "duplicate-run", ok: true, ms: Date.now() - t0 });
-      process.exit(0);
-    }
     let input: { prompt?: unknown; session_id?: unknown; transcript_path?: unknown } = {};
+    let parsed = true;
     try {
       input = JSON.parse(raw) as typeof input;
     } catch {
-      // garbage stdin: nothing to recall
-      logEvent(cfg, { hook: "recall", event: "error", ok: false, ms: Date.now() - t0, bytes: 0, n_items: 0, error_class: "parse" });
-      process.exit(0);
+      parsed = false;
     }
     // ADR-0009 decision 1: the same parser and context the writer uses.
     // T16b item 6: cfg.rig (loadConfig, from OPENRIG_SESSION_NAME) so writer
     // and recall always attribute the same rig; workspace only as fallback.
-    const attr = attribute(typeof input.prompt === "string" ? input.prompt : "", {
-      selfPeer: cfg.peer,
-      ownerPeer: cfg.ownerPeer,
-      rig: cfg.rig ?? cfg.workspace,
-      recordAutomation: cfg.recordAutomation,
-      isExistingPath: (p) => {
-        try {
-          return existsSync(p);
-        } catch {
-          return false;
-        }
-      },
-    });
+    const turnPrompt = parsed && typeof input.prompt === "string" ? input.prompt : "";
+    const attr: Attribution = parsed ? attribute(turnPrompt, attrCtx(cfg)) : { kind: "skip" };
+    // v0.5.5 (ADR-0019 amended 2026-11-14): where this turn came from, for
+    // remember's owner-approval check - BEFORE the once-guard and every exit
+    // below (review R19 F-N1: a bail must never leave the previous turn's
+    // record answering). Unparseable stdin records automation, never owner.
+    // A duplicate copy writes the same record again: idempotent.
+    saveTurn(cfg.stateDir, cfg.workspace, cfg.peer, turnFrom(attr, turnPrompt, new Date().toISOString(), typeof input.session_id === "string" ? input.session_id : undefined));
+    if (!takeOnce(cfg.stateDir, cfg.workspace, "recall", raw)) {
+      logEvent(cfg, { hook: "recall", event: "duplicate-run", ok: true, ms: Date.now() - t0 });
+      process.exit(0);
+    }
+    if (!parsed) {
+      // garbage stdin: nothing to recall
+      logEvent(cfg, { hook: "recall", event: "error", ok: false, ms: Date.now() - t0, bytes: 0, n_items: 0, error_class: "parse" });
+      process.exit(0);
+    }
     const sender = recallSender(attr, cfg.peer);
     // F-K (O8, R17) + F-G (O6, R15 Part 2, architect ruling 08:18Z).
     // What F-K changed is the ARM SUBJECT only: a prompt is a pointer
