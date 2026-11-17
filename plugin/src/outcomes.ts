@@ -73,6 +73,11 @@ export interface SeatMemory {
    * lines (ADR-0017 decision 11 - the pointer must be measurable per arm). */
   pointerShown: number;
   pointerHeld: number;
+  /** v0.5.6 (review R20 F-P2): searches by this seat AFTER this row's own
+   * claim pointer was shown (anchored on the pointer line naming the row),
+   * up to the close - the direct measure of whether the pointer leads to a
+   * search. Absent on records built before v0.5.6. */
+  searchAfterPointer?: number;
 }
 
 export interface OutcomeRecord {
@@ -130,6 +135,12 @@ export function serializeRecord(r: OutcomeRecord): string {
       ask: r.memory.ask,
       remember: r.memory.remember,
       retire: r.memory.retire,
+      // v0.5.6 (review R20 N-P2): the pointer fields were never written, so
+      // the durable file could not show the pointer at all; the new
+      // after-pointer count rides along when present.
+      pointerShown: r.memory.pointerShown,
+      pointerHeld: r.memory.pointerHeld,
+      ...(r.memory.searchAfterPointer !== undefined ? { searchAfterPointer: r.memory.searchAfterPointer } : {}),
     },
   });
 }
@@ -251,6 +262,8 @@ export function memoryWindow(
   seat: string,
   claimed: string | null,
   closed: string | null,
+  created: string | null = null,
+  qitemId: string | null = null,
 ): SeatMemory {
   const m: SeatMemory = {
     digestShown: 0,
@@ -268,8 +281,38 @@ export function memoryWindow(
   // time would credit it every tool call in the log (found on the real
   // pilot run: 3 searches lit up 14 never-claimed rows).
   if (claimed === null) return m;
-  const from = Date.parse(claimed);
+  // v0.5.6: the window opens when the row was CREATED (the hand-off and its
+  // claim pointer arrive then), not at the claim: on the pilots review seats
+  // claim and close in seconds after working the hand-off, so a claim-only
+  // window credited none of their searches. Still bounded below (never the
+  // beginning of time) and still only for claimed rows.
+  const claimedMs = Date.parse(claimed);
+  const createdMs = created !== null ? Date.parse(created) : Number.NaN;
+  const from = Number.isFinite(createdMs) && createdMs < claimedMs ? createdMs : claimedMs;
   if (!Number.isFinite(from)) return m;
+  // R20 F-P2: the wider window is for what ARRIVES with the hand-off (the
+  // pointer, recall, the digest); tool calls still count from the claim, as
+  // before, so a row parked for days does not collect older searches. The
+  // pointer measure has its own anchor: this row's pointer line.
+  // R20 F-P5: the anchor is the pointer that led to the claim - the LAST
+  // one shown at or before it (an earlier, unclaimed nudge days before must
+  // not credit every search since); a pointer only after the claim anchors
+  // at the first such one.
+  let pointerAt = Number.POSITIVE_INFINITY;
+  if (qitemId !== null) {
+    let lastBefore = Number.NEGATIVE_INFINITY;
+    let firstAfter = Number.POSITIVE_INFINITY;
+    for (const raw of logLines) {
+      if (typeof raw !== "object" || raw === null) continue;
+      const l = raw as Record<string, unknown>;
+      if (l.hook !== "recall" || l.event !== "pointer" || l.pointer !== "shown" || l.qitem !== qitemId) continue;
+      const t = typeof l.ts === "string" ? Date.parse(l.ts) : Number.NaN;
+      if (!Number.isFinite(t)) continue;
+      if (t <= claimedMs) lastBefore = Math.max(lastBefore, t);
+      else firstAfter = Math.min(firstAfter, t);
+    }
+    pointerAt = Number.isFinite(lastBefore) ? lastBefore : firstAfter;
+  }
   const to = closed !== null ? Date.parse(closed) : Number.POSITIVE_INFINITY;
   for (const raw of logLines) {
     if (typeof raw !== "object" || raw === null) continue;
@@ -311,6 +354,8 @@ export function memoryWindow(
       else if (l.pointer === "held") m.pointerHeld += 1;
     } else if (l.hook === "mcp") {
       const ev = typeof l.event === "string" ? l.event : "";
+      if (ev === "tool:search" && ts >= pointerAt) m.searchAfterPointer = (m.searchAfterPointer ?? 0) + 1;
+      if (ts < claimedMs) continue; // tool calls count from the claim (R20 F-P2)
       if (ev === "tool:search") m.search += 1;
       else if (ev === "tool:ask") m.ask += 1;
       else if (ev === "tool:remember") m.remember += 1;
@@ -524,7 +569,7 @@ export async function collectOutcomes(deps: CollectDeps): Promise<CollectResult 
       continue;
     }
     if (rec.destination !== null) {
-      rec.memory = memoryWindow(logLines, rec.destination, rec.claimed, rec.closed);
+      rec.memory = memoryWindow(logLines, rec.destination, rec.claimed, rec.closed, rec.created, rec.qitemId);
     } // F-D: no destination seat -> no memory can be attributed, all zeros
     records.push(rec);
   }
@@ -624,6 +669,10 @@ export interface SeatSummary {
   followOnShare: number;
   /** searched rows / claimed rows (ADR definition, not / closed rows). */
   searchedShare: number;
+  /** v0.5.6: rows whose claim pointer was shown, and how many of them were
+   * followed by a search - the direct measure of whether the pointer works. */
+  pointerRows: number;
+  pointerSearchedShare: number;
 }
 
 /** N-A (R15): even count = MEAN of the two middle spans, not the lower one. */
@@ -665,6 +714,11 @@ export function summarize(records: OutcomeRecord[]): SeatSummary[] {
         claimedRows.length === 0
           ? 0
           : claimedRows.filter((r) => r.memory.search > 0).length / claimedRows.length,
+      pointerRows: rs.filter((r) => r.memory.pointerShown > 0).length,
+      pointerSearchedShare: ((): number => {
+        const pr = rs.filter((r) => r.memory.pointerShown > 0);
+        return pr.length === 0 ? 0 : pr.filter((r) => (r.memory.searchAfterPointer ?? 0) > 0).length / pr.length;
+      })(),
     });
   }
   return out;
@@ -679,6 +733,7 @@ export function summaryLines(summaries: SeatSummary[]): string[] {
       ` | median claim->close ${s.medianClaimToCloseMs === null ? "-" : `${Math.round(s.medianClaimToCloseMs / 1000)}s`}` +
       ` | denied|failed|canceled ${(s.badClosureShare * 100).toFixed(0)}%` +
       ` | follow-on (excl. housekeeping) ${(s.followOnShare * 100).toFixed(0)}%` +
-      ` | searched ${(s.searchedShare * 100).toFixed(0)}% of ${s.claimedRows} claimed`,
+      ` | searched ${(s.searchedShare * 100).toFixed(0)}% of ${s.claimedRows} claimed` +
+      ` | after a pointer ${(s.pointerSearchedShare * 100).toFixed(0)}% of ${s.pointerRows}`,
   );
 }

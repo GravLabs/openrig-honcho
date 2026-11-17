@@ -19,8 +19,9 @@ import { type Conclusion, type HonchoClient } from "./honcho.ts";
 import { readSeatState, resolveSession, normalizeMission, readRigMission, seatStatePath, scopeFor } from "./missions.ts";
 import { ensureSession, freeN } from "./writer.ts";
 import { currentLedger, entryBody, inForceFor, LEDGER_PEER, ownerChecked, toEntries } from "./ledger.ts";
-import { readStaleState, staleStateExists, takeStaleForDigest, writeStaleState } from "./stale.ts";
-import { maybeLessonSuggestion } from "./lesson.ts";
+import { markStaleShown, pickStaleForDigest, readStaleState, staleStateExists, writeStaleState, type StaleProposal, type StaleState } from "./stale.ts";
+import { maybeLessonSuggestion, recordLessonSuggestion } from "./lesson.ts";
+import type { Harness } from "./harness.ts";
 import { DAEMON_TIMEOUT_MS, fetchOpenWork } from "./daemon.ts";
 import { isItemScope, renderContinuityShown, renderInjection, type InjectionAwayConclusion, type InjectionDecision, type InjectionDigestEntry, type InjectionInput, type InjectionMissionSummary, type InjectionSessionSummary, type InjectionSource } from "./inject.ts";
 
@@ -221,7 +222,7 @@ function pickSummary(
 }
 
 async function build(
-  input: { source: InjectionSource; claudeSessionId?: string; cwd?: string },
+  input: { source: InjectionSource; claudeSessionId?: string; cwd?: string; harness?: Harness },
   config: Config,
   deps: ReaderDeps,
 ): Promise<string> {
@@ -342,6 +343,7 @@ async function build(
       deps,
       cwd: input.cwd,
       source: input.source,
+      ...(input.harness !== undefined ? { harness: input.harness } : {}),
       resolved,
       prevLastSeen,
       ensureP,
@@ -468,6 +470,8 @@ async function buildContinuity(a: {
   deps: ReaderDeps;
   cwd: string | undefined;
   source: InjectionSource;
+  /** v0.5.6: names the search call each harness can actually make. */
+  harness?: Harness;
   resolved: Awaited<ReturnType<typeof resolveSession>>;
   prevLastSeen: string | undefined;
   ensureP: Promise<unknown>;
@@ -531,6 +535,9 @@ async function buildContinuity(a: {
   // The digest is this feature's showing surface; the digest-off old block
   // is untouched.
   let staleProps: { oldId: string; oldAt: string; why: string }[] | undefined;
+  let staleState: StaleState | undefined;
+  let stalePicked: StaleProposal[] = [];
+  let staleDropped = false;
   if (
     config.leaderPeer !== undefined &&
     config.leaderPeer === config.peer &&
@@ -543,23 +550,27 @@ async function buildContinuity(a: {
         return p.capped ? null : currentLedger(toEntries(p.items));
       });
       if (cur !== null && cur !== undefined) {
-        const picked = takeStaleForDigest(st, new Set(cur.map((e) => e.id)), 2);
-        if (picked.dirty) writeStaleState(config.stateDir, config.workspace, st);
-        if (picked.shown.length > 0)
-          staleProps = picked.shown.map((p) => ({ oldId: p.oldId, oldAt: p.oldAt, why: p.why }));
+        // v0.5.6: pick now, COUNT after render - only what the seat was shown
+        const pk = pickStaleForDigest(st, new Set(cur.map((e) => e.id)), 2);
+        staleState = st;
+        staleDropped = pk.dropped;
+        stalePicked = pk.picked;
+        if (pk.picked.length > 0)
+          staleProps = pk.picked.map((p) => ({ oldId: p.oldId, oldAt: p.oldAt, why: p.why }));
       }
     }
   }
-  // V6 (ADR-0019 d6): the lesson suggestion, session start only, fully local
-  // (outcome log + this seat's own 0600 record - no network, no model, never
-  // a hook path). The pick records itself the moment it is returned, so a
-  // line can never repeat; at most one per digest. The digest-off old block
-  // is untouched.
+  // V6 (ADR-0019 d6): the lesson suggestion, fully local (outcome log + this
+  // seat's own 0600 record - no network, no model). v0.5.6: on startup,
+  // compact AND resume - the pilots compact far more than they start (77 of
+  // 78 digests in 48 h), so a startup-only line never reached a seat - and it
+  // is recorded only once the rendered text kept it (never spent unseen).
+  // At most one per digest; once shown, never again for that item.
   const lesson =
-    a.source === "startup" && config.sessionName !== undefined
-      ? maybeLessonSuggestion(config.stateDir, config.workspace, config.sessionName, config.peer, now)
+    (a.source === "startup" || a.source === "compact" || a.source === "resume") && config.sessionName !== undefined
+      ? maybeLessonSuggestion(config.stateDir, config.workspace, config.sessionName, config.peer, now, false)
       : undefined;
-  const { text, shown } = renderContinuityShown({
+  const { text, shown, staleShownIds } = renderContinuityShown({
     now,
     ...(checkpoint !== null ? { checkpoint } : {}),
     ...(openItems.length > 0 ? { openWork: openItems } : {}),
@@ -573,7 +584,19 @@ async function buildContinuity(a: {
     ...(peerCard !== undefined && peerCard.length > 0 ? { peerCard } : {}),
     ...(staleProps !== undefined && staleProps.length > 0 ? { staleProposals: staleProps } : {}),
     ...(lesson !== undefined ? { lesson } : {}),
+    ...(a.harness !== undefined ? { harness: a.harness } : {}),
   });
+  // v0.5.6: count what survived the fill budget, nothing else - by the id
+  // behind each line the seat saw (review R20 F-P3: a malformed pick renders
+  // no line, so position alone would charge the wrong proposal).
+  if (staleState !== undefined) {
+    const shownIds = new Set(staleShownIds);
+    const seen = stalePicked.filter((p) => shownIds.has(p.oldId));
+    markStaleShown(seen);
+    if (staleDropped || seen.length > 0) writeStaleState(config.stateDir, config.workspace, staleState);
+  }
+  if (lesson !== undefined && shown.n_lesson === 1)
+    recordLessonSuggestion(config.stateDir, config.workspace, lesson.qitemId, lesson.reason, now);
   const cappedTotal = a.capInfo();
   deps.stats?.({
     moment: "continuity",
@@ -685,7 +708,7 @@ function findRestoreMap(
 
 /** Entry point: never throws (S1); total failure is the empty string. */
 export async function buildInjection(
-  input: { source: InjectionSource; claudeSessionId?: string; cwd?: string },
+  input: { source: InjectionSource; claudeSessionId?: string; cwd?: string; harness?: Harness },
   config: Config,
   deps: ReaderDeps,
 ): Promise<string> {

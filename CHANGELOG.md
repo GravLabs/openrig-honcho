@@ -1,5 +1,24 @@
 # Changelog
 
+## v0.5.6 (2026-11-17)
+
+Three delivery fixes found in the first 48 hours of pilot data on v0.5.5.
+
+- **Stale proposals are counted only when a seat sees them.** The digest picks proposals
+  first and counts them once the rendered text has kept their line, and the short
+  action lines (stale proposals, the lesson suggestion) now come before the long summary
+  and decision sections, so the size budget cuts history instead. Before, a proposal could
+  use up its three showings without ever being seen.
+- **Lesson suggestions on compaction and resume.** A suggestion was offered only on a
+  fresh start, and the pilots compact far more often than they start. It is now offered
+  on every digest kind and recorded only once it was shown.
+- **The pointer names a search the seat can make.** The claim pointer and the digest's
+  search line now give the exact tool name and arguments,
+  `mcp__rig_memory__search {"query": ...}` (the same name on Claude Code, where a seat
+  loads it with ToolSearch, and on Codex), instead of a bare `search(...)`. The outcome
+  log counts a row's pointer even when it arrived before the claim, and reports how many
+  rows shown a pointer were followed by a search after that pointer.
+
 ## v0.5.5 (2026-11-14)
 
 Two fixes found by reading the 2026 work on revoked memory and memory authority.

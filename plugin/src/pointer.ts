@@ -20,6 +20,7 @@
 
 import { createHash } from "node:crypto";
 import { redact } from "./redact.ts";
+import type { Harness } from "./harness.ts";
 import { ownerMark, parseEntry, supersedeMarker } from "./ledger.ts";
 import { classTag, trustTag, type TrustClass } from "./trust.ts";
 
@@ -165,7 +166,20 @@ export function pointerItems(snap: {
  * lines, header + count line survive (a call without titles still invites
  * a pull; a block over budget never exists).
  */
-export function pointerBlock(query: string, count: number, items: PointerItem[]): string {
+/**
+ * v0.5.6: the search call by its real tool name. On the pilots no claimed
+ * item was followed by a search: Claude Code loads MCP tools on demand, so a
+ * bare search("...") named nothing callable; the exact name lets the seat load
+ * it (ToolSearch select:<name>) and call it. Codex exposes the same tool as
+ * namespace mcp__rig_memory, name search - the same full name (review R20
+ * F-P1, read off a real Codex session log). `harness` is kept for a future
+ * harness that spells it differently.
+ */
+export function searchCall(query: string, _harness: Harness = "claude"): string {
+  return `mcp__rig_memory__search {"query": "${query}"}`;
+}
+
+export function pointerBlock(query: string, count: number, items: PointerItem[], harness: Harness = "claude"): string {
   if (count <= 0) return "";
   // O3 item 6: line selection FIRST (on the raw content), then the visible
   // sanitise per chosen line - sanitising before the split would collapse
@@ -180,7 +194,7 @@ export function pointerBlock(query: string, count: number, items: PointerItem[])
     }
     return "";
   };
-  const head = `memory: ${count} item${count === 1 ? "" : "s"} relate to this queue item - search("${query}") to see more`;
+  const head = `memory: ${count} item${count === 1 ? "" : "s"} relate to this queue item - to see them, call ${searchCall(query, harness)}`;
   const titles: string[] = [];
   for (const it of items) {
     // v0.5.5: a "[retire d-...]" entry is an act on another entry, not a

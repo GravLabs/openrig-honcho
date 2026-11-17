@@ -213,6 +213,30 @@ describe("V6 lesson: the digest suggestion", () => {
     }
   });
 
+  test("v0.5.6: a compaction or resume digest offers it too (pilots compact far more than they start)", async () => {
+    const { fake, dir, config, deps } = await setup();
+    try {
+      seedOutcomes(dir, [rec({ qitemId: Q1, closed: ago(1 * DAY), reopenCount: 1 })]);
+      const out = await buildInjection({ source: "compact", claudeSessionId: "c1" }, config, deps);
+      expect(out).toContain(`${Q1} needed rework (reopened)`);
+      expect(readLessonState(dir, WS)?.suggested[Q1]).toBeDefined(); // shown -> recorded
+      const again = await buildInjection({ source: "resume", claudeSessionId: "c2" }, config, deps);
+      expect(again).not.toContain("Lesson worth writing?"); // never twice
+    } finally {
+      await fake.stop();
+    }
+  });
+
+  test("v0.5.6: the picker can look without recording (the digest records only what it showed)", () => {
+    const dir = makeTempDir("lesson-");
+    seedOutcomes(dir, [rec({ qitemId: Q1, closed: ago(1 * DAY), reopenCount: 1 })]);
+    const s = maybeLessonSuggestion(dir, WS, SESSION, SELF, NOW, false);
+    expect(s?.qitemId).toBe(Q1);
+    const st = readLessonState(dir, WS);
+    expect(st === null || st.suggested[Q1] === undefined).toBe(true);
+    expect(maybeLessonSuggestion(dir, WS, SESSION, SELF, NOW, false)?.qitemId).toBe(Q1); // still on offer
+  });
+
   test("(c) a rework closed more than 7 days ago is not suggested", async () => {
     const { fake, dir, config, deps } = await setup();
     try {

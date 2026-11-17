@@ -13,13 +13,15 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { Config } from "../../plugin/src/env.ts";
 import { createClient, type Conclusion } from "../../plugin/src/honcho.ts";
+import { renderContinuityShown } from "../../plugin/src/inject.ts";
 import { buildInjection, type ReaderDeps } from "../../plugin/src/reader.ts";
 import { LEDGER_PEER, formatEntry, formatRetire } from "../../plugin/src/ledger.ts";
 import {
   readStaleState,
   runStaleCheck,
   staleStatePath,
-  takeStaleForDigest,
+  pickStaleForDigest,
+  markStaleShown,
   writeStaleState,
   type ModelTarget,
   type StaleState,
@@ -352,6 +354,43 @@ describe("V4 stale-check: the bin and the digest", () => {
     }
   });
 
+  test("v0.5.6: a digest crowded to the cap still shows the proposal, ahead of the long sections", () => {
+    // like the pilot lead: a long summary and ten long decisions fill the 2500 budget
+    const r = renderContinuityShown({
+      now: NOW,
+      leftOff: { summary: "a long summary line. ".repeat(60), at: ago(HOUR), session: "lead--m1--1" },
+      decisions: Array.from({ length: 10 }, (_, i) => ({ id: `d-bbbb00${String(i).padStart(2, "0")}`, kind: "decision" as const, content: `rule ${i}: ${"a long standing rule that fills the digest ".repeat(4)}`, at: ago(2 * HOUR) })),
+      staleProposals: [{ oldId: O1, oldAt: ago(4 * HOUR), why: "a newer status replaced it" }],
+    });
+    expect(r.text.length).toBeGreaterThan(2000);
+    expect(r.shown.n_stale).toBe(1);
+    expect(r.text.indexOf("Possibly stale")).toBeLessThan(r.text.indexOf("## Where you left off"));
+  });
+
+  test("R20 F-P3: the renderer names the ids it showed; a malformed pick is not charged", () => {
+    const r = renderContinuityShown({
+      now: NOW,
+      staleProposals: [
+        { oldId: "", oldAt: ago(HOUR), why: "malformed: no id" },
+        { oldId: O1, oldAt: ago(HOUR), why: "shown" },
+      ],
+    });
+    expect(r.staleShownIds).toEqual([O1]);
+    expect(r.shown.n_stale).toBe(1);
+  });
+
+  test("v0.5.6: picking does not count; only marking does", () => {
+    const st: StaleState = {
+      version: 1, classes: {}, lastCheckedAt: NOW,
+      proposals: [{ oldId: O1, newId: N1, why: "x", oldAt: ago(HOUR), at: ago(HOUR), shown: 0 }],
+    };
+    const pk = pickStaleForDigest(st, new Set([O1]), 2);
+    expect(pk.picked.length).toBe(1);
+    expect(st.proposals[0].shown).toBe(0);
+    markStaleShown(pk.picked);
+    expect(st.proposals[0].shown).toBe(1);
+  });
+
   test("(e1) after 3 showings the proposal is gone from the digest", async () => {
     const { fake, dir, config, deps } = await leaderSetup();
     try {
@@ -389,7 +428,7 @@ describe("V4 stale-check: the bin and the digest", () => {
     }
   });
 
-  test("takeStaleForDigest: max 2, newest first, shown++ only for picked", () => {
+  test("pickStaleForDigest: max 2, newest first, gone ones dropped, nothing counted until marked", () => {
     const st: StaleState = {
       version: 1,
       classes: {},
@@ -402,11 +441,13 @@ describe("V4 stale-check: the bin and the digest", () => {
       ],
     };
     const inForce = new Set(["d-00000001", "d-00000002", "d-00000003"]); // 4 retired
-    const picked = takeStaleForDigest(st, inForce, 2);
-    expect(picked.shown.map((p) => p.oldId)).toEqual(["d-00000003", "d-00000002"]); // newest first
-    expect(picked.dirty).toBe(true);
+    const pk = pickStaleForDigest(st, inForce, 2);
+    expect(pk.picked.map((p) => p.oldId)).toEqual(["d-00000003", "d-00000002"]); // newest first
+    expect(pk.dropped).toBe(true);
     expect(st.proposals.find((p) => p.oldId === "d-00000004")).toBeUndefined(); // retired dropped
-    expect(st.proposals.find((p) => p.oldId === "d-00000001")!.shown).toBe(0); // not picked
+    expect(st.proposals.find((p) => p.oldId === "d-00000002")!.shown).toBe(0); // v0.5.6: not counted yet
+    markStaleShown([pk.picked[1]]);
     expect(st.proposals.find((p) => p.oldId === "d-00000002")!.shown).toBe(1);
+    expect(st.proposals.find((p) => p.oldId === "d-00000003")!.shown).toBe(0);
   });
 });

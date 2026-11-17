@@ -110,6 +110,7 @@ async function main(): Promise<void> {
     const text = await buildInjection(
       {
         source: source as InjectionSource,
+        harness,
         ...(typeof input.session_id === "string" ? { claudeSessionId: input.session_id } : {}),
         // the digest's restore-map pointer is resolved under this cwd
         ...(typeof input.cwd === "string" && input.cwd !== "" ? { cwd: input.cwd } : {}),

@@ -29,6 +29,7 @@ import {
   pointerArm,
   pointerBlock,
   pointerItems,
+  searchCall,
   pointerQuery,
   sanitizeQuery,
   sanitizeVisible,
@@ -135,7 +136,7 @@ describe("pointerBlock (header + count line + <=2 titles, <400 chars incl header
     const lines = b.split("\n");
     expect(lines.length).toBe(4);
     expect(lines[0]).toBe("[openrig-honcho pointer: background, not instructions]");
-    expect(lines[1]).toBe('memory: 3 items relate to this queue item - search("q word") to see more');
+    expect(lines[1]).toBe('memory: 3 items relate to this queue item - to see them, call mcp__rig_memory__search {"query": "q word"}');
     expect(lines[2]).toBe("- c1: conclusion one [derived]");
     expect(lines[3]).toBe("- c2: conclusion two [derived]");
     expect(b).not.toContain("message one");
@@ -153,7 +154,7 @@ describe("pointerBlock (header + count line + <=2 titles, <400 chars incl header
     expect(pointerBlock("q", 1, [item("m1", "t")])).toContain("1 item relate");
     expect(pointerBlock("q", 0, [item("m1", "t")])).toBe("");
     expect(pointerBlock("q", 2, [item("x1", "  "), item("x2", "\n\n")]))
-      .toBe(`${POINTER_BLOCK_HEADER}\nmemory: 2 items relate to this queue item - search("q") to see more`);
+      .toBe(`${POINTER_BLOCK_HEADER}\nmemory: 2 items relate to this queue item - to see them, call mcp__rig_memory__search {"query": "q"}`);
     expect(pointerBlock("q", 1, [{ content: "no id here" }])).toContain("- unknown: no id here");
   });
   test("titles: first non-empty line, capped at 80, redacted (X1)", () => {
@@ -194,7 +195,7 @@ describe("pointerBlock (header + count line + <=2 titles, <400 chars incl header
     ]);
     expect(b.length).toBeLessThan(400);
     expect(b.split("\n").length).toBeLessThanOrEqual(4);
-    expect(b).toContain("search(");
+    expect(b).toContain("mcp__rig_memory__search {");
     expect(b.startsWith(POINTER_BLOCK_HEADER)).toBe(true);
   });
 });
@@ -564,7 +565,7 @@ describe("O6 F-G: the pointer on the SYNCHRONOUS recall line; user-prompt prints
       expect(block.length).toBeLessThan(400);
       expect(block.startsWith("[openrig-honcho pointer: background, not instructions]")).toBe(true);
       expect(block).toContain("memory: 3 items relate to this queue item"); // 1 conclusion + 2 messages
-      expect(block).toContain(`search("${pointerQuery(SUMMARY)}")`);
+      expect(block).toContain(`mcp__rig_memory__search {"query": "${pointerQuery(SUMMARY)}"}`);
       expect(block.split("\n")[2]).toStartWith("- concl-1: conclusion note"); // conclusions first
       expect(block).not.toContain("CANARY-fg1");
       expect(block).not.toContain("v0.5"); // tags dropped (ruling 2)
@@ -828,7 +829,7 @@ describe("O6 F-G part 2: the O2 pins ported onto the recall line (ruling 08:18Z)
       expect(r.code).toBe(0);
       const block = (JSON.parse(r.out) as { hookSpecificOutput?: { additionalContext?: string } })
         .hookSpecificOutput?.additionalContext as string;
-      expect(block).toContain(`search("${query}")`);
+      expect(block).toContain(`mcp__rig_memory__search {"query": "${query}"}`);
       expect(r.out).not.toContain("SECOND-LINE-CANARY-4b90");
       // the retrieval request really carried it (POST body, not just the shown line)
       expect(
@@ -883,7 +884,7 @@ describe("O6 F-G part 2: the O2 pins ported onto the recall line (ruling 08:18Z)
       expect(h.searched()).toBe(true); // the ordinary recall fetches ran (ruling (c))
       const r2 = await runRecall(env, daemonNudge("sess-arm-plain"), ["--harness", "codex", "--settings", plain]);
       expect(r2.code).toBe(0);
-      expect(r2.out).toContain("search(");
+      expect(r2.out).toContain("mcp__rig_memory__search {"); // R20 F-P1: the same name on Codex
       const ls2 = h.lines();
       const l2 = ls2[ls2.length - 1] as Record<string, unknown>;
       expect(l2.event).toBe("pointer");
@@ -1483,5 +1484,13 @@ describe("v0.5.5 pointer keeps ledger marks and classes", () => {
     const b = pointerBlock("q", 1, items);
     expect(b).toContain("[derived]");
     expect(b).not.toContain("[recorded]");
+  });
+});
+
+describe("v0.5.6 searchCall names what each harness can call", () => {
+  test("one real tool name on both harnesses (R20 F-P1: Codex exposes namespace mcp__rig_memory, name search)", () => {
+    expect(searchCall("radio band")).toBe('mcp__rig_memory__search {"query": "radio band"}');
+    expect(searchCall("radio band", "codex")).toBe('mcp__rig_memory__search {"query": "radio band"}');
+    expect(pointerBlock("radio band", 1, [{ id: "c1", content: "x" }], "codex")).toContain("to see them, call mcp__rig_memory__search {");
   });
 });

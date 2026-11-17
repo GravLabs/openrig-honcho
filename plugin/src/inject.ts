@@ -17,7 +17,8 @@
 // builder (pointer.ts - pure: crypto + redact only), so the search call it
 // names is byte-identical to the one the claim-time pointer would show.
 
-import { pointerQuery, sanitizeVisible } from "./pointer.ts";
+import { pointerQuery, sanitizeVisible, searchCall } from "./pointer.ts";
+import type { Harness } from "./harness.ts";
 import { trustTag } from "./trust.ts";
 
 export type InjectionSource = "startup" | "resume" | "clear" | "compact";
@@ -62,6 +63,8 @@ export interface InjectionAwayConclusion {
 /** T19b (ADR-0014 decision 1): input for the continuity digest. */
 export interface ContinuityInput {
   now: string;
+  /** v0.5.6: names the search call this harness can make (pointer.searchCall). */
+  harness?: Harness;
   /** part 0 (V1, ADR-0019 d1): local checkpoint line the Stop hook saved */
   checkpoint?: { line: string; at: string };
   /** part 1: live open work from the daemon (max 5 rendered) */
@@ -404,13 +407,15 @@ export function forScopeLabel(d: InjectionDecision, openIds?: Set<string>): stri
  * escape and when there is nothing to say.
  */
 export function renderContinuity(input: ContinuityInput): string {
-  return renderContinuityInner(input, { checkpoint: [], stale: [], lesson: [] });
+  return renderContinuityInner(input, { checkpoint: [], stale: [], staleIds: [], lesson: [] });
 }
 
 /** v0.5.5: the plugin-authored lines this render built, per part. */
 interface AuthoredLines {
   checkpoint: string[];
   stale: string[];
+  /** R20 F-P3: the proposal id behind each stale line, same order */
+  staleIds: string[];
   lesson: string[];
 }
 
@@ -423,14 +428,21 @@ interface AuthoredLines {
 export function renderContinuityShown(input: ContinuityInput): {
   text: string;
   shown: { n_checkpoint: number; n_stale: number; n_lesson: number };
+  /** R20 F-P3: the stale proposal ids whose line the seat was shown */
+  staleShownIds: string[];
 } {
-  const authored: AuthoredLines = { checkpoint: [], stale: [], lesson: [] };
+  const authored: AuthoredLines = { checkpoint: [], stale: [], staleIds: [], lesson: [] };
   const text = renderContinuityInner(input, authored);
   const out = text.split("\n");
   // each authored line counts once, and only if the output has it as a whole
   // line; a quoted copy of the same bytes is indistinguishable and harmless
   const count = (ls: string[]): number => ls.filter((l) => out.includes(l)).length;
-  return { text, shown: { n_checkpoint: count(authored.checkpoint), n_stale: count(authored.stale), n_lesson: count(authored.lesson) } };
+  const staleShownIds = authored.stale.flatMap((l, i) => (out.includes(l) ? [authored.staleIds[i]] : []));
+  return {
+    text,
+    shown: { n_checkpoint: count(authored.checkpoint), n_stale: count(authored.stale), n_lesson: count(authored.lesson) },
+    staleShownIds,
+  };
 }
 
 function renderContinuityInner(input: ContinuityInput, authored: AuthoredLines): string {
@@ -477,6 +489,42 @@ function renderContinuityInner(input: ContinuityInput, authored: AuthoredLines):
       sections.push(section(`Your open work${trustTag("queue")}`, lines));
     }
 
+    // v0.5.6: the short, actionable lines (stale proposals, the lesson
+    // suggestion) come BEFORE the long summary and decision sections, so the
+    // 2500 fill budget cuts history, not the action (found on the pilot:
+    // the lead's digests ran at ~2490 bytes and dropped both proposals).
+    // 3b. V4 (ADR-0019 d4): pending stale proposals, lead seat only (the
+    // reader passes them for a lead alone) - the exact retire call from the
+    // row: "Possibly stale (<age>): <old id> - <why, sanitized, capped> -
+    // if so: retire(<old id>)". A proposal is never an automatic change.
+    const sp = (input.staleProposals ?? []).slice(0, 2);
+    if (sp.length > 0) {
+      const slines: string[] = [];
+      for (const p of sp) {
+        if (!isText(p.oldId) || !isText(p.oldAt)) continue;
+        const why = x3(String(p.why ?? "").replace(/\s+/g, " ").trim().slice(0, 160));
+        const id = x3(p.oldId);
+        slines.push(`Possibly stale${suffix(ageLabel(now, p.oldAt))}: ${id} - ${why} - if so: retire(${id})${trustTag("staleProposal")}`);
+        authored.staleIds.push(p.oldId);
+      }
+      authored.stale.push(...slines);
+      if (slines.length > 0) sections.push(section("Stale proposals", slines));
+    }
+
+    // 3c. V6 (ADR-0019 d6): the lesson suggestion (v0.5.6: startup, compact
+    // and resume; at most one, once per item forever
+    // - the pick and its record are local in lesson.ts). One plain line
+    // (checkpoint precedent: plugin-authored, not x3-quoted), the exact
+    // sentence from the row; trusted as authoritative since it comes from
+    // OpenRig's queue. The plugin only NAMES the file the owning seat writes
+    // by hand - it never touches that file itself.
+    const ls = input.lesson;
+    if (ls && isText(ls.qitemId) && isText(ls.reason) && isText(ls.seat)) {
+      const lsl = `Lesson worth writing? ${ls.qitemId} needed rework (${ls.reason}). If something would have prevented it, write it as seats/${ls.seat}/lore/<slug>.md (the OpenRig lore template)${trustTag("outcome")}`;
+      authored.lesson.push(lsl);
+      sections.push(lsl);
+    }
+
     // 2. Where you left off - the summary already fetched, source = session.
     const lo = input.leftOff;
     if (lo && isText(lo.summary) && !tooOld(now, lo.at)) {
@@ -511,37 +559,6 @@ function renderContinuityInner(input: ContinuityInput, authored: AuthoredLines):
           ],
         ),
       );
-    }
-
-    // 3b. V4 (ADR-0019 d4): pending stale proposals, lead seat only (the
-    // reader passes them for a lead alone) - the exact retire call from the
-    // row: "Possibly stale (<age>): <old id> - <why, sanitized, capped> -
-    // if so: retire(<old id>)". A proposal is never an automatic change.
-    const sp = (input.staleProposals ?? []).slice(0, 2);
-    if (sp.length > 0) {
-      const slines: string[] = [];
-      for (const p of sp) {
-        if (!isText(p.oldId) || !isText(p.oldAt)) continue;
-        const why = x3(String(p.why ?? "").replace(/\s+/g, " ").trim().slice(0, 160));
-        const id = x3(p.oldId);
-        slines.push(`Possibly stale${suffix(ageLabel(now, p.oldAt))}: ${id} - ${why} - if so: retire(${id})${trustTag("staleProposal")}`);
-      }
-      authored.stale.push(...slines);
-      if (slines.length > 0) sections.push(section("Stale proposals", slines));
-    }
-
-    // 3c. V6 (ADR-0019 d6): the lesson suggestion, session start only (the
-    // reader passes it for startup alone, at most one, once per item forever
-    // - the pick and its record are local in lesson.ts). One plain line
-    // (checkpoint precedent: plugin-authored, not x3-quoted), the exact
-    // sentence from the row; trusted as authoritative since it comes from
-    // OpenRig's queue. The plugin only NAMES the file the owning seat writes
-    // by hand - it never touches that file itself.
-    const ls = input.lesson;
-    if (ls && isText(ls.qitemId) && isText(ls.reason) && isText(ls.seat)) {
-      const lsl = `Lesson worth writing? ${ls.qitemId} needed rework (${ls.reason}). If something would have prevented it, write it as seats/${ls.seat}/lore/<slug>.md (the OpenRig lore template)${trustTag("outcome")}`;
-      authored.lesson.push(lsl);
-      sections.push(lsl);
     }
 
     // 4. Approvals you hold. T24 F3: no render slice here - held approvals
@@ -598,7 +615,7 @@ function renderContinuityInner(input: ContinuityInput, authored: AuthoredLines):
     const hint =
       topQuery === ""
         ? SEARCH_HINT
-        : `Start the open item with memory: search("${topQuery}")`;
+        : `Start the open item with memory: ${searchCall(topQuery, input.harness)}`;
     return fillSections(sections, CONTINUITY_HEADER, CAP_CONTINUITY, hint);
   } catch {
     return ""; // S1: no digest beats a broken session start

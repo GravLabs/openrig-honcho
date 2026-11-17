@@ -59,7 +59,7 @@ import { dirname } from "node:path";
 // C2 (ADR-0016): shared stdin seam + the one output writer. UserPromptSubmit
 // fields are identical on both harnesses (probe C1 §1); --harness is accepted
 // and needs no mapping here.
-import { readStdin, resolveHarness, writeHookJson } from "../src/harness.ts";
+import { readStdin, resolveHarness, writeHookJson, type Harness } from "../src/harness.ts";
 import { harnessUnknownWithSettings, readSettingsFile } from "../src/settings.ts";
 
 /** ADR-0009 decision 4: the whole fetch phase holds to 2.5 s of wall time -
@@ -146,6 +146,7 @@ async function pointerSearchExit(
   t0: number,
   logP: (over: Record<string, unknown>) => void,
   silentExit: boolean,
+  harness: Harness = "claude",
 ): Promise<void> {
   // V5: lesson lines ride this run (shown arm only). Local IO only - any
   // failure inside pointerLessons is a silent empty block.
@@ -184,7 +185,7 @@ async function pointerSearchExit(
     // V2 (ADR-0019 d2): the title class comes from the array the item came
     // from - conclusions are model products, messages verbatim seat words.
     // v0.5.5: keep the snapshot's per-memory class and ledger marks.
-    const text = pointerBlock(pQuery, count, pointerItems(snap));
+    const text = pointerBlock(pQuery, count, pointerItems(snap), harness);
     // V5: the lesson lines ride beside the block (or alone when the block
     // is empty - the DECISION in the header). With no lessons the bytes and
     // the event line are today's, byte for byte.
@@ -447,7 +448,7 @@ async function main(): Promise<void> {
               // every gate + shown: the pointer owns this run, shown or
               // silent. There is no recall here to fall back to, so even a
               // thrown search ends with this run's one pointer line.
-              await pointerSearchExit(c, nudgeId, r, tN, t0, logSkipPointer, true);
+              await pointerSearchExit(c, nudgeId, r, tN, t0, logSkipPointer, true, harness);
               process.exit(0); // pointerSearchExit always exits; TS signpost
             }
           }
@@ -562,7 +563,7 @@ async function main(): Promise<void> {
           // exit). A thrown search logs its none line and RETURNS: today's
           // recall, if it answered, still renders (the pointer must never
           // silence memory).
-          await pointerSearchExit(c, nudgeId, winner.r, tN, t0, logP, false);
+          await pointerSearchExit(c, nudgeId, winner.r, tN, t0, logP, false, harness);
         }
       }
       // row unreadable, absent, answered for another seat, or the pointer

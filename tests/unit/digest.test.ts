@@ -239,7 +239,7 @@ describe("T19b digest build", () => {
       // O3 item 1: with open items the final line names the search call for
       // the TOP one (in-progress first), the generic hint is gone.
       expect(
-        text.endsWith('\nStart the open item with memory: search("Wire radio driver")'),
+        text.endsWith('\nStart the open item with memory: mcp__rig_memory__search {"query": "Wire radio driver"}'),
       ).toBe(true);
       expect(stats).toEqual({
         moment: "continuity",
@@ -738,8 +738,8 @@ describe("O3 item 1: the digest search line", () => {
         { qitemId: "qitem-b", summary: "Review the antenna note", state: "pending", at: "2026-11-04T10:00:00.000Z" },
       ],
     });
-    expect(out.endsWith('\nStart the open item with memory: search("Wire radio driver")')).toBe(true);
-    expect((out.match(/search\("/g) ?? []).length).toBe(1);
+    expect(out.endsWith('\nStart the open item with memory: mcp__rig_memory__search {"query": "Wire radio driver"}')).toBe(true);
+    expect((out.match(/mcp__rig_memory__search \{/g) ?? []).length).toBe(1);
     expect(out).not.toContain(HINT);
   });
 
@@ -766,7 +766,7 @@ describe("O3 item 1: the digest search line", () => {
     });
     // same builder as O2 (pointerQuery): quote/backtick/backslash stripping,
     // stopword pass, 8-word limit -> this exact call
-    expect(out.endsWith('\nStart the open item with memory: search("Run fix the pipe more words definitely longer")')).toBe(true);
+    expect(out.endsWith('\nStart the open item with memory: mcp__rig_memory__search {"query": "Run fix the pipe more words definitely longer"}')).toBe(true);
   });
 
   test("old items (tooOld) are not open items: no search line", () => {

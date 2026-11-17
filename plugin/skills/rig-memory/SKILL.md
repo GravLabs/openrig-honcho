@@ -14,10 +14,10 @@ arrive on their own.
 **When you start a queue item, search for it first** - before working and asking:
 
 ```
-search("wire the radio driver")
+mcp__rig_memory__search {"query": "wire the radio driver"}
 ```
 
-Words from the item's summary are the best query. It answers in about a second. If the digest or a queue-nudge
+On Claude Code the tool may not be loaded yet: load it with ToolSearch `select:mcp__rig_memory__search`, then call it. Words from the item's summary are the best query. It answers in about a second. If the digest or a queue-nudge
 block already named a search call, run that one.
 
 ## The digest at session start

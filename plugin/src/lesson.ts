@@ -172,6 +172,7 @@ export function maybeLessonSuggestion(
   selfSession: string,
   seat: string,
   now: string,
+  record = true,
 ): { qitemId: string; reason: ReworkKind; seat: string } | undefined {
   const nowMs = Date.parse(now);
   if (!Number.isFinite(nowMs) || selfSession === "") return undefined;
@@ -196,7 +197,21 @@ export function maybeLessonSuggestion(
     if (best === undefined || r.closed > (best.r.closed as string)) best = { r, reason };
   }
   if (best === undefined) return undefined;
-  state.suggested[best.r.qitemId] = { at: now, reason: best.reason };
-  writeJsonAtomic(lessonStatePath(stateDir, workspace), state);
+  if (record) recordLessonSuggestion(stateDir, workspace, best.r.qitemId, best.reason, now);
   return { qitemId: best.r.qitemId, reason: best.reason, seat };
+}
+
+/**
+ * v0.5.6: record a suggestion as made - called by the digest only once the
+ * rendered text kept its line, so a suggestion cut by the fill budget is
+ * offered again next time instead of being spent unseen. Never throws.
+ */
+export function recordLessonSuggestion(stateDir: string, workspace: string, qitemId: string, reason: ReworkKind, now: string): void {
+  try {
+    const state = readLessonState(stateDir, workspace) ?? { version: 1 as const, suggested: {} };
+    state.suggested[qitemId] = { at: now, reason };
+    writeJsonAtomic(lessonStatePath(stateDir, workspace), state);
+  } catch {
+    // best effort: an unrecorded suggestion is offered again, never lost
+  }
 }

@@ -129,6 +129,14 @@ shipped:
   file, an unknown harness) write no record, so the previous turn's stands; that needs a
   settings file broken after the seat's MCP server started (a broken file at start
   disables the server too), and the 30-minute limit still bounds it.
+- **Delivery (v0.5.6, owner 2026-11-17: "do all 3").** The first 48 hours of data showed
+  the learning features not reaching seats. Stale proposals and lesson suggestions are now
+  counted only once the digest text kept their line, and come before the long sections;
+  lesson suggestions are offered on compaction and resume, not only on a fresh start; the
+  pointer and the digest name the real search call, `mcp__rig_memory__search`, the same
+  name on both harnesses. The outcome log counts a row's pointer even when it arrived
+  before the claim (tool calls still count from the claim), and reports the share of
+  pointer rows with a search after the pointer that led to the claim.
 - **A running MCP server keeps its old code** (found 2026-11-14: every Claude seat's server
   on both pilots predated v0.5.1). Installs that change server code ask for a
   keep-conversation restart of each seat, and `status` now reports "running vX code but

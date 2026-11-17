@@ -271,23 +271,26 @@ export async function runStaleCheck(
 // ---------------------------------------------------------- the digest view
 
 /**
- * The lead seat's digest pick (ADR-0019 d4): proposals whose old entry is
- * still in force and shown < 3 times; at most `max`, newest first; the shown
- * count rises for what is displayed. `dirty` says the caller must persist
- * (gone-proposals dropped, counters raised). Pure: no IO.
+ * v0.5.6: the pick WITHOUT counting - the digest counts a proposal shown only
+ * once the rendered text kept its line (the fill budget can cut it; found on
+ * the pilot 2026-11-16: proposals used their 3 showings unseen). Drops gone
+ * proposals (no longer in force, or shown 3 times) from `st`. Pure: no IO.
  */
-export function takeStaleForDigest(
+export function pickStaleForDigest(
   st: StaleState,
   inForceIds: Set<string>,
   max: number,
-): { shown: StaleProposal[]; dirty: boolean } {
+): { picked: StaleProposal[]; dropped: boolean } {
   const before = st.proposals.length;
   st.proposals = st.proposals.filter((p) => inForceIds.has(p.oldId) && p.shown < 3);
   const dropped = st.proposals.length !== before;
   const ordered = st.proposals.slice().sort((a, b) => (a.at < b.at ? 1 : a.at > b.at ? -1 : 0));
-  const shown = ordered.slice(0, max);
+  return { picked: ordered.slice(0, max), dropped };
+}
+
+/** v0.5.6: count the proposals a seat was actually shown (objects of `st`). */
+export function markStaleShown(shown: StaleProposal[]): void {
   for (const p of shown) p.shown++;
-  return { shown, dirty: dropped || shown.length > 0 };
 }
 
 /** existsSync only: the digest reads the local file before any network. */

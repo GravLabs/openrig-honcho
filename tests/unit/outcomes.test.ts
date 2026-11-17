@@ -263,6 +263,42 @@ describe("memoryWindow", () => {
     "not-json",
     null,
   ];
+  test("R20 F-P5: the anchor is the last pointer at or before the claim, not an old unclaimed nudge", () => {
+    const Q = "qitem-20261110000500-bbbbbbbbbbbbbbbb";
+    const l = [
+      logLine({ ts: "2026-11-08T00:00:00.000Z", hook: "recall", event: "pointer", pointer: "shown", qitem: Q }), // old nudge
+      logLine({ ts: "2026-11-09T00:00:00.000Z", hook: "mcp", event: "tool:search" }), // between - not credited
+      logLine({ ts: "2026-11-10T00:20:00.000Z", hook: "recall", event: "pointer", pointer: "shown", qitem: Q }), // led to the claim
+      logLine({ ts: "2026-11-10T00:25:00.000Z", hook: "mcp", event: "tool:search" }), // credited
+    ];
+    const m = memoryWindow(l, SEAT, "2026-11-10T00:30:00.000Z", "2026-11-10T00:31:00.000Z", "2026-11-07T00:00:00.000Z", Q);
+    expect(m.searchAfterPointer).toBe(1);
+  });
+
+  test("R20 N-P2: the record file keeps the pointer fields", () => {
+    const m = memoryWindow([], SEAT, "2026-11-10T00:30:00.000Z", "2026-11-10T00:31:00.000Z");
+    const line = serializeRecord({ qitemId: "q", source: null, destination: SEAT, tags: [], created: null, claimed: null, closed: null, closeTransitionId: null, closureReason: null, closureTarget: null, handoffFrom: null, handoffTo: null, reopenCount: 0, followOn: [], memory: { ...m, pointerShown: 2, pointerHeld: 1, searchAfterPointer: 1 } } as never);
+    const back = JSON.parse(line).memory;
+    expect([back.pointerShown, back.pointerHeld, back.searchAfterPointer]).toEqual([2, 1, 1]);
+  });
+
+  test("v0.5.6: the pointer arriving before the claim counts; searches count from the claim (R20 F-P2)", () => {
+    const Q = "qitem-20261110000500-aaaaaaaaaaaaaaaa";
+    const l = [
+      logLine({ ts: "2026-11-10T00:06:00.000Z", hook: "recall", event: "pointer", pointer: "shown", qitem: Q }),
+      logLine({ ts: "2026-11-10T00:05:30.000Z", hook: "mcp", event: "tool:search" }), // before the pointer
+      logLine({ ts: "2026-11-10T00:10:00.000Z", hook: "mcp", event: "tool:search" }), // after the pointer, before the claim
+    ];
+    const m = memoryWindow(l, SEAT, "2026-11-10T00:30:00.000Z", "2026-11-10T00:31:00.000Z", "2026-11-10T00:05:00.000Z", Q);
+    expect(m.pointerShown).toBe(1); // arrived with the hand-off, before the claim
+    expect(m.search).toBe(0); // tool calls still count from the claim
+    expect(m.searchAfterPointer).toBe(1); // only the one after THIS row's pointer
+    // another row's pointer is not this row's anchor
+    expect(memoryWindow(l, SEAT, "2026-11-10T00:30:00.000Z", "2026-11-10T00:31:00.000Z", "2026-11-10T00:05:00.000Z", "qitem-other").searchAfterPointer).toBeUndefined();
+    // never claimed: still no window at all
+    expect(memoryWindow(l, SEAT, null, "2026-11-10T00:31:00.000Z", "2026-11-10T00:05:00.000Z", Q).pointerShown).toBe(0);
+  });
+
   test("window edges inclusive, other seats and out-of-window excluded", () => {
     const m = memoryWindow(lines, SEAT, "2026-11-10T00:30:00.000Z", "2026-11-10T02:00:00.000Z");
     expect(m).toEqual({
