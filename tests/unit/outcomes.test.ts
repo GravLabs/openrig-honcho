@@ -21,7 +21,7 @@ import {
   summaryLines,
   type OutcomeRecord,
 } from "../../plugin/src/outcomes.ts";
-import { fetchCurrentItem, fetchQueueListAll, fetchQueueListByState, fetchTransitions } from "../../plugin/src/daemon.ts";
+import { COLLECTOR_TIMEOUT_MS, DAEMON_TIMEOUT_MS, fetchCurrentItem, fetchOutbox, fetchQueueListAll, fetchQueueListByState, fetchTransitions } from "../../plugin/src/daemon.ts";
 
 const ID_A = "qitem-20261110000001-aaaaaaaaaaaaaaaa";
 const ID_B = "qitem-20261110000002-bbbbbbbbbbbbbbbb";
@@ -827,6 +827,25 @@ describe("daemon list/transitions/current-item clients", () => {
       expect(await fetchQueueListAll(d2.url)).toEqual({ ok: false, kind: "parse" });
     } finally { d2.close(); }
     expect(await fetchQueueListByState(undefined, "done")).toEqual({ ok: false, kind: "no-url" });
+  });
+
+  test("v0.5.7: the collector's reads wait past the hooks' 1 s budget; hook reads do not", async () => {
+    // live 2026-11-22: GET /api/queue/list took 1.4-3 s (4.9-7.7 MB), so the
+    // collector failed "queue list: daemon timeout" at the shared 1 s budget
+    expect(COLLECTOR_TIMEOUT_MS).toBeGreaterThan(DAEMON_TIMEOUT_MS);
+    const d = await startFakeDaemon({ delayMs: 1500, queueListDone: [doc(ID_A)], queueListAll: [doc(ID_A)], transitions: DONE_TRS });
+    try {
+      const [byState, all, tr, hook] = await Promise.all([
+        fetchQueueListByState(d.url, "done"),
+        fetchQueueListAll(d.url),
+        fetchTransitions(d.url, ID_A),
+        fetchOutbox(d.url, "architect@rig"),
+      ]);
+      expect(byState.ok && byState.docs.length).toBe(1);
+      expect(all.ok && all.docs.length).toBe(1);
+      expect(tr.ok && tr.transitions.length).toBe(3);
+      expect(hook).toEqual({ ok: false, kind: "timeout" });
+    } finally { d.close(); }
   });
 
   test("fetchTransitions answers the plain array; an object is parse", async () => {

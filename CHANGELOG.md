@@ -1,5 +1,14 @@
 # Changelog
 
+## v0.5.7 (2026-11-22)
+
+One fix found when the daily outcome collector started running on a schedule.
+
+- **The outcome collector waits for big queue lists.** Its reads from the OpenRig daemon
+  shared the hooks' 1-second limit, and on the pilots a full queue list now takes 1.4 to
+  3 seconds (5 to 8 MB), so the collector failed with "queue list: daemon timeout". Its
+  reads now get 30 seconds; every hook keeps the 1-second limit.
+
 ## v0.5.6 (2026-11-17)
 
 Three delivery fixes found in the first 48 hours of pilot data on v0.5.5.

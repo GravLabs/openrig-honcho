@@ -2,7 +2,7 @@
 // ASYNC WRITER PATH only - the recall hook never calls it (decision 4). The
 // URL arrives from the caller (Config.daemonUrl); no URL means no lookup.
 // Never throws: every failure becomes a kind, and callers may log only the
-// class. One 1 s budget per call (decision 2's "within 1 s").
+// class. One 1 s budget per call (decision 2), except the outcome collector's reads (COLLECTOR_TIMEOUT_MS).
 //
 // Real shapes (read-only probes against the installed 0.7.2, 2026-11-01):
 // - GET {url}/api/queue/outbox/list?senderSession=<s>&limit=<n> answers a
@@ -16,6 +16,12 @@
 
 /** ADR-0012 decision 2: the one lookup budget. */
 export const DAEMON_TIMEOUT_MS = 1000;
+
+/** v0.5.7: the outcome collector's budget per read. The collector is an
+ * on-demand command, never a hook, and its list reads are legitimately large:
+ * live 2026-11-22, GET /api/queue/list took 1.4-3 s (4.9-7.7 MB), so the
+ * hooks' 1 s budget failed every run. Hooks keep DAEMON_TIMEOUT_MS. */
+export const COLLECTOR_TIMEOUT_MS = 30_000;
 
 export interface DaemonFailure {
   ok: false;
@@ -52,9 +58,10 @@ export interface OutboxEntry {
 export async function getJson(
   url: string,
   maxBytes?: number,
+  timeoutMs: number = DAEMON_TIMEOUT_MS,
 ): Promise<{ ok: true; json: unknown } | DaemonFailure> {
   const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), DAEMON_TIMEOUT_MS);
+  const timer = setTimeout(() => ctrl.abort(), timeoutMs);
   try {
     const res = await fetch(url, { signal: ctrl.signal });
     if (!res.ok) return { ok: false, kind: "http", status: res.status };
@@ -403,6 +410,8 @@ export async function fetchQueueListByState(
   if (daemonUrl === undefined || daemonUrl === "") return { ok: false, kind: "no-url" };
   const r = await getJson(
     `${daemonUrl}/api/queue/list?state=${encodeURIComponent(state)}&limit=${limit}`,
+    undefined,
+    COLLECTOR_TIMEOUT_MS,
   );
   if (!r.ok) return r;
   if (!Array.isArray(r.json)) return { ok: false, kind: "parse" };
@@ -420,7 +429,7 @@ export async function fetchQueueListAll(
   limit = 5000,
 ): Promise<{ ok: true; docs: Record<string, unknown>[] } | DaemonFailure> {
   if (daemonUrl === undefined || daemonUrl === "") return { ok: false, kind: "no-url" };
-  const r = await getJson(`${daemonUrl}/api/queue/list?limit=${limit}`);
+  const r = await getJson(`${daemonUrl}/api/queue/list?limit=${limit}`, undefined, COLLECTOR_TIMEOUT_MS);
   if (!r.ok) return r;
   if (!Array.isArray(r.json)) return { ok: false, kind: "parse" };
   const docs = r.json.filter(
@@ -436,7 +445,7 @@ export async function fetchTransitions(
   qitemId: string,
 ): Promise<{ ok: true; transitions: Record<string, unknown>[] } | DaemonFailure> {
   if (daemonUrl === undefined || daemonUrl === "") return { ok: false, kind: "no-url" };
-  const r = await getJson(`${daemonUrl}/api/queue/${encodeURIComponent(qitemId)}/transitions`);
+  const r = await getJson(`${daemonUrl}/api/queue/${encodeURIComponent(qitemId)}/transitions`, undefined, COLLECTOR_TIMEOUT_MS);
   if (!r.ok) return r;
   if (!Array.isArray(r.json)) return { ok: false, kind: "parse" };
   const transitions = r.json.filter(
