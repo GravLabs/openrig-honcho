@@ -11,6 +11,7 @@
 
 import type { Config } from "./env.ts";
 import { fetchCurrentItem } from "./daemon.ts";
+import { closedRows } from "./closed.ts";
 import type { Conclusion, HonchoClient, SearchMessage } from "./honcho.ts";
 import { ageLabel, forScopeLabel, x3 } from "./inject.ts";
 import { logEvent } from "./log.ts";
@@ -25,12 +26,14 @@ import {
   newDecisionId,
   parseEntry,
   supersededMap,
+  endsToCheck,
   supersedeMarker,
   ownerChecked,
   ownerMark,
   toEntries,
   validId,
   validScope,
+  validQitem,
   type LedgerEntry,
 } from "./ledger.ts";
 import { collectStatus } from "./status.ts";
@@ -157,7 +160,7 @@ function toolList(deps: McpDeps): unknown[] {
     tools.push({
       name: "remember",
       description:
-        "Record an explicit decision, owner approval or status report (leader only) into shared memory. Optional: reason, scope (rig | mission | a qitem id; default mission), supersedes (an in-force d-id this replaces), kind (decision default | approval | status; the newest status per scope and mission is the one in force). kind approval, and superseding an approval, are accepted only on a turn the owner started. The reply names the new decision id.",
+        "Record an explicit decision, owner approval or status report (leader only) into shared memory. Optional: reason, scope (rig | mission | a qitem id; default mission), supersedes (an in-force d-id this replaces), kind (decision default | approval | status; the newest status per scope and mission is the one in force). kind approval, and superseding an approval, are accepted only on a turn the owner started. For a one-time approval, pass ends_with (the qitem id of the row doing that work): it is used once that row closes. The reply names the new decision id.",
       inputSchema: {
         type: "object",
         properties: {
@@ -166,6 +169,10 @@ function toolList(deps: McpDeps): unknown[] {
           scope: { type: "string", description: "rig, mission (default), or a qitem id" },
           supersedes: { type: "string", description: "d-xxxxxxxx of an entry in the current ledger" },
           kind: { type: "string", enum: ["decision", "approval", "status"] },
+          ends_with: {
+            type: "string",
+            description: "approvals only: the qitem id this approval is for; once that row is closed the approval is used and leaves in-force views",
+          },
         },
         required: ["fact"],
       },
@@ -246,7 +253,11 @@ async function callAsk(deps: McpDeps, args: Record<string, unknown>): Promise<To
     try {
       // T24 F3 moved the cap out of fetchMissionDecisions; ask keeps its
       // exact newest-10 view.
-      const decisions = (await fetchMissionDecisions(client, config.leaderPeer, missionId)).slice(0, 10);
+      const decisions = (
+        await fetchMissionDecisions(client, config.leaderPeer, missionId, undefined, (ids) =>
+          closedRows(config.stateDir, config.workspace, ids, config.daemonUrl),
+        )
+      ).slice(0, 10);
       if (decisions.length > 0) {
         const now = (deps.now ?? (() => new Date().toISOString()))();
         const lines: string[] = ["Recorded decisions in this mission:"];
@@ -343,6 +354,9 @@ export async function searchSnapshot(
   query: string,
   about: string | undefined,
   wallMs: number,
+  /** v0.5.8: false on the recall hook's hot path - closed rows come from the
+   * local file only, no daemon lookup (search and ask do look up). */
+  closedLookup = true,
 ): Promise<{
   memories: SearchMemory[];
   messages: SearchMessage[];
@@ -410,7 +424,14 @@ export async function searchSnapshot(
       (async () => {
         try {
           const pair = await fetchLedgerPair(client, leaderPeer);
-          superseded = supersededMap(toEntries(pair.items));
+          const es = toEntries(pair.items);
+          // v0.5.8: approvals whose row closed are marked "used"
+          const ends = endsToCheck(es);
+          const closed =
+            ends.length > 0
+              ? await closedRows(config.stateDir, config.workspace, ends, config.daemonUrl, { lookup: closedLookup })
+              : undefined;
+          superseded = supersededMap(es, closed);
         } catch {
           // no marks
         }
@@ -547,7 +568,7 @@ const optStr = (v: unknown): string | undefined => (typeof v === "string" && v.t
 
 /** remember's optional fields; an invalid one is a usage error before any write. */
 function parseLedgerArgs(args: Record<string, unknown>):
-  | { ok: true; reason?: string; scope: string; supersedes?: string; kind: "decision" | "approval" | "status" }
+  | { ok: true; reason?: string; scope: string; supersedes?: string; kind: "decision" | "approval" | "status"; endsWith?: string }
   | { ok: false; usage: string } {
   const reason = optStr(args.reason);
   if (args.reason !== undefined && reason === undefined)
@@ -564,12 +585,20 @@ function parseLedgerArgs(args: Record<string, unknown>):
   const kindWord = optStr(args.kind);
   if (kindWord !== undefined && kindWord !== "decision" && kindWord !== "approval" && kindWord !== "status")
     return { ok: false, usage: "remember: kind must be decision, approval or status" };
+  // v0.5.8: an approval may name the queue row it is for; it is used once
+  // that row is closed. Approvals only - a decision or status never ends so.
+  const endsWith = optStr(args.ends_with);
+  if (args.ends_with !== undefined && (endsWith === undefined || !validQitem(endsWith)))
+    return { ok: false, usage: "remember: ends_with must be a queue item id (qitem-<14 digits>-<hex>)" };
+  if (endsWith !== undefined && kindWord !== "approval")
+    return { ok: false, usage: "remember: ends_with is for kind approval only" };
   return {
     ok: true,
     ...(reason !== undefined ? { reason } : {}),
     scope,
     ...(supersedes !== undefined ? { supersedes } : {}),
     kind: kindWord ?? "decision",
+    ...(endsWith !== undefined ? { endsWith } : {}),
   };
 }
 
@@ -595,7 +624,7 @@ async function callRemember(deps: McpDeps, args: Record<string, unknown>): Promi
   if (config === null || client === null) return textResult("memory unavailable: disabled", true);
   if (!isLeaderSeat(config)) return textResult("remember is leader-only", true);
   if (typeof args.fact !== "string" || args.fact.trim() === "") {
-    return textResult("usage: remember {fact: string, reason?, scope?, supersedes?, kind?}", true);
+    return textResult("usage: remember {fact: string, reason?, scope?, supersedes?, kind?, ends_with?}", true);
   }
   const led = parseLedgerArgs(args);
   if (!led.ok) return textResult(led.usage, true);
@@ -627,6 +656,7 @@ async function callRemember(deps: McpDeps, args: Record<string, unknown>): Promi
       scope: led.scope,
       ...(led.supersedes !== undefined ? { supersedes: led.supersedes } : {}),
       ...(led.kind === "approval" && turn.ok ? { owner: turn.promptHash } : {}),
+      ...(led.endsWith !== undefined ? { ends: led.endsWith } : {}),
       fact: content0,
       ...(reason !== undefined ? { reason } : {}),
     });
@@ -665,6 +695,7 @@ async function callRemember(deps: McpDeps, args: Record<string, unknown>): Promi
             decision_kind: led.kind,
             decision_scope: led.scope,
             ...(led.supersedes !== undefined ? { decision_supersedes: led.supersedes } : {}),
+            ...(led.endsWith !== undefined ? { decision_ends: led.endsWith } : {}),
             ...(reason !== undefined ? { decision_reason: reason } : {}),
           },
         },

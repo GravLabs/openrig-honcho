@@ -1,5 +1,16 @@
 # Changelog
 
+## v0.5.8 (2026-11-22)
+
+- **Approvals that end with their work.** `remember` with `kind: approval` takes an
+  optional `ends_with`, the queue row the approval is for. Once that row is closed, the
+  approval is used: it leaves the digest and `ask`, and `search` and the claim pointer
+  mark it `(used: qitem-... closed)`. No retire and no owner turn is needed, and nothing
+  is written to the ledger. Approvals without `ends_with` stand until retired, as before,
+  and retiring or replacing an owner approval still needs the owner's turn. The plugin
+  remembers rows it has seen closed in a local file; if the daemon cannot be reached the
+  approval stays in force.
+
 ## v0.5.7 (2026-11-22)
 
 One fix found when the daily outcome collector started running on a schedule.

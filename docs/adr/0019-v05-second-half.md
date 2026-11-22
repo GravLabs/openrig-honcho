@@ -141,6 +141,35 @@ shipped:
   on both pilots predated v0.5.1). Installs that change server code ask for a
   keep-conversation restart of each seat, and `status` now reports "running vX code but
   vY is installed".
+- **Approvals that end with their row (v0.5.8, owner 2026-11-22: "yes, build it as
+  v0.5.8").** A one-time approval ("publish 0.13.0") stayed in force after the work was
+  done, and only the owner could end it: on the busier pilot 28 approvals were in force, none
+  tied to a row. `remember` with `kind: approval` now takes an optional `ends_with` (a
+  qitem id), written on the owner's turn into the stamped header (` · ends qitem-…`).
+  Once that row's work is finished, the approval is *used*: it leaves the digest, `ask`,
+  the stale pick and the stale check, and `search` and the pointer mark it
+  `(used: qitem-… closed)`. Finished means closed (daemon state `done`) for any reason
+  but a hand-off; a hand-off is followed to the row it names, up to five rows, because
+  OpenRig work moves by hand-off (review R21 F-Q4). Nothing is written to the ledger and
+  no model decides: it is a read-time rule, like status replacement. Answers are kept
+  with their time in a local 0600 file (`closed/<ws>.json`) and asked again once old -
+  open rows after 10 minutes, finished ones after 6 hours, so a reopened row brings its
+  approval back (R21 F-Q1). Each read asks at most five rows, oldest answer first, so
+  open rows cannot starve the rest (F-Q2), inside one 600 ms wall (F-Q3); the recall
+  hook's pointer and the offline stale check read the file only. Any failure keeps the
+  last answer, and no answer means the approval stays in force, the view before v0.5.8.
+  The stale check skips used approvals entirely (no class, no comparison). Stated
+  residuals (R21 recheck): a lookup slower than the 600 ms wall is discarded, so on a
+  daemon that answers single rows that slowly an approval simply stays in force; and a
+  close remembered wrongly hides its approval from the digest, `ask` and the stale pick
+  for up to 6 hours, until the next recheck (the pointer and the stale check, which read
+  the file only, correct after some other read asks again). An answer dated more than a
+  minute ahead is asked again at once. Not changed: retiring or replacing an owner approval still needs
+  the owner's turn, and approvals without `ends_with` stand until retired. No time
+  limit: it would end approvals that are meant to stand. Residual, stated: any seat
+  that can close the named row ends the approval early - that only removes a
+  permission, never grants one. Older plugin versions read an `ends` header as plain
+  text and drop the entry, so a rig upgrades all its seats together.
 
 ## Not doing
 

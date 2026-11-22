@@ -38,7 +38,7 @@ export type LedgerKind = "decision" | "approval" | "status";
 /** An entry as parsed/stored; retire entries carry their target, nothing else. */
 export type ParsedEntry =
   | { kind: "plain"; fact: string }
-  | { kind: LedgerKind; id: string; scope: string; supersedes?: string; owner?: string; fact: string; reason?: string }
+  | { kind: LedgerKind; id: string; scope: string; supersedes?: string; owner?: string; ends?: string; fact: string; reason?: string }
   | { kind: "retire"; target: string };
 
 /** A ledger entry with its derived storage context (mission, time). */
@@ -50,6 +50,9 @@ export type LedgerEntry = {
   /** v0.5.5: an approval written on an owner turn carries the turn's prompt
    * hash; absent = not checked against the owner (every earlier approval). */
   owner?: string;
+  /** v0.5.8: an approval that ends when this queue row closes (a qitem id),
+   * written on the owner's turn like the approval itself. */
+  ends?: string;
   /** the mission parsed from the session the conclusion lives in ("unknown" if untagged) */
   mission: string;
   fact: string;
@@ -62,6 +65,9 @@ export type LedgerEntry = {
 export const ID_RE = /^d-[0-9a-f]{8}$/;
 /** the queue-item scope grammar (fixed point 5) */
 const QITEM_RE = /^qitem-\d{14}-[0-9a-f]+$/;
+
+/** v0.5.8: a queue item id (the scope grammar's item form). */
+export const validQitem = (s: string): boolean => QITEM_RE.test(s);
 
 export const validScope = (s: string): boolean =>
   s === "rig" || s === "mission" || QITEM_RE.test(s);
@@ -87,8 +93,10 @@ export const derivedId = (conclusionId: string): string => `d-${sha8(conclusionI
 // so parse and format round-trip what the plugin itself wrote. Anything else
 // stays plain. v0.5.5: " · owner <8 hex>" stamps an approval accepted on an
 // owner turn (ADR-0019 amended 2026-11-14); older headers parse unchanged.
+// v0.5.8: " · ends qitem-…" (last) names the queue row an approval is for;
+// once that row is closed the approval is used and leaves in-force views.
 const HEADER_RE =
-  /^\[(decision|approval|status|retire) (d-[0-9a-f]{8})(?: · scope ([^\s·\]]+))?(?: · supersedes (d-[0-9a-f]{8}))?(?: · owner ([0-9a-f]{8}))?\][ \t]*([\s\S]*)$/;
+  /^\[(decision|approval|status|retire) (d-[0-9a-f]{8})(?: · scope ([^\s·\]]+))?(?: · supersedes (d-[0-9a-f]{8}))?(?: · owner ([0-9a-f]{8}))?(?: · ends (qitem-\d{14}-[0-9a-f]+))?\][ \t]*([\s\S]*)$/;
 
 /** " <fact>" plus " (reason: <r>)" - the body that follows the header. */
 function formatBody(fact: string, reason?: string): string {
@@ -102,6 +110,7 @@ export function formatEntry(e: {
   scope: string;
   supersedes?: string;
   owner?: string;
+  ends?: string;
   fact: string;
   reason?: string;
 }): string {
@@ -109,6 +118,7 @@ export function formatEntry(e: {
     `[${e.kind} ${e.id} · scope ${e.scope}` +
     (e.supersedes !== undefined ? ` · supersedes ${e.supersedes}` : "") +
     (e.owner !== undefined ? ` · owner ${e.owner}` : "") +
+    (e.ends !== undefined ? ` · ends ${e.ends}` : "") +
     `] ${formatBody(e.fact, e.reason)}`
   );
 }
@@ -127,7 +137,7 @@ export const formatRetire = (target: string, reason: string): string =>
 export function parseEntry(content: string): ParsedEntry {
   const m = HEADER_RE.exec(content);
   if (m === null) return { kind: "plain", fact: content };
-  const [, kindWord, id, scope, supersedes, owner, rest] = m as unknown as (string | undefined)[];
+  const [, kindWord, id, scope, supersedes, owner, ends, rest] = m as unknown as (string | undefined)[];
   const body = rest ?? "";
   if (kindWord === "retire") return { kind: "retire", target: id as string };
   let fact = body;
@@ -146,6 +156,7 @@ export function parseEntry(content: string): ParsedEntry {
     scope: scope ?? "mission",
     ...(supersedes !== undefined ? { supersedes } : {}),
     ...(owner !== undefined ? { owner } : {}),
+    ...(ends !== undefined ? { ends } : {}),
     fact,
     ...(reason !== undefined ? { reason } : {}),
   };
@@ -182,6 +193,7 @@ export function toEntries(
         scope: p.scope,
         ...(p.supersedes !== undefined ? { supersedes: p.supersedes } : {}),
         ...(p.owner !== undefined ? { owner: p.owner } : {}),
+        ...(p.ends !== undefined ? { ends: p.ends } : {}),
         mission,
         fact: p.fact,
         ...(p.reason !== undefined ? { reason: p.reason } : {}),
@@ -219,7 +231,7 @@ function statusWinners(entries: LedgerEntry[]): Map<string, LedgerEntry> {
  * and (V3) for status entries only the newest per (scope, mission).
  * Input order (newest first) is preserved.
  */
-export function currentLedger(entries: LedgerEntry[]): LedgerEntry[] {
+export function currentLedger(entries: LedgerEntry[], closed?: ReadonlySet<string>): LedgerEntry[] {
   const replaced = new Set<string>();
   for (const e of entries) {
     if (e.kind === "retire" && e.target !== undefined) replaced.add(e.target);
@@ -230,8 +242,22 @@ export function currentLedger(entries: LedgerEntry[]): LedgerEntry[] {
     (e) =>
       e.kind !== "retire" &&
       !replaced.has(e.id) &&
+      !usedApproval(e, closed) &&
       (e.kind !== "status" || winners.get(statusKey(e))?.id === e.id),
   );
+}
+
+/** v0.5.8: an approval whose `ends` row is known closed is used. Without
+ * closed-row knowledge nothing is used (today's view, never a guess). */
+export const usedApproval = (e: { kind: string; ends?: string }, closed?: ReadonlySet<string>): boolean =>
+  e.kind === "approval" && e.ends !== undefined && closed !== undefined && closed.has(e.ends);
+
+/** v0.5.8: the rows named by `ends` on approvals no explicit end replaced -
+ * the only ids worth a closed-row lookup. */
+export function endsToCheck(entries: LedgerEntry[]): string[] {
+  const out = new Set<string>();
+  for (const e of currentLedger(entries)) if (e.kind === "approval" && e.ends !== undefined) out.add(e.ends);
+  return [...out];
 }
 
 /**
@@ -239,7 +265,7 @@ export function currentLedger(entries: LedgerEntry[]): LedgerEntry[] {
  * newest-first list and keep the FIRST replacer seen. Entries replaced by a
  * retire say so with the retire's own conclusion id (never a fake d-).
  */
-export function supersededMap(entries: LedgerEntry[]): Map<string, string> {
+export function supersededMap(entries: LedgerEntry[], closed?: ReadonlySet<string>): Map<string, string> {
   const out = new Map<string, string>();
   for (const e of entries) {
     if (e.kind === "retire" && e.target !== undefined && !out.has(e.target)) out.set(e.target, "retired");
@@ -253,6 +279,9 @@ export function supersededMap(entries: LedgerEntry[]): Map<string, string> {
     const w = winners.get(statusKey(e));
     if (w !== undefined && w.id !== e.id && !out.has(e.id)) out.set(e.id, w.id);
   }
+  // v0.5.8: an approval whose row closed is used; an explicit end wins.
+  for (const e of entries)
+    if (usedApproval(e, closed) && !out.has(e.id)) out.set(e.id, `used:${e.ends as string}`);
   return out;
 }
 
@@ -262,8 +291,8 @@ export function supersededMap(entries: LedgerEntry[]): Map<string, string> {
  * item-scoped both show in their writing mission (fixed point 5). Newest
  * first, as fetched.
  */
-export function inForceFor(entries: LedgerEntry[], mission: string): LedgerEntry[] {
-  return currentLedger(entries).filter((e) => e.scope === "rig" || e.mission === mission);
+export function inForceFor(entries: LedgerEntry[], mission: string, closed?: ReadonlySet<string>): LedgerEntry[] {
+  return currentLedger(entries, closed).filter((e) => e.scope === "rig" || e.mission === mission);
 }
 
 /** The body an in-force view shows: the fact, plus its reason if any. */
@@ -278,7 +307,9 @@ export function supersedeMarker(content: string, superseded: Map<string, string>
   if (p.kind === "plain" || p.kind === "retire") return "";
   const by = superseded.get(p.id);
   if (by === undefined) return "";
-  return by === "retired" ? " (retired)" : ` (superseded by ${by})`;
+  if (by === "retired") return " (retired)";
+  if (by.startsWith("used:")) return ` (used: ${by.slice(5)} closed)`;
+  return ` (superseded by ${by})`;
 }
 
 /** v0.5.5 (ADR-0019 amended 2026-11-14): an approval counts as the owner's

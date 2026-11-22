@@ -176,7 +176,7 @@ async function pointerSearchExit(
       apiKey: c.apiKey,
       timeoutMs: c.timeoutMs,
     });
-    const snap = await searchSnapshot(pClient, c, pQuery, undefined, rem);
+    const snap = await searchSnapshot(pClient, c, pQuery, undefined, rem, false);
     if (snap.unfinished === snap.total) {
       logP({ ...(snap.wallHit ? { error_class: "timeout" } : {}) });
       process.exit(0);

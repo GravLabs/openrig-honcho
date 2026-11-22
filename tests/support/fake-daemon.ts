@@ -58,7 +58,12 @@ export async function startFakeDaemon(opts: FakeDaemonOpts = {}): Promise<FakeDa
         return Response.json(typeof t === "function" ? t(decodeURIComponent(trMatch[1])) : t);
       }
       if (path.startsWith("/api/queue/") && path.length > "/api/queue/".length) {
-        return Response.json(opts.item ?? {}, { status: opts.itemStatus ?? 200 });
+        const it = opts.item ?? {};
+        if (typeof it === "function") {
+          const v = it(decodeURIComponent(path.slice("/api/queue/".length)));
+          return v === null ? Response.json({ detail: "not found" }, { status: 404 }) : Response.json(v);
+        }
+        return Response.json(it, { status: opts.itemStatus ?? 200 });
       }
       return Response.json({ detail: "not found" }, { status: 404 });
     },

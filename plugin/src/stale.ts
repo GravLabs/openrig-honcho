@@ -14,8 +14,9 @@
 
 import { join } from "node:path";
 import { writeJsonAtomic } from "./lock.ts";
+import { readClosed } from "./closed.ts";
 import { readFileSync, existsSync } from "node:fs";
-import { currentLedger, toEntries, type LedgerEntry } from "./ledger.ts";
+import { currentLedger, toEntries, usedApproval, type LedgerEntry } from "./ledger.ts";
 import type { Conclusion } from "./honcho.ts";
 import type { Config } from "./env.ts";
 
@@ -215,7 +216,10 @@ export async function runStaleCheck(
     .filter((e) => e.kind !== "retire")
     .slice()
     .sort((a, b) => (a.at < b.at ? -1 : a.at > b.at ? 1 : 0));
-  const inForce = currentLedger(all);
+  // v0.5.8 (R21 N-Q2): a used approval is not in force - no model call for it.
+  // The file only: this offline job never asks the daemon.
+  const closed = readClosed(config.stateDir, config.workspace);
+  const inForce = currentLedger(all, closed);
   const state = readStaleState(config.stateDir, config.workspace) ?? EMPTY();
   let classified = 0;
   let checked = 0;
@@ -224,6 +228,8 @@ export async function runStaleCheck(
 
   for (const e of entries) {
     if (state.classes[e.id] !== undefined) continue;
+    // R21 F-R1: a used approval is never a candidate, so it needs no class
+    if (usedApproval(e, closed)) continue;
     const t0 = Date.now();
     const j = await chatJson(target, fillClassify(fmtEntry(e)), 50);
     ms += Date.now() - t0;
@@ -235,6 +241,8 @@ export async function runStaleCheck(
   const after = state.lastCheckedAt;
   for (const e of entries) {
     if (after !== null && !(e.at > after)) continue;
+    // R21 F-R1: a used approval is no longer in force, so it ends nothing
+    if (usedApproval(e, closed)) continue;
     const cands = inForce.filter(
       (o) => o.id !== e.id && o.at < e.at && (state.classes[o.id] ?? "state") === "state",
     );

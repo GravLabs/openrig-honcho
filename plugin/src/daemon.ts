@@ -475,3 +475,24 @@ export async function fetchCurrentItem(
   }
   return null;
 }
+
+/** v0.5.8: one row's queue state ("done" once closed) and, for a closed row,
+ * how it closed - a hand-off names the row the work moved to. The hooks' 1 s
+ * budget and the pointer row's size cap; the body is never read. */
+export async function fetchQueueState(
+  daemonUrl: string | undefined,
+  qitemId: string,
+): Promise<{ ok: true; state: string; closureReason?: string; closureTarget?: string } | DaemonFailure> {
+  if (daemonUrl === undefined || daemonUrl === "") return { ok: false, kind: "no-url" };
+  const r = await getJson(`${daemonUrl}/api/queue/${encodeURIComponent(qitemId)}`, POINTER_ROW_MAX_BYTES);
+  if (!r.ok) return r;
+  if (typeof r.json !== "object" || r.json === null) return { ok: false, kind: "parse" };
+  const d = r.json as { state?: unknown; closureReason?: unknown; closureTarget?: unknown };
+  if (typeof d.state !== "string") return { ok: false, kind: "parse" };
+  return {
+    ok: true,
+    state: d.state,
+    ...(typeof d.closureReason === "string" ? { closureReason: d.closureReason } : {}),
+    ...(typeof d.closureTarget === "string" ? { closureTarget: d.closureTarget } : {}),
+  };
+}

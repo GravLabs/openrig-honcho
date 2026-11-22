@@ -143,6 +143,26 @@ const target = (url: string, key = "test-key-never-shown"): ModelTarget => ({ //
 });
 
 describe("V4 stale-check: runStaleCheck against a fake model", () => {
+  test("v0.5.8 R21 F-R1: a used approval gets no class and no comparison (no model call)", async () => {
+    const dir = makeTempDir("stale-used-");
+    const model = await startFakeModel(scriptReply);
+    const Q = "qitem-20261122100000-aaaa0001";
+    const U = "d-0e0e0e01";
+    try {
+      const { mkdirSync, writeFileSync } = await import("node:fs");
+      const { closedPath } = await import("../../plugin/src/closed.ts");
+      mkdirSync(join(dir, "closed"), { recursive: true });
+      writeFileSync(closedPath(dir, WS), JSON.stringify({ version: 2, rows: { [Q]: { done: true, at: new Date().toISOString() } } }));
+      const used = concl(U, `[approval ${U} · scope mission · owner 0a1b2c3d · ends ${Q}] publish 0.13.0`, 3 * HOUR);
+      const r = await runStaleCheck(mkConfig(dir), target(model.url), [...baseItems(), used]);
+      expect(r.error).toBeUndefined();
+      expect(r.classified).toBe(4); // R1, O1, O2, N1 - never U
+      expect(model.prompts().some((p) => p.includes(U))).toBe(false);
+    } finally {
+      model.stop();
+    }
+  });
+
   test("(a) a rule-classified entry is never proposed, wire shape pinned", async () => {
     const dir = makeTempDir("stale-a-");
     const model = await startFakeModel(scriptReply);

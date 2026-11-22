@@ -314,3 +314,54 @@ describe("v0.5.5 review R19 fixes", () => {
     expect(readTurn(dir2, WS, SELF)).toBeNull();
   });
 });
+
+// v0.5.8 (ADR-0019 amended 2026-11-22): an approval may end with its row.
+describe("v0.5.8 approvals that end with their queue row", () => {
+  const Q = "qitem-20261122100000-aaaa0001";
+  test("ends_with is written on an owner turn, refused on bad shapes and on non-approvals", async () => {
+    const fake = await startFakeHoncho();
+    try {
+      const dir = makeTempDir("owner-appr-");
+      const env = baseEnv(dir, fake);
+      await prompt(env, "yes, publish 0.13.0");
+      const res = await mcp(env, [
+        { name: "remember", arguments: { fact: "owner approved publishing 0.13.0", kind: "approval", ends_with: Q } },
+        { name: "remember", arguments: { fact: "x", kind: "approval", ends_with: "qitem-nope" } },
+        { name: "remember", arguments: { fact: "y", kind: "decision", ends_with: Q } },
+        { name: "remember", arguments: { fact: "z", ends_with: Q } },
+      ]);
+      expect(res[0].isError).toBe(false);
+      expect(res[1]).toEqual({ isError: true, text: "remember: ends_with must be a queue item id (qitem-<14 digits>-<hex>)" });
+      expect(res[2]).toEqual({ isError: true, text: "remember: ends_with is for kind approval only" });
+      expect(res[3]).toEqual({ isError: true, text: "remember: ends_with is for kind approval only" });
+      const concl = (fake.state.conclusions.get(WS) ?? []).map((c) => String((c as Record<string, unknown>).content));
+      const entries = concl.map(parseEntry).filter((p) => p.kind === "approval");
+      expect(entries.length).toBe(1);
+      const e = entries[0]!;
+      expect(e.kind === "approval" && e.ends).toBe(Q);
+      expect(e.kind === "approval" && ownerChecked(e)).toBe(true);
+    } finally {
+      await fake.stop();
+    }
+  }, 60_000);
+
+  test("search marks the approval used once the daemon says its row is done", async () => {
+    const fake = await startFakeHoncho();
+    const { startFakeDaemon } = await import("../support/fake-daemon.ts");
+    const d = await startFakeDaemon({ item: { qitemId: Q, state: "done" } });
+    try {
+      const dir = makeTempDir("owner-appr-");
+      const env = baseEnv(dir, fake, { OPENRIG_URL: d.url });
+      await prompt(env, "yes, publish 0.13.0 now");
+      const [rem, s] = await mcp(env, [
+        { name: "remember", arguments: { fact: "owner approved publishing 0.13.0 tonight", kind: "approval", ends_with: Q } },
+        { name: "search", arguments: { query: "publishing 0.13.0" } },
+      ]);
+      expect(rem.isError).toBe(false);
+      expect(s.text).toContain(`(used: ${Q} closed)`);
+    } finally {
+      d.close();
+      await fake.stop();
+    }
+  }, 60_000);
+});

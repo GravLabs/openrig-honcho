@@ -18,7 +18,8 @@ import type { Config } from "./env.ts";
 import { type Conclusion, type HonchoClient } from "./honcho.ts";
 import { readSeatState, resolveSession, normalizeMission, readRigMission, seatStatePath, scopeFor } from "./missions.ts";
 import { ensureSession, freeN } from "./writer.ts";
-import { currentLedger, entryBody, inForceFor, LEDGER_PEER, ownerChecked, toEntries } from "./ledger.ts";
+import { currentLedger, endsToCheck, entryBody, inForceFor, LEDGER_PEER, ownerChecked, toEntries } from "./ledger.ts";
+import { closedRows } from "./closed.ts";
 import { markStaleShown, pickStaleForDigest, readStaleState, staleStateExists, writeStaleState, type StaleProposal, type StaleState } from "./stale.ts";
 import { maybeLessonSuggestion, recordLessonSuggestion } from "./lesson.ts";
 import type { Harness } from "./harness.ts";
@@ -164,6 +165,9 @@ export async function fetchMissionDecisions(
   leaderPeer: string,
   mission: string,
   onCap?: (total: number) => void,
+  /** v0.5.8: which of these `ends` rows are closed (approvals that ended with
+   * their row leave the view); absent = no approval is treated as used. */
+  closedFor?: (ids: string[]) => Promise<ReadonlySet<string>>,
 ): Promise<InjectionDecision[]> {
   const pair = await fetchLedgerPair(client, leaderPeer);
   if (pair.capped) onCap?.(pair.total);
@@ -177,7 +181,10 @@ export async function fetchMissionDecisions(
       typeof c.content === "string" &&
       c.content.trim() !== "",
   );
-  return inForceFor(toEntries(items), mission).map((e) => ({
+  const entries = toEntries(items);
+  const ends = endsToCheck(entries);
+  const closed = closedFor !== undefined && ends.length > 0 ? await closedFor(ends) : undefined;
+  return inForceFor(entries, mission, closed).map((e) => ({
     content: entryBody(e),
     at: e.at,
     id: e.id,
@@ -331,6 +338,7 @@ async function build(
             (t) => {
               ledgerCapped = t;
             },
+            (ids) => closedRows(config.stateDir, config.workspace, ids, config.daemonUrl),
           ));
 
   // T19b (ADR-0014 decision 1): the continuity digest replaces the block's
@@ -547,7 +555,13 @@ async function buildContinuity(a: {
     if (st !== null && st.proposals.some((p) => p.shown < 3)) {
       const cur = await part(deadline, config.timeoutMs, async () => {
         const p = await fetchLedgerPair(deps.client, config.leaderPeer as string);
-        return p.capped ? null : currentLedger(toEntries(p.items));
+        if (p.capped) return null;
+        const es = toEntries(p.items);
+        const ends = endsToCheck(es);
+        // v0.5.8: a proposal about a used approval is dropped like a retired one
+        const closed =
+          ends.length > 0 ? await closedRows(config.stateDir, config.workspace, ends, config.daemonUrl) : undefined;
+        return currentLedger(es, closed);
       });
       if (cur !== null && cur !== undefined) {
         // v0.5.6: pick now, COUNT after render - only what the seat was shown
