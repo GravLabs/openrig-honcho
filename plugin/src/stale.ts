@@ -92,7 +92,13 @@ export interface StaleState {
   /** the at of the last entry the PROMPT pass processed (inclusive) */
   lastCheckedAt: string | null;
   proposals: StaleProposal[];
+  /** v0.5.9 (ADR-0019 amended 2026-11-23): old ids the lead chose to keep
+   * (stale_review keep): never proposed again. Absent in older files. */
+  kept?: string[];
 }
+
+/** At most this many kept ids are stored (oldest dropped first). */
+export const KEPT_MAX = 1000;
 
 /** <state-dir>/stale/<workspace>.json */
 export function staleStatePath(stateDir: string, workspace: string): string {
@@ -126,11 +132,15 @@ export function readStaleState(stateDir: string, workspace: string): StaleState 
     }
     const classes: Record<string, StaleClass> = {};
     for (const [k, c] of Object.entries(v.classes)) if (c === "rule" || c === "state") classes[k] = c;
+    const kept = Array.isArray(v.kept)
+      ? [...new Set(v.kept.filter((k): k is string => typeof k === "string" && /^d-[0-9a-f]{8}$/.test(k)))].slice(-KEPT_MAX)
+      : [];
     return {
       version: 1,
       classes,
       lastCheckedAt: typeof v.lastCheckedAt === "string" ? v.lastCheckedAt : null,
       proposals,
+      ...(kept.length > 0 ? { kept } : {}),
     };
   } catch {
     return null;
@@ -254,7 +264,8 @@ export async function runStaleCheck(
       const stale = j !== null && typeof j === "object" ? (j as Record<string, unknown>).stale : undefined;
       if (Array.isArray(stale)) {
         const candIds = new Set(cands.map((o) => o.id));
-        const have = new Set(state.proposals.map((p) => p.oldId));
+        // v0.5.9: an id the lead kept is never proposed again
+        const have = new Set([...state.proposals.map((p) => p.oldId), ...(state.kept ?? [])]);
         for (const p of stale) {
           if (p === null || typeof p !== "object") continue;
           const rec = p as Record<string, unknown>;
@@ -290,7 +301,8 @@ export function pickStaleForDigest(
   max: number,
 ): { picked: StaleProposal[]; dropped: boolean } {
   const before = st.proposals.length;
-  st.proposals = st.proposals.filter((p) => inForceIds.has(p.oldId) && p.shown < 3);
+  const kept = new Set(st.kept ?? []);
+  st.proposals = st.proposals.filter((p) => inForceIds.has(p.oldId) && p.shown < 3 && !kept.has(p.oldId));
   const dropped = st.proposals.length !== before;
   const ordered = st.proposals.slice().sort((a, b) => (a.at < b.at ? 1 : a.at > b.at ? -1 : 0));
   return { picked: ordered.slice(0, max), dropped };
@@ -308,4 +320,42 @@ export function staleStateExists(stateDir: string, workspace: string): boolean {
   } catch {
     return false;
   }
+}
+
+// ------------------------------------------------------- the lead's review
+
+/**
+ * v0.5.9 (ADR-0019 amended 2026-11-23): every pending proposal for the lead's
+ * review tool - still in force and not kept, whatever its showing count (a
+ * proposal shown three times and left alone is exactly what the review is
+ * for). Oldest old entry first. Pure: no IO.
+ */
+export function pendingForReview(st: StaleState, inForceIds: Set<string>): StaleProposal[] {
+  const kept = new Set(st.kept ?? []);
+  return st.proposals
+    .filter((p) => inForceIds.has(p.oldId) && !kept.has(p.oldId))
+    .sort((a, b) => (a.oldAt < b.oldAt ? -1 : a.oldAt > b.oldAt ? 1 : 0));
+}
+
+/**
+ * v0.5.9: the lead keeps these old ids. Only ids with a pending proposal are
+ * accepted; each leaves the proposal list and joins `kept` (capped at
+ * KEPT_MAX, oldest dropped). Mutates `st`; returns what was kept and refused.
+ */
+export function keepProposals(st: StaleState, ids: string[]): { kept: string[]; refused: string[]; evicted: number } {
+  const pending = new Set(st.proposals.map((p) => p.oldId));
+  const kept: string[] = [];
+  const refused: string[] = [];
+  for (const id of ids) {
+    if (pending.has(id) && !kept.includes(id)) kept.push(id);
+    else if (!kept.includes(id) && !refused.includes(id)) refused.push(id);
+  }
+  if (kept.length === 0) return { kept, refused, evicted: 0 };
+  const k = new Set(kept);
+  st.proposals = st.proposals.filter((p) => !k.has(p.oldId));
+  const all = [...new Set([...(st.kept ?? []), ...kept])];
+  // R22 N-S2: the cap drops the oldest kept ids; the caller says how many
+  const evicted = Math.max(0, all.length - KEPT_MAX);
+  st.kept = all.slice(-KEPT_MAX);
+  return { kept, refused, evicted };
 }

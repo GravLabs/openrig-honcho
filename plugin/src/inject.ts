@@ -20,6 +20,7 @@
 import { pointerQuery, sanitizeVisible, searchCall } from "./pointer.ts";
 import type { Harness } from "./harness.ts";
 import { trustTag } from "./trust.ts";
+import { changedLabel } from "./changed.ts";
 
 export type InjectionSource = "startup" | "resume" | "clear" | "compact";
 
@@ -43,7 +44,13 @@ export interface InjectionDecision {
   /** v0.5.5 (ADR-0019 amended 2026-11-14): approvals only - false when the
    * entry carries no owner-turn stamp ("owner not checked", class recorded). */
   ownerChecked?: boolean;
+  /** v0.5.9 (ADR-0019 amended 2026-11-23): how many repository files the
+   * entry names changed after it was written (changed.ts); absent = none or unknown. */
+  changed?: number;
 }
+
+/** v0.5.9: the digest's pointer to the lead's review tool. */
+export const STALE_REVIEW_LINE = "All pending proposals, to retire or keep: mcp__rig_memory__stale_review {}";
 
 /** T19b: one open queue item for the digest's first part. */
 export interface InjectionOpenItem {
@@ -377,6 +384,7 @@ function decisionLabel(now: string, d: InjectionDecision, extra?: string): strin
     d.kind === "approval" ? (d.ownerChecked === false ? "approval, owner not checked" : "approval") : d.kind === "status" ? "status" : "",
     ageLabel(now, d.at) ?? "",
     extra !== undefined && extra !== "" ? extra : "",
+    typeof d.changed === "number" && d.changed > 0 ? changedLabel(d.changed) : "",
   ]
     .filter((x) => x !== "")
     .join(", ");
@@ -508,7 +516,9 @@ function renderContinuityInner(input: ContinuityInput, authored: AuthoredLines):
         authored.staleIds.push(p.oldId);
       }
       authored.stale.push(...slines);
-      if (slines.length > 0) sections.push(section("Stale proposals", slines));
+      // v0.5.9: the review tool lists every pending proposal and keeps the
+      // ones that stand (not counted as a proposal shown)
+      if (slines.length > 0) sections.push(section("Stale proposals", [...slines, STALE_REVIEW_LINE]));
     }
 
     // 3c. V6 (ADR-0019 d6): the lesson suggestion (v0.5.6: startup, compact

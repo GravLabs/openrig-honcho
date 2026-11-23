@@ -968,3 +968,34 @@ describe("v0.5.5 renderContinuityShown", () => {
     expect(r.shown).toEqual({ n_checkpoint: 0, n_stale: 0, n_lesson: 0 });
   });
 });
+
+// v0.5.9 (R22 N-S5): the digest marks a decision whose named file changed,
+// through the injected git runner and the hook payload's folder.
+describe("digest: files changed since (v0.5.9)", () => {
+  test("a decision naming a changed file carries the mark; without a folder, none", async () => {
+    const { fake, config, deps } = await mk();
+    try {
+      const s1 = await firstRun(config, deps());
+      fake.addConclusion(WS, {
+        content: "[decision d-deadbeef · scope mission] Keep src/radio.ts on 868.",
+        observer_id: SELF,
+        observed_id: LEDGER_PEER,
+        session_id: s1,
+        created_at: ago(3 * HOUR),
+      });
+      const calls: string[] = [];
+      const git = (cwd: string) => {
+        calls.push(cwd);
+        return `@${Math.floor((Date.parse(NOW) - HOUR) / 1000)}\nfirmware/src/radio.ts\n`;
+      };
+      const marked = await buildInjection({ source: "startup", claudeSessionId: "claude-2", cwd: "/seat/folder" }, config, deps({ git }));
+      expect(marked).toContain("d-deadbeef, 3 h ago, 1 file it names changed since");
+      expect(calls).toEqual(["/seat/folder"]);
+      const plain = await buildInjection({ source: "startup", claudeSessionId: "claude-3" }, config, deps({ git }));
+      expect(plain).toContain("d-deadbeef, 3 h ago");
+      expect(plain).not.toContain("changed since");
+    } finally {
+      await fake.stop();
+    }
+  });
+});

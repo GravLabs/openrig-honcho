@@ -27,6 +27,11 @@
 //     surface; the import check is what closes that door).
 
 import { execSync } from "node:child_process";
+
+/** v0.5.9 (ADR-0006 X5 amended): the one git call site, guard argv included. */
+const GIT_CALL = 'spawnSync("git", ["-c", "core.fsmonitor=false", ...args],';
+/** R22 F-S1: git options that write files, run programs or move git elsewhere. */
+const GIT_ARG_FORBIDDEN = /["'`](-c|-C|--output(=[^"'`]*)?|-o|--ext-diff|--textconv|--exec-path(=[^"'`]*)?|--git-dir(=[^"'`]*)?|--work-tree(=[^"'`]*)?|--upload-pack(=[^"'`]*)?|core\.[A-Za-z]+=[^"'`]*)["'`]/g;
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { redact } from "../plugin/src/redact.ts";
@@ -216,6 +221,7 @@ export function scanRepo(root: string): ScanResult {
   // --- (c) the one subprocess ---
   const subFiles = [...targets.entries()].filter(([rel]) => /(^|\/)plugin\//.test(rel) && rel.endsWith(".ts"));
   let execFileTotal = 0;
+  let gitSpawnTotal = 0;
   let execFileOutsideNudge = 0;
   for (const [rel, abs] of subFiles) {
     let text = "";
@@ -225,6 +231,41 @@ export function scanRepo(root: string): ScanResult {
       continue;
     }
     const isNudge = rel === "plugin/src/nudge.ts";
+    // v0.5.9 (ADR-0006 X5 amended 2026-11-23): the second named subprocess -
+    // plugin/src/changed.ts runs `git` (fixed binary, fixed verbs, no shell)
+    // through exactly one spawnSync("git", ...) call site; spawnSync anywhere
+    // else, or with any other binary, fails.
+    const isChanged = rel === "plugin/src/changed.ts";
+    // R22 F-S1: the call site is pinned with its guard argv, byte for byte,
+    // and is not a method call (Bun.spawnSync is a different function).
+    for (const m of text.matchAll(/\bspawnSync\s*\(/g)) {
+      const at = m.index as number;
+      if (!isChanged || text[at - 1] === "." || !text.slice(at).startsWith(GIT_CALL)) {
+        fail(rel, lineOf(text, at), "spawn_sync", `spawnSync( is allowed only as ${GIT_CALL} in plugin/src/changed.ts (X5)`);
+      } else gitSpawnTotal += 1;
+    }
+    // R22 F-S1: git options that write files, run programs or change where
+    // git looks are forbidden in plugin/ (the guard prefix above is the one
+    // allowed "-c"; it is cut out of changed.ts before this check)
+    const argText = isChanged ? text.split(GIT_CALL).join("") : text;
+    for (const m of argText.matchAll(GIT_ARG_FORBIDDEN))
+      fail(rel, 0, "git_args", `git option ${JSON.stringify(m[0])} is forbidden in plugin/ (X5)`);
+    // R22 recheck F-T3: every git(...) call in plugin/ names a read-only verb
+    // as its first argv literal - log, rev-list or diff - and nothing else
+    for (const m of text.matchAll(/\bgit\s*\(/g)) {
+      const at = m.index as number;
+      if (text[at - 1] === "." || text[at - 1] === "_") continue;
+      const rest = text.slice(at);
+      if (!/^git\s*\(\s*[A-Za-z_$][\w$]*\s*,\s*\[\s*"(log|rev-list|diff)"/.test(rest))
+        fail(rel, lineOf(text, at), "git_verb", "a git( call must start its argv with \"log\", \"rev-list\" or \"diff\" (X5)");
+      // R22 recheck F-T4: a log or diff argv carries --no-ext-diff and --no-textconv
+      const argv = /^git\s*\([^\[]*\[([^\]]*)\]/.exec(rest)?.[1] ?? "";
+      if (/^\s*"(log|diff)"/.test(argv) && !(argv.includes('"--no-ext-diff"') && argv.includes('"--no-textconv"')))
+        fail(rel, lineOf(text, at), "git_ext_diff", "a git log/diff argv must carry \"--no-ext-diff\" and \"--no-textconv\" (X5)");
+    }
+    // R22 F-S1: the other child_process entry points, in any spelling
+    for (const m of text.matchAll(/\b(execSync|execFileSync|fork)\s*\(/g))
+      fail(rel, lineOf(text, m.index as number), "exec_sync", `${m[1]}( is forbidden (X5)`);
     for (const m of text.matchAll(/\bexecFile\s*\(/g)) {
       execFileTotal += 1;
       void m;
@@ -243,14 +284,20 @@ export function scanRepo(root: string): ScanResult {
       if (before !== ".") fail(rel, lineOf(text, m.index as number), "eval", "eval( is forbidden (X5)");
     }
     for (const m of text.matchAll(/\bnew\s+Function\b/g)) fail(rel, lineOf(text, m.index as number), "new_function", "new Function is forbidden (X5)");
-    if (!isNudge && /from\s+["']node:child_process["']|require\(\s*["']node:child_process["']\s*\)/.test(text)) {
-      fail(rel, 0, "child_process_import", "only plugin/src/nudge.ts may import child_process (X5)");
+    // R22 F-S1: the Function constructor called without new, by any receiver
+    for (const m of text.matchAll(/(?<!new\s+)\bFunction\s*\(|\[\s*["'`]Function["'`]\s*\]/g))
+      fail(rel, lineOf(text, m.index as number), "new_function", "the Function constructor is forbidden (X5)");
+    // R22 F-S1: any spelling - "child_process" or "node:child_process", static
+    // import, require or dynamic import - is the module
+    if (!isNudge && !isChanged && /["'`](node:)?child_process["'`]/.test(text)) {
+      fail(rel, 0, "child_process_import", "only plugin/src/nudge.ts and plugin/src/changed.ts may import child_process (X5)");
     }
   }
   // "exactly one" only binds trees that carry the full plugin layout (the
   // nudge call site exists); stripped trees still get every forbidden check
   const fullPlugin = [...targets.keys()].some((rel) => /(^|\/)plugin\/src\/nudge\.ts$/.test(rel));
   if (fullPlugin) {
+    if (gitSpawnTotal > 1) fail("plugin", 0, "git_spawn_count", `expected at most 1 spawnSync("git", ...) in plugin/, found ${gitSpawnTotal}`);
     if (execFileTotal !== 1) fail("plugin", 0, "exec_file_count", `expected exactly 1 execFile( in plugin/, found ${execFileTotal}`);
     else if (execFileOutsideNudge > 0) fail("plugin", 0, "exec_file_location", `execFile( outside plugin/src/nudge.ts: ${execFileOutsideNudge}`);
   }

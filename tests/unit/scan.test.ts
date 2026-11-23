@@ -175,6 +175,52 @@ describe("scan.ts on tmp repos", () => {
     expect(scanRepo(regexExec).fails.filter((f) => f.kind === "exec")).toEqual([]);
   });
 
+  test("v0.5.9 X5 amendment: spawnSync(\"git\", ...) only in changed.ts, once, and nothing else", () => {
+    const ok = mkRepo({ "plugin/src/changed.ts": "import { spawnSync } from \"node:child_process\";\nspawnSync(\"git\", [\"-c\", \"core.fsmonitor=false\", ...args], {});\n" });
+    expect(scanRepo(ok).fails).toEqual([]);
+    const elsewhere = mkRepo({ "plugin/src/a.ts": "import { spawnSync } from \"node:child_process\";\nspawnSync(\"git\", [\"log\"]);\n" });
+    const fe = scanRepo(elsewhere).fails.map((f) => f.kind);
+    expect(fe).toContain("spawn_sync");
+    expect(fe).toContain("child_process_import");
+    const otherBin = mkRepo({ "plugin/src/changed.ts": "import { spawnSync } from \"node:child_process\";\nspawnSync(\"sh\", [\"-c\", \"x\"]);\n" });
+    expect(scanRepo(otherBin).fails.some((f) => f.kind === "spawn_sync")).toBe(true);
+    const twice = mkRepo({
+      "plugin/src/nudge.ts": "import { execFile } from \"node:child_process\";\nexecFile(\"x\", []);\n",
+      "plugin/src/changed.ts": "import { spawnSync } from \"node:child_process\";\nspawnSync(\"git\", [\"-c\", \"core.fsmonitor=false\", ...args], {});\nspawnSync(\"git\", [\"-c\", \"core.fsmonitor=false\", ...args], {});\n" });
+    expect(scanRepo(twice).fails.some((f) => f.kind === "git_spawn_count")).toBe(true);
+  });
+
+  test("R22 F-S1: execSync, execFileSync, bare and dynamic child_process, the Function constructor and git argv are caught", () => {
+    const GUARD = 'spawnSync("git", ["-c", "core.fsmonitor=false", ...args], {});';
+    const kinds = (files: Record<string, string>) => scanRepo(mkRepo(files)).fails.map((f) => f.kind);
+    expect(kinds({ "plugin/src/a.ts": 'import { execSync } from "child_process";\nexecSync("id");\n' })).toEqual(
+      expect.arrayContaining(["exec_sync", "child_process_import"]),
+    );
+    expect(kinds({ "plugin/src/b.ts": 'const cp = await import("child_process");\ncp.execFileSync("id");\n' })).toEqual(
+      expect.arrayContaining(["exec_sync", "child_process_import"]),
+    );
+    expect(kinds({ "plugin/src/c.ts": '(globalThis as any).Function("return 1")();\n' })).toContain("new_function");
+    expect(kinds({ "plugin/src/c2.ts": 'globalThis["Function"]("return 1")();\n' })).toContain("new_function");
+    // the shipped shape passes; a changed guard or an extra git option does not
+    const shipped = `import { spawnSync } from "node:child_process";\nconst f = (args: string[]) => ${GUARD}\n`;
+    expect(kinds({ "plugin/src/changed.ts": shipped })).toEqual([]);
+    expect(kinds({ "plugin/src/changed.ts": shipped.replace("core.fsmonitor=false", "core.fsmonitor=true") })).toContain("spawn_sync");
+    expect(kinds({ "plugin/src/changed.ts": `${shipped}f(["log", "--output=/tmp/pwned"]);\n` })).toContain("git_args");
+    expect(kinds({ "plugin/src/outcomes.ts": 'git(repo, ["diff", "--ext-diff", a, b]);\n' })).toContain("git_args");
+    // inline-value forms that redirect git or write files (R22 recheck note)
+    for (const opt of ["--git-dir=/other/.git", "--work-tree=/other", "--exec-path=/x", "-C", "--output=/tmp/x", "-o"])
+      expect(kinds({ "plugin/src/outcomes.ts": `git(repo, ["log", "${opt}"]);\n` })).toContain("git_args");
+    // R22 recheck F-T3: only read-only verbs start a git( argv
+    for (const verb of ['["config", "user.name", "x"]', '["upload-pack", "/tmp/target"]', '["daemon", "--enable=receive-pack"]', "args"])
+      expect(kinds({ "plugin/src/outcomes.ts": `git(repo, ${verb});\n` })).toContain("git_verb");
+    // R22 recheck F-T4: a diff or log argv without the flags fails
+    expect(kinds({ "plugin/src/outcomes.ts": 'git(repo, ["diff", a, b]);\n' })).toContain("git_ext_diff");
+    expect(kinds({ "plugin/src/outcomes.ts": 'git(repo, ["log", "--no-ext-diff", "HEAD"]);\n' })).toContain("git_ext_diff");
+    // the shipped outcomes argv passes
+    expect(kinds({ "plugin/src/outcomes.ts": 'git(repo, ["diff", "--name-only", "--no-renames", "--no-ext-diff", "--no-textconv", start, end]);\n' })).toEqual([]);
+    expect(kinds({ "plugin/src/changed.ts": 'import { spawnSync } from "node:child_process";\nBun.spawnSync("git", ["-c", "core.fsmonitor=false", ...args], {});\n' })).toContain("spawn_sync");
+  });
+
   test("zero deps: node_modules under plugin/ and a package.json with dependencies fail", () => {
     const dir = mkRepo({ "plugin/src/a.ts": "export const a = 1;\n", "package.json": '{"name":"x"}\n' });
     mkdirSync(join(dir, "plugin", "node_modules", "left-pad"), { recursive: true });

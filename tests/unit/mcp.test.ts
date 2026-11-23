@@ -129,8 +129,8 @@ describe("bin/mcp.ts rig_memory (T8)", () => {
       await h.init();
       const list = await h.rpc(2, "tools/list");
       // T16d adds search (every seat) right after ask; T19a adds retire
-      // (leader-only) right after remember
-    expect(toolNames(list)).toEqual(["ask", "search", "remember", "retire", "mission", "status"]);
+      // (leader-only) right after remember; v0.5.9 adds stale_review after retire
+    expect(toolNames(list)).toEqual(["ask", "search", "remember", "retire", "stale_review", "mission", "status"]);
     } finally {
       const c = await h.close();
       expect(c.err).toBe("");

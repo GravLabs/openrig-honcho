@@ -13,6 +13,7 @@ import { join } from "node:path";
 import type { Config } from "./env.ts";
 import { sanitizeVisible } from "./pointer.ts";
 import { trustTag } from "./trust.ts";
+import { changedLabel } from "./changed.ts";
 
 /** The fixed risky-action list (row brief point 1, one place). */
 export const RISKY_WORDS: readonly string[] = [
@@ -85,10 +86,16 @@ export function pickLessons(items: readonly LoreItem[], word: string): LoreItem[
 
 /** The shown line for one lesson: address + sanitised capped Moment + class.
  * The trust tag rides OUTSIDE the 120-cap (trust.ts truncation rule). */
-export function lessonLine(i: LoreItem): string {
+export function lessonLine(i: LoreItem, changed?: number): string {
   const moment = sanitizeVisible(i.moment).slice(0, MOMENT_CAP);
-  return `Your lesson: seat:lore/${i.slug} - ${moment}${trustTag("lore")}`;
+  // v0.5.9: the mark rides outside the Moment cap, like the trust tag
+  const cm = changed !== undefined && changed > 0 ? ` (${changedLabel(changed)})` : "";
+  return `Your lesson: seat:lore/${i.slug} - ${moment}${cm}${trustTag("lore")}`;
 }
+
+/** v0.5.9: marks a batch of {id, text, at}; the caller decides whether there
+ * is time for it (recall passes changed.ts changedSince bound to its folder). */
+export type ChangedFor = (items: { id: string; text: string; at: string }[]) => ReadonlyMap<string, number>;
 
 /** Injectable fs reads (tests pass spies to prove which paths were touched). */
 export interface LoreFileReader {
@@ -124,6 +131,10 @@ export function pointerLessons(
   cfg: Pick<Config, "topologyRoot" | "sessionName">,
   riskText: string,
   reader: LoreFileReader = realReader,
+  /** v0.5.9: when given, a lesson whose file names repository paths that
+   * changed after its date says so. The whole file is searched for paths;
+   * only the Moment is ever shown. */
+  changedFor?: ChangedFor,
 ): { text: string; count: number } {
   const nothing = { text: "", count: 0 };
   try {
@@ -141,6 +152,7 @@ export function pointerLessons(
       .filter((n) => n.endsWith(".md"))
       .sort();
     const items: LoreItem[] = [];
+    const texts = new Map<string, string>();
     let readCount = 0;
     for (const name of names) {
       if (readCount >= MAX_FILES) break;
@@ -148,12 +160,24 @@ export function pointerLessons(
       const size = reader.sizeIsFile(file);
       if (size === null || size > MAX_FILE_BYTES) continue;
       readCount += 1;
-      const parsed = parseLoreFile(name, reader.read(file));
-      if (parsed !== null) items.push(parsed);
+      const raw = reader.read(file);
+      const parsed = parseLoreFile(name, raw);
+      if (parsed !== null) {
+        items.push(parsed);
+        texts.set(name, raw);
+      }
     }
     const picked = pickLessons(items, word);
     if (picked.length === 0) return nothing;
-    return { text: picked.map(lessonLine).join("\n"), count: picked.length };
+    let marks: ReadonlyMap<string, number> = new Map();
+    if (changedFor !== undefined) {
+      try {
+        marks = changedFor(picked.map((i) => ({ id: i.slug, text: texts.get(i.slug) ?? "", at: i.date })));
+      } catch {
+        /* no marks */
+      }
+    }
+    return { text: picked.map((i) => lessonLine(i, marks.get(i.slug))).join("\n"), count: picked.length };
   } catch {
     return nothing; // any IO damage: silence, never a failed hook
   }

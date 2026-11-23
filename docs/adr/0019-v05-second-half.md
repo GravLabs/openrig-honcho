@@ -171,6 +171,45 @@ shipped:
   permission, never grants one. Older plugin versions read an `ends` header as plain
   text and drop the entry, so a rig upgrades all its seats together.
 
+- **Review aids for the lead and for every seat (v0.5.9, owner 2026-11-22: "yes, build 1
+  and 2 as v0.5.9 plus queues that helps"; ideas from the Cognee review, adapted).**
+  Three read-side additions; nothing new is written to the ledger and no model is called.
+  (1) `stale_review`, a leader-only tool: every pending stale proposal at once, oldest
+  first, whatever its digest showing count, each with the older entry, why, its age, and
+  the exact `retire` call; an owner approval says retiring it needs the owner's turn.
+  An owner approval gets no copyable retire call (it would be refused), only the
+  instruction to ask the owner (review R22 N-S3). `keep: [ids]` stores ids that should
+  stand in the local stale file (`kept`, capped at 1000; when the cap drops the oldest,
+  the reply says how many, and those may be proposed again - R22 N-S2); the stale check
+  never proposes kept ids again and the digest drops them. The tool
+  retires nothing. The digest's stale section ends with one line naming the tool.
+  (2) "Changed since" marks: a decision, approval, status, search hit, pointer title or
+  lesson that names repository files says `N files it names changed since` when any of
+  them changed after it was written. One `git log --since --name-only` per read in the
+  git repository that contains the seat's folder - the hook payload's folder for the
+  digest and the claim pointer, the folder the harness started the server in for
+  search (R22 F-S2) - with a 400 ms limit and a 60-day floor, compared in process; a named path matches
+  a changed file equal to it or ending in `/<path>`. The digest and the pointer run it
+  only with at least 500 ms left; any failure, no git, or no repository is no mark, the
+  view before v0.5.9. Lessons are searched for paths in the whole lore file, still
+  showing only the Moment. Residuals, stated: the mark does not say which repository it
+  read, so an entry about another repository's files can be marked by this one's history
+  when the paths coincide, and a bare file name can match a same-named file in another
+  folder (both false marks, never a hidden entry); `--since` stops at the first commit
+  older than the floor, so a commit with an out-of-order older date can hide a later
+  change (a missed mark, the safe direction; R22 N-S1, accepted); a mark says files
+  changed, not that the entry is wrong. Git runs with fixed arguments and read-only verbs, no
+  shell, fsmonitor, external diff and textconv off, and no `GIT_*` variable from the seat's
+  environment (R22 recheck F-T1/F-T2); the scan pins that call site and its argument guard
+  (ADR-0006 X5, amended; R22 F-S1 tightened the scan). (3) Outcome records name their commits: with
+  `--repo <path>` the collector adds `commits {start, end, files}` last on each record -
+  the commit HEAD's history held at the claim and at the close (`rev-list --before`) and
+  the count of files between them. A later run without `--repo` keeps the commits
+  already stored for a row (R22 F-S3), so the daily run never erases them; only an
+  explicit `--rebuild` without `--repo` re-derives the file without them. A file never
+  collected with `--repo` stays byte-identical to v0.5.8. An older plugin ignores `kept`, and its stale check rewrites the file without it,
+  so a rig upgrades the lead seat and the daily stale check together.
+
 ## Not doing
 
 - Writing, editing or mining lore from the plugin, or copying lore text to Honcho.

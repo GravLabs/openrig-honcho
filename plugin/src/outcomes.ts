@@ -17,6 +17,7 @@ import { join } from "node:path";
 import { fetchQueueListAll, fetchQueueListByState, fetchTransitions } from "./daemon.ts";
 import { redact } from "./redact.ts";
 import { sanitizeVisible } from "./pointer.ts";
+import { makeGit, type GitRunner } from "./changed.ts";
 
 /** Matches the daemon's qitem id shapes (qitem-<digits>-<hex>,
  * qitem-recovery-<hex>). Text that is not an id cannot pass this filter,
@@ -98,6 +99,17 @@ export interface OutcomeRecord {
   reopenCount: number;
   followOn: string[];
   memory: SeatMemory;
+  /** v0.5.9 (ADR-0019 amended 2026-11-23): only with `--repo` - the commit
+   * HEAD was at when the row was claimed and when it closed, and how many
+   * files differ between them. Null parts are unknown (no claim time, or the
+   * repository has no commit that early). Absent = not collected. */
+  commits?: RowCommits;
+}
+
+export interface RowCommits {
+  start: string | null;
+  end: string | null;
+  files: number | null;
 }
 
 const str = (v: unknown): string | null => (typeof v === "string" && v !== "" ? v : null);
@@ -142,6 +154,8 @@ export function serializeRecord(r: OutcomeRecord): string {
       pointerHeld: r.memory.pointerHeld,
       ...(r.memory.searchAfterPointer !== undefined ? { searchAfterPointer: r.memory.searchAfterPointer } : {}),
     },
+    // v0.5.9: last, and only when collected - files without it stay byte-identical
+    ...(r.commits !== undefined ? { commits: { start: r.commits.start, end: r.commits.end, files: r.commits.files } } : {}),
   });
 }
 
@@ -495,6 +509,67 @@ export interface CollectDeps {
   /** the plugin log's workspace part of <stateDir>/log/<workspace>.log */
   workspace?: string;
   rebuild?: boolean;
+  /** v0.5.9: the repository whose commits each record names (`--repo`). */
+  repo?: string;
+  /** v0.5.9: tests inject a git runner. */
+  git?: GitRunner;
+}
+
+/** v0.5.9 (R22 F-S3): the commits a stored line carries, when well-formed. */
+export function storedCommits(line: string): RowCommits | undefined {
+  try {
+    const c = (JSON.parse(line) as { commits?: unknown }).commits;
+    if (c === null || typeof c !== "object") return undefined;
+    const o = c as Record<string, unknown>;
+    const sha = (v: unknown): v is string | null => v === null || (typeof v === "string" && SHA_RE.test(v));
+    const n = o.files;
+    if (!sha(o.start) || !sha(o.end)) return undefined;
+    if (!(n === null || (typeof n === "number" && Number.isInteger(n) && n >= 0))) return undefined;
+    return { start: o.start, end: o.end, files: n };
+  } catch {
+    return undefined;
+  }
+}
+
+/** v0.5.9: the collector's git calls may take this long each. */
+export const COLLECTOR_GIT_TIMEOUT_MS = 10_000;
+
+const SHA_RE = /^[0-9a-f]{40}$/;
+
+/**
+ * v0.5.9: the commit HEAD's history held at `claimed` and at `closed`, and the
+ * count of files changed between them. Answers are cached per timestamp (many
+ * rows share none, but a rebuild asks the same times again). Any failure is a
+ * null part, never an error.
+ */
+export function commitsFor(
+  repo: string,
+  claimed: string | null,
+  closed: string | null,
+  git: GitRunner,
+  cache: Map<string, string | null> = new Map(),
+): RowCommits {
+  const at = (iso: string | null): string | null => {
+    if (iso === null || !Number.isFinite(Date.parse(iso))) return null;
+    const key = `at:${iso}`;
+    if (cache.has(key)) return cache.get(key) ?? null;
+    const out = git(repo, ["rev-list", "-1", `--before=@${Math.floor(Date.parse(iso) / 1000)}`, "HEAD"]);
+    const sha = out === null ? null : out.trim();
+    const v = sha !== null && SHA_RE.test(sha) ? sha : null;
+    cache.set(key, v);
+    return v;
+  };
+  const start = at(claimed);
+  const end = at(closed);
+  let files: number | null = null;
+  if (start !== null && end !== null) {
+    if (start === end) files = 0;
+    else {
+      const out = git(repo, ["diff", "--name-only", "--no-renames", "--no-ext-diff", "--no-textconv", start, end]);
+      files = out === null ? null : out.split("\n").filter((l) => l.trim() !== "").length;
+    }
+  }
+  return { start, end, files };
 }
 
 export interface CollectResult {
@@ -555,6 +630,8 @@ export async function collectOutcomes(deps: CollectDeps): Promise<CollectResult 
   }
 
   const records: OutcomeRecord[] = [];
+  const git = deps.git ?? makeGit(COLLECTOR_GIT_TIMEOUT_MS);
+  const shaCache = new Map<string, string | null>();
   let daemonFailures = 0;
   let skippedRows = 0;
   for (const doc of rows) {
@@ -571,6 +648,7 @@ export async function collectOutcomes(deps: CollectDeps): Promise<CollectResult 
     if (rec.destination !== null) {
       rec.memory = memoryWindow(logLines, rec.destination, rec.claimed, rec.closed, rec.created, rec.qitemId);
     } // F-D: no destination seat -> no memory can be attributed, all zeros
+    if (deps.repo !== undefined) rec.commits = commitsFor(deps.repo, rec.claimed, rec.closed, git, shaCache);
     records.push(rec);
   }
 
@@ -604,12 +682,22 @@ export async function collectOutcomes(deps: CollectDeps): Promise<CollectResult 
       replaced += prev.dropped;
       let changed = prev.dropped > 0;
       const fresh: string[] = [];
-      for (const [i, line] of lines.entries()) {
+      for (let [i, line] of lines.entries()) {
         const qid = records[i]!.qitemId;
         const at = prev.index.get(qid);
         if (at === undefined) {
           fresh.push(line);
           continue;
+        }
+        // v0.5.9 (R22 F-S3): a run without --repo cannot recompute commits,
+        // so it keeps the ones a --repo run already stored for this row
+        if (deps.repo === undefined) {
+          const kept = storedCommits(prev.lines[at] as string);
+          if (kept !== undefined) {
+            records[i]!.commits = kept;
+            line = serializeRecord(records[i]!);
+            lines[i] = line;
+          }
         }
         if (prev.lines[at] !== line) {
           prev.lines[at] = line;

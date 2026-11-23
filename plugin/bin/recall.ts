@@ -24,6 +24,7 @@ import type { Config } from "../src/env.ts";
 import { isKillSwitch, loadConfig } from "../src/env.ts";
 import { fetchQueuePointerRow, outboxDelivered } from "../src/daemon.ts";
 import { pointerLessons } from "../src/lessons.ts";
+import { MARK_MIN_LEFT_MS, changedSince } from "../src/changed.ts";
 import { parseEnvelope } from "../src/envelope.ts";
 import { appendHeld, heldPath } from "../src/held.ts";
 import { createClient } from "../src/honcho.ts";
@@ -138,6 +139,9 @@ function writeSeen(file: string, state: { session: string; ids: string[]; hashes
  * carries a lessons COUNT, never lore text. When the pointer itself has
  * nothing to show, the lessons still show (DECISION on the row: the risky
  * moment is the trigger) - stated for the architect's ruling. */
+/** v0.5.9: the seat's folder for changed-since marks (hook payload cwd). */
+let seatCwd: string = process.cwd();
+
 async function pointerSearchExit(
   c: Config,
   nudgeId: string,
@@ -150,7 +154,11 @@ async function pointerSearchExit(
 ): Promise<void> {
   // V5: lesson lines ride this run (shown arm only). Local IO only - any
   // failure inside pointerLessons is a silent empty block.
-  const lessons = pointerLessons(c, `${row.summary}\n${row.firstBodyLine}`);
+  // v0.5.9: a lesson naming files that changed since its date says so - only
+  // while the pointer budget still has room for the git call
+  const lessons = pointerLessons(c, `${row.summary}\n${row.firstBodyLine}`, undefined, (items) =>
+    POINTER_BUDGET_MS - (Date.now() - tN) >= MARK_MIN_LEFT_MS ? changedSince(seatCwd, items, Date.now()) : new Map(),
+  );
   const lessonFields = lessons.count > 0 ? { lessons: lessons.count } : {};
   const pQuery = pointerQuery(row.querySource);
   if (pQuery === "") {
@@ -185,7 +193,18 @@ async function pointerSearchExit(
     // V2 (ADR-0019 d2): the title class comes from the array the item came
     // from - conclusions are model products, messages verbatim seat words.
     // v0.5.5: keep the snapshot's per-memory class and ledger marks.
-    const text = pointerBlock(pQuery, count, pointerItems(snap), harness);
+    // v0.5.9: titles say when files they name changed since - one local git
+    // call, only when the pointer budget still has room for it
+    const changed = new Map<number, number>();
+    if (POINTER_BUDGET_MS - (Date.now() - tN) >= MARK_MIN_LEFT_MS) {
+      const marks = changedSince(
+        seatCwd,
+        snap.memories.map((m, i) => ({ id: String(i), text: String(m.content ?? ""), at: String(m.created_at ?? "") })),
+        Date.now(),
+      );
+      for (const [k, v] of marks) changed.set(Number(k), v);
+    }
+    const text = pointerBlock(pQuery, count, pointerItems(snap, changed), harness);
     // V5: the lesson lines ride beside the block (or alone when the block
     // is empty - the DECISION in the header). With no lessons the bytes and
     // the event line are today's, byte for byte.
@@ -299,13 +318,16 @@ async function main(): Promise<void> {
     // event (two installs, byte-identical stdin) leaves silently. The
     // HONCHO_RECALL flag and the kill switch above are checked first: off
     // means off, unlogged, exactly as before.
-    let input: { prompt?: unknown; session_id?: unknown; transcript_path?: unknown } = {};
+    let input: { prompt?: unknown; session_id?: unknown; transcript_path?: unknown; cwd?: unknown } = {};
     let parsed = true;
     try {
       input = JSON.parse(raw) as typeof input;
     } catch {
       parsed = false;
     }
+    // v0.5.9 (R22 F-S2): changed-since marks read the seat's own folder, the
+    // hook payload's cwd (as the digest does); the process folder only when absent
+    if (parsed && typeof input.cwd === "string" && input.cwd !== "") seatCwd = input.cwd;
     // ADR-0009 decision 1: the same parser and context the writer uses.
     // T16b item 6: cfg.rig (loadConfig, from OPENRIG_SESSION_NAME) so writer
     // and recall always attribute the same rig; workspace only as fallback.

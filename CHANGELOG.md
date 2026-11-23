@@ -1,5 +1,21 @@
 # Changelog
 
+## v0.5.9 (2026-11-23)
+
+- **Review every stale proposal at once.** The lead seat has a new tool,
+  `stale_review`: it lists every pending stale proposal with its age, the reason, and
+  the exact `retire` call. Pass `keep` with the ids that should stand and they are never
+  proposed again. The tool itself retires nothing.
+- **"Files changed since" marks.** A decision, search hit, claim-pointer title or lesson
+  that names repository files now says "N files it names changed since" when any of
+  those files changed after it was written, so a seat checks before acting on it. It
+  reads the history of the git repository the seat works in; outside a repository
+  nothing changes.
+- **Outcome records name their commits.** The outcome collector takes `--repo <path>`
+  and then records, per row, the commit at claim and at close and how many files
+  changed between them. Runs without the flag keep commits already recorded, and a
+  file never collected with the flag is unchanged.
+
 ## v0.5.8 (2026-11-22)
 
 - **Approvals that end with their work.** `remember` with `kind: approval` takes an

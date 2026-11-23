@@ -23,6 +23,7 @@ import { redact } from "./redact.ts";
 import type { Harness } from "./harness.ts";
 import { ownerMark, parseEntry, supersedeMarker } from "./ledger.ts";
 import { classTag, trustTag, type TrustClass } from "./trust.ts";
+import { changedLabel } from "./changed.ts";
 
 /** The wall cap for the pointer's search. Recall's fetch budget is 2500 ms;
  * the pointer keeps the whole ADDED work under 1 s (the ADR "How we'll
@@ -145,11 +146,16 @@ export function pointerItems(snap: {
   memories: { id?: unknown; content?: unknown; trust: TrustClass }[];
   messages: { id?: unknown; content?: unknown }[];
   superseded: Map<string, string> | undefined;
-}): PointerItem[] {
+}, /** v0.5.9: memory index -> named files changed since (changed.ts); absent = no marks. */
+changed?: ReadonlyMap<number, number>): PointerItem[] {
   return [
-    ...snap.memories.map((m) => {
+    ...snap.memories.map((m, i) => {
       const c = String(m.content ?? "");
-      const mark = supersedeMarker(c, snap.superseded) + (m.trust === "derived" ? "" : ownerMark(c));
+      const n = changed?.get(i);
+      const mark =
+        supersedeMarker(c, snap.superseded) +
+        (m.trust === "derived" ? "" : ownerMark(c)) +
+        (n !== undefined && n > 0 ? ` (${changedLabel(n)})` : "");
       return { id: m.id, content: m.content, kind: "conclusion" as const, trust: m.trust, ...(mark !== "" ? { mark } : {}) };
     }),
     ...snap.messages.map((m) => ({ id: m.id, content: m.content, kind: "message" as const })),

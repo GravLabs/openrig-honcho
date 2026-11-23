@@ -11,7 +11,9 @@
 
 import type { Config } from "./env.ts";
 import { fetchCurrentItem } from "./daemon.ts";
-import { closedRows } from "./closed.ts";
+import { closedRows, readClosed } from "./closed.ts";
+import { keepProposals, pendingForReview, readStaleState, writeStaleState } from "./stale.ts";
+import { changedLabel, changedSince, type GitRunner } from "./changed.ts";
 import type { Conclusion, HonchoClient, SearchMessage } from "./honcho.ts";
 import { ageLabel, forScopeLabel, x3 } from "./inject.ts";
 import { logEvent } from "./log.ts";
@@ -50,6 +52,10 @@ export interface McpDeps {
   now?: () => string;
   /** ask() chat timeout; default 90000 (ADR-0004 amendment), env override for tests. */
   askTimeoutMs?: number;
+  /** v0.5.9: the folder whose git history marks changed files; absent = no marks (the server bin passes its own folder). */
+  cwd?: string;
+  /** v0.5.9: git runner for the changed-since marks; tests inject one. */
+  git?: GitRunner;
 }
 
 const SERVER_INFO = { name: "rig_memory", version: "0.1.0" };
@@ -188,6 +194,22 @@ function toolList(deps: McpDeps): unknown[] {
           reason: { type: "string" },
         },
         required: ["decision_id", "reason"],
+      },
+    });
+    // v0.5.9 (ADR-0019 amended 2026-11-23): review every stale proposal at once
+    tools.push({
+      name: "stale_review",
+      description:
+        "List every pending stale proposal (leader only): the older entry, why a newer one may have made it stale, its age, and the exact retire call. Pass keep (d-ids) for entries that should stand: they are never proposed again. Nothing is retired by this tool.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          keep: {
+            type: "array",
+            items: { type: "string" },
+            description: "d-xxxxxxxx ids of proposed entries to keep; they leave the list and are not proposed again",
+          },
+        },
       },
     });
   }
@@ -483,14 +505,25 @@ async function callSearch(deps: McpDeps, args: Record<string, unknown>): Promise
     };
   }
   const now = (deps.now ?? (() => new Date().toISOString()))();
+  // v0.5.9 (ADR-0019 amended 2026-11-23): memories naming repository files
+  // that changed since they were written say so (one local git call, the
+  // server's folder; any failure is no marks)
+  const changed = changedSince(
+    deps.cwd,
+    memories.map((m, i) => ({ id: String(i), text: String(m.content ?? ""), at: String(m.created_at ?? "") })),
+    Date.parse(now),
+    deps.git,
+  );
   const lines: string[] = ["Memories:"];
   if (memories.length === 0) lines.push("(none)");
-  for (const m of memories) {
+  memories.forEach((m, i) => {
     lines.push(`- ${ageLabel(now, String(m.created_at ?? "")) ?? "undated"}${classTag(m.trust)}`);
     // v0.5.5: an unstamped approval on the ledger pair says so in words too
     const om = m.trust === "derived" ? "" : ownerMark(m.content);
-    lines.push(...x3(redact(m.content).text + supersedeMarker(m.content, superseded) + om).split("\n"));
-  }
+    const n = changed.get(String(i));
+    const cm = n !== undefined ? ` (${changedLabel(n)})` : "";
+    lines.push(...x3(redact(m.content).text + supersedeMarker(m.content, superseded) + om + cm).split("\n"));
+  });
   lines.push("Messages:");
   if (messages.length === 0) lines.push("(none)");
   for (const m of messages) {
@@ -777,6 +810,83 @@ async function callRetire(deps: McpDeps, args: Record<string, unknown>): Promise
   }
 }
 
+/** v0.5.9: at most this many proposals are listed in one reply. */
+const STALE_REVIEW_MAX = 40;
+
+/**
+ * v0.5.9 (ADR-0019 amended 2026-11-23, idea from the Cognee review): the lead
+ * reviews every pending stale proposal in one call instead of one digest line
+ * at a time. Lists proposals still in force and not kept, oldest first, each
+ * with the exact retire call; `keep` stores ids that should stand (local
+ * stale file only - nothing is written to the ledger, nothing is retired
+ * here). Closed rows come from the local file only (no daemon lookup).
+ */
+async function callStaleReview(deps: McpDeps, args: Record<string, unknown>): Promise<ToolResult> {
+  const config = deps.config;
+  const client = deps.client;
+  if (config === null || client === null) return textResult("memory unavailable: disabled", true);
+  if (!isLeaderSeat(config)) return textResult("stale_review is leader-only", true);
+  let keep: string[] = [];
+  if (args.keep !== undefined) {
+    if (!Array.isArray(args.keep) || !args.keep.every((k) => typeof k === "string" && validId(k)))
+      return textResult("usage: stale_review {keep?: [d-xxxxxxxx, ...]}", true);
+    keep = args.keep as string[];
+  }
+  const now = (deps.now ?? (() => new Date().toISOString()))();
+  try {
+    const st = readStaleState(config.stateDir, config.workspace);
+    const lines: string[] = [];
+    if (st !== null && keep.length > 0) {
+      const r = keepProposals(st, keep);
+      if (r.kept.length > 0 && !writeStaleState(config.stateDir, config.workspace, st))
+        return textResult("stale_review: could not save the kept ids; nothing changed", true);
+      if (r.kept.length > 0) lines.push(`kept ${r.kept.join(", ")}: not proposed again`);
+      if (r.evicted > 0)
+        lines.push(`the kept list is full: the ${r.evicted} oldest kept id${r.evicted === 1 ? "" : "s"} may be proposed again`);
+      if (r.refused.length > 0) lines.push(`not a pending proposal, ignored: ${r.refused.join(", ")}`);
+    } else if (keep.length > 0) {
+      lines.push(`not a pending proposal, ignored: ${keep.join(", ")}`);
+    }
+    if (st === null || st.proposals.length === 0) {
+      lines.push("No pending stale proposals.");
+      return textResult(lines.join("\n"));
+    }
+    const cur = currentLedger(await ledgerFromServer(client, config.peer), readClosed(config.stateDir, config.workspace));
+    const byId = new Map(cur.map((e) => [e.id, e]));
+    const pending = pendingForReview(st, new Set(byId.keys()));
+    if (pending.length === 0) {
+      lines.push("No pending stale proposals.");
+      return textResult(lines.join("\n"));
+    }
+    lines.push(
+      `${pending.length} pending stale proposal${pending.length === 1 ? "" : "s"}, oldest first. Retire the ones that are stale; keep the rest with stale_review {"keep": [ids]}.`,
+    );
+    for (const p of pending.slice(0, STALE_REVIEW_MAX)) {
+      const e = byId.get(p.oldId);
+      const fact = x3(sanitizeOne(redact(e?.fact ?? "").text)).slice(0, 160);
+      const isOwner = e !== undefined && ownerChecked(e);
+      const owner = isOwner ? " (owner approval: retiring it needs the owner's turn)" : "";
+      const why = sanitizeOne(redact(p.why).text);
+      lines.push(`- ${p.oldId} (${e?.kind ?? "entry"}, ${ageLabel(now, p.oldAt) ?? "undated"})${owner}: ${fact}`);
+      lines.push(`  stale because of ${p.newId}${why !== "" ? `: ${why}` : ""}`);
+      // R22 N-S3: no copyable call for an owner approval - it would be refused
+      lines.push(
+        isOwner
+          ? `  retire: ask the owner; on the owner's turn, mcp__rig_memory__retire with decision_id ${p.oldId}`
+          : `  retire: mcp__rig_memory__retire ${JSON.stringify({ decision_id: p.oldId, reason: `made stale by ${p.newId}` })}`,
+      );
+    }
+    if (pending.length > STALE_REVIEW_MAX)
+      lines.push(`(${pending.length - STALE_REVIEW_MAX} more; call again after retiring or keeping these)`);
+    return textResult(lines.join("\n"));
+  } catch {
+    return textResult("memory unavailable: unknown", true);
+  }
+}
+
+/** One display line: control characters and line breaks become spaces. */
+const sanitizeOne = (t: string): string => t.replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029]+/g, " ").replace(/\s+/g, " ").trim();
+
 async function callMission(deps: McpDeps, args: Record<string, unknown>): Promise<CallOutcome> {
   const config = deps.config;
   if (config === null) return { res: textResult("memory unavailable: disabled", true), refused: false };
@@ -886,6 +996,13 @@ async function handleCall(deps: McpDeps, params: unknown): Promise<CallOutcome> 
       }
       const res = await callRetire(deps, args);
       return { res, refused: isOwnerRefusal(res) };
+    }
+    case "stale_review": {
+      if (deps.config === null) return { res: textResult("unknown tool", true), refused: false };
+      if (!isLeaderSeat(deps.config)) {
+        return { res: textResult("stale_review is leader-only", true), refused: true };
+      }
+      return { res: await callStaleReview(deps, args), refused: false };
     }
     case "mission":
       return await callMission(deps, args);

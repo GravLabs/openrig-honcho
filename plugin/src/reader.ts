@@ -24,6 +24,7 @@ import { markStaleShown, pickStaleForDigest, readStaleState, staleStateExists, w
 import { maybeLessonSuggestion, recordLessonSuggestion } from "./lesson.ts";
 import type { Harness } from "./harness.ts";
 import { DAEMON_TIMEOUT_MS, fetchOpenWork } from "./daemon.ts";
+import { markChanged, type GitRunner } from "./changed.ts";
 import { isItemScope, renderContinuityShown, renderInjection, type InjectionAwayConclusion, type InjectionDecision, type InjectionDigestEntry, type InjectionInput, type InjectionMissionSummary, type InjectionSessionSummary, type InjectionSource } from "./inject.ts";
 
 /** T19b: the digest counts logged (counts only, X1) with moment "continuity". */
@@ -47,6 +48,8 @@ export interface ContinuityStats {
 
 export interface ReaderDeps {
   client: HonchoClient;
+  /** v0.5.9 (R22 N-S5): the git runner for changed-since marks; tests inject one. */
+  git?: GitRunner;
   /** set only when config.profileWorkspace is set (ADR-0004 part 5). */
   profileClient?: HonchoClient;
   /** ISO clock, injected so tests fix time. */
@@ -527,6 +530,9 @@ async function buildContinuity(a: {
   const decisionsInForce = allDec
     .filter((d) => !heldByOpen(d) && !staleScopedApproval(d))
     .slice(0, 10);
+  // v0.5.9 (ADR-0019 amended 2026-11-23): mark shown entries whose named files
+  // changed since they were written - one local git call, only with time left.
+  markChanged(a.cwd, [...decisionsInForce, ...approvals], now, deadline, deps.git);
   const leftOff = a.source === "compact" ? ownSession : lastSession;
   const away = await awayConclusions(deadline, config, deps, resolved.mission, openItems, a.prevLastSeen);
   const pointer = findRestoreMap(a.cwd, config.sessionName, Date.parse(now));

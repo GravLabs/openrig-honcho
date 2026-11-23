@@ -274,12 +274,14 @@ describe("T8 review: remember is leader-only", () => {
     const l = await mk({ peer: LEADER, observeOthers: true });
     try {
       // T16d adds the search tool (every seat), right after ask;
-      // T19a adds retire (leader-only), right after remember.
+      // T19a adds retire (leader-only), right after remember; v0.5.9 adds
+      // stale_review (leader-only) right after retire.
       expect(toolNames(await parse(frame(1, "tools/list"), l.deps))).toEqual([
         "ask",
         "search",
         "remember",
         "retire",
+        "stale_review",
         "mission",
         "status",
       ]);

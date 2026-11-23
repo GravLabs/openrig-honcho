@@ -18,7 +18,7 @@
 import { describe, expect, test } from "bun:test";
 import { makeTempDir } from "../support/tempdir.ts";
 import { createHash } from "node:crypto";
-import { chmodSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { loadConfig } from "../../plugin/src/env.ts";
 import { readSettingsFile } from "../../plugin/src/settings.ts";
 import { join } from "node:path";
@@ -738,6 +738,48 @@ describe("O6 F-G: the pointer on the SYNCHRONOUS recall line; user-prompt prints
       await h.cleanup();
     }
   });
+});
+
+// v0.5.9 (R22 recheck F-S2 pin): the pointer's changed-since mark reads the
+// HOOK PAYLOAD's cwd (the seat folder), not the process folder.
+describe("v0.5.9: pointer marks read the payload cwd", () => {
+  test("a title naming a file changed in the payload folder's repository carries the mark; without cwd it does not", async () => {
+    const { spawnSync } = await import("node:child_process");
+    const repo = makeTempDir("o59ptr-repo-");
+    const g = (args: string[], date?: string) => {
+      const r = spawnSync("git", args, { cwd: repo, encoding: "utf8", env: { ...process.env, GIT_AUTHOR_DATE: date ?? "", GIT_COMMITTER_DATE: date ?? "" } });
+      if (r.status !== 0) throw new Error(r.stderr);
+    };
+    g(["init", "-q"]);
+    g(["config", "user.email", "t@example.invalid"]);
+    g(["config", "user.name", "t"]);
+    g(["config", "commit.gpgsign", "false"]);
+    mkdirSync(join(repo, "notes"), { recursive: true });
+    writeFileSync(join(repo, "notes", "o59-trust-only-here.md"), "1\n");
+    g(["add", "."]);
+    g(["commit", "-qm", "one"], new Date(Date.now() - 3_600_000).toISOString());
+    const h = await mk({ qitemId: QID, sourceSession: "architect@ws", tags: [], summary: SUMMARY });
+    try {
+      const q = pointerQuery(SUMMARY);
+      h.fake.addConclusion(WS, {
+        observer_id: "build",
+        observed_id: "build",
+        content: `conclusion about ${q} in notes/o59-trust-only-here.md`,
+        created_at: new Date(Date.now() - 3 * 3_600_000).toISOString(),
+      });
+      const env = h.env({ PATH: process.env.PATH ?? "/usr/bin:/bin" });
+      const withCwd = await runRecall(env, { ...daemonNudge("o59-a"), cwd: repo });
+      const a = (JSON.parse(withCwd.out) as { hookSpecificOutput: { additionalContext: string } }).hookSpecificOutput.additionalContext;
+      expect(a).toContain("(1 file it names changed since)");
+      // no payload cwd: the process folder (this checkout) has no such file
+      const noCwd = await runRecall(env, daemonNudge("o59-b"));
+      const b = (JSON.parse(noCwd.out) as { hookSpecificOutput: { additionalContext: string } }).hookSpecificOutput.additionalContext;
+      expect(b).toContain("conclusion about");
+      expect(b).not.toContain("changed since");
+    } finally {
+      await h.cleanup();
+    }
+  }, 30000);
 });
 
 describe("O3 item 3: the settings file reaches cfg.recallHoldout - the field the recall arm reads", () => {

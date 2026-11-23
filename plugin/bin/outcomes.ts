@@ -1,7 +1,9 @@
 #!/usr/bin/env bun
 // O1 (ADR-0017 Part A): the outcome collector command for ONE rig.
 //   bun plugin/bin/outcomes.ts --rig <name> [--daemon-url <url>]
-//     [--state-dir <dir>] [--workspace <ws>] [--rebuild]
+//     [--state-dir <dir>] [--workspace <ws>] [--rebuild] [--repo <path>]
+// v0.5.9: --repo <path> also records, per row, the commit HEAD was at when it
+// was claimed and when it closed, and how many files changed between them.
 // Reads the queue (read-only) and the plugin's own hook log, appends one
 // record per closed row to <state-dir>/outcomes/<workspace>.jsonl, and
 // prints a per-seat summary of COUNTS ONLY. It never contacts Honcho and
@@ -36,8 +38,13 @@ async function main(): Promise<void> {
     flag(argv, "--state-dir") ?? (envState !== "" ? envState : `${process.env.HOME ?? ""}/.openrig-honcho`);
   const workspace = flag(argv, "--workspace");
   const rebuild = argv.includes("--rebuild");
+  const repo = flag(argv, "--repo");
+  if (repo !== undefined && !existsSync(repo)) {
+    process.stderr.write("outcomes: --repo folder not found\n");
+    process.exit(2);
+  }
 
-  const r = await collectOutcomes({ daemonUrl, rig, stateDir, ...(workspace !== undefined ? { workspace } : {}), rebuild });
+  const r = await collectOutcomes({ daemonUrl, rig, stateDir, ...(workspace !== undefined ? { workspace } : {}), ...(repo !== undefined ? { repo } : {}), rebuild });
   if ("error" in r) {
     process.stderr.write(`outcomes: ${r.error}\n`);
     process.exit(1);

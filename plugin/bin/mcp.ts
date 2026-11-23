@@ -65,6 +65,9 @@ async function main(): Promise<void> {
         ? { askTimeoutMs: askTimeoutFromEnv(env) }
         : {}),
       now: () => new Date().toISOString(),
+      // v0.5.9: search marks memories whose named files changed since, from
+      // this folder's git history (the seat's project folder)
+      cwd: process.cwd(),
     };
   }
   try {

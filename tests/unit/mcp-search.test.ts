@@ -340,3 +340,32 @@ describe("session-start hint (T16d)", () => {
     expect(renderInjection(base)).toBe("");
   });
 });
+
+// v0.5.9 (ADR-0019 amended 2026-11-23): changed-since marks on search hits.
+describe("search: files changed since (v0.5.9)", () => {
+  test("a hit naming a file changed after it says so; no folder means no marks", async () => {
+    const fake: FakeHoncho = await startFakeHoncho();
+    const dir = makeTempDir("mcp-search-changed-");
+    try {
+      const client = createClient({ url: fake.url, workspace: WS, apiKey: "k", timeoutMs: 2000 });
+      const config: Config = {
+        enabled: true, url: fake.url, workspace: WS, peer: SELF, observeOthers: false, ownerPeer: "owner",
+        profileWorkspace: null, recordAutomation: true, apiKey: "k", stateDir: dir, timeoutMs: 2000 };
+      fake.addConclusion(WS, { content: "keep plugin/src/inject.ts small", observer_id: SELF, observed_id: SELF, created_at: ago(3 * HOUR) });
+      const git = () => `@${Math.floor((Date.parse(NOW) - HOUR) / 1000)}\nplugin/src/inject.ts\n`;
+      const run = async (deps: Record<string, unknown>): Promise<string> => {
+        const line = await handleLine(
+          JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "search", arguments: { query: "inject" } } }),
+          { config, client, now: () => NOW, ...deps } as never,
+        );
+        return String((JSON.parse(line as string) as Record<string, any>).result.content[0].text);
+      };
+      expect(await run({ cwd: "/repo", git })).toContain("keep plugin/src/inject.ts small (1 file it names changed since)");
+      const plain = await run({ git });
+      expect(plain).toContain("keep plugin/src/inject.ts small");
+      expect(plain).not.toContain("changed since");
+    } finally {
+      await fake.stop();
+    }
+  });
+});

@@ -11,6 +11,8 @@ import { startFakeDaemon } from "../support/fake-daemon.ts";
 import {
   buildRecord,
   collectOutcomes,
+  commitsFor,
+  storedCommits,
   extractQitemIds,
   followOnIds,
   memoryWindow,
@@ -886,5 +888,93 @@ describe("Honcho isolation", () => {
       // (.openrig-honcho) is a filesystem name, not Honcho contact.
       expect(readFileSync(f, "utf8")).not.toMatch(/from\s+"[^"]*honcho[^"]*\.ts"/);
     }
+  });
+});
+
+// v0.5.9 (ADR-0019 amended 2026-11-23): start/end commits on outcome records.
+describe("outcome commits (--repo)", () => {
+  const SHA1 = "1".repeat(40);
+  const SHA2 = "2".repeat(40);
+  const fakeGit = (calls: string[][]) => (_cwd: string, args: string[]): string | null => {
+    calls.push(args);
+    if (args[0] === "rev-list") return args[2] === `--before=@${Math.floor(Date.parse("2026-11-10T00:30:00.000Z") / 1000)}` ? `${SHA1}\n` : `${SHA2}\n`;
+    if (args[0] === "diff") return "a.ts\nb/c.md\n";
+    return null;
+  };
+  test("commitsFor: start at the claim, end at the close, files between; same commit is 0", () => {
+    const calls: string[][] = [];
+    const g = fakeGit(calls);
+    expect(commitsFor("/repo", "2026-11-10T00:30:00.000Z", "2026-11-10T02:00:00.000Z", g)).toEqual({ start: SHA1, end: SHA2, files: 2 });
+    expect(calls.map((c) => c[0])).toEqual(["rev-list", "rev-list", "diff"]);
+    expect(commitsFor("/repo", "2026-11-10T03:00:00.000Z", "2026-11-10T04:00:00.000Z", g)).toEqual({ start: SHA2, end: SHA2, files: 0 });
+  });
+  test("commitsFor: no claim, a failing git or a non-sha answer is a null part, never an error", () => {
+    expect(commitsFor("/repo", null, "2026-11-10T02:00:00.000Z", () => `${SHA2}\n`)).toEqual({ start: null, end: SHA2, files: null });
+    expect(commitsFor("/repo", "2026-11-10T00:30:00.000Z", "2026-11-10T02:00:00.000Z", () => null)).toEqual({ start: null, end: null, files: null });
+    expect(commitsFor("/repo", "2026-11-10T00:30:00.000Z", "2026-11-10T02:00:00.000Z", () => "fatal: bad\n")).toEqual({ start: null, end: null, files: null });
+  });
+  test("serializeRecord: commits rides LAST and only when collected", () => {
+    const base = buildRecord(doc(ID_A), DONE_TRS, new Map()) as OutcomeRecord;
+    const plain = serializeRecord(base);
+    expect(plain).not.toContain("commits");
+    const withC = serializeRecord({ ...base, commits: { start: SHA1, end: SHA2, files: 2 } });
+    expect(withC).toBe(`${plain.slice(0, -1)},"commits":{"start":"${SHA1}","end":"${SHA2}","files":2}}`);
+  });
+  test("collector with a real throwaway repository: records name the commits; without --repo the bytes are unchanged", async () => {
+    const { spawnSync } = await import("node:child_process");
+    const repoDir = makeTempDir("o59-repo-");
+    const g = (args: string[], date?: string) => {
+      const r = spawnSync("git", args, { cwd: repoDir, encoding: "utf8", env: { ...process.env, GIT_AUTHOR_DATE: date ?? "", GIT_COMMITTER_DATE: date ?? "" } });
+      if (r.status !== 0) throw new Error(r.stderr);
+      return r.stdout.trim();
+    };
+    g(["init", "-q"]);
+    g(["config", "user.email", "t@example.invalid"]);
+    g(["config", "user.name", "t"]);
+    g(["config", "commit.gpgsign", "false"]);
+    writeFileSync(join(repoDir, "a.ts"), "1\n");
+    g(["add", "."]);
+    g(["commit", "-qm", "one"], "2026-11-10T00:00:00Z");
+    const c1 = g(["rev-parse", "HEAD"]);
+    writeFileSync(join(repoDir, "a.ts"), "2\n");
+    writeFileSync(join(repoDir, "b.md"), "2\n");
+    g(["add", "."]);
+    g(["commit", "-qm", "two"], "2026-11-10T01:00:00Z");
+    const c2 = g(["rev-parse", "HEAD"]);
+    await withRunner(async (dir, url) => {
+      const plain = await collectOutcomes({ daemonUrl: url, rig: "fixture-rig", stateDir: dir, rebuild: true });
+      if ("error" in plain) throw new Error(plain.error);
+      const before = readFileSync(outcomesFile(dir, "fixture-rig"), "utf8");
+      expect(before).not.toContain("commits");
+      const r = await collectOutcomes({ daemonUrl: url, rig: "fixture-rig", stateDir: dir, repo: repoDir, rebuild: true });
+      if ("error" in r) throw new Error(r.error);
+      const a = r.records.find((x) => x.qitemId === ID_A) as OutcomeRecord;
+      // claimed 00:30 (after commit one), closed 02:00 (after commit two)
+      expect(a.commits).toEqual({ start: c1, end: c2, files: 2 });
+      const again = await collectOutcomes({ daemonUrl: url, rig: "fixture-rig", stateDir: dir, repo: repoDir, rebuild: true });
+      if ("error" in again) throw new Error(again.error);
+      expect(again.records.map(serializeRecord)).toEqual(r.records.map(serializeRecord));
+      // R22 F-S3: the daily run without --repo keeps what a --repo run stored
+      const withBytes = readFileSync(outcomesFile(dir, "fixture-rig"), "utf8");
+      const daily = await collectOutcomes({ daemonUrl: url, rig: "fixture-rig", stateDir: dir });
+      if ("error" in daily) throw new Error(daily.error);
+      expect(daily.replaced).toBe(0);
+      expect(readFileSync(outcomesFile(dir, "fixture-rig"), "utf8")).toBe(withBytes);
+      // an explicit rebuild without --repo re-derives the file: commits go
+      const rb = await collectOutcomes({ daemonUrl: url, rig: "fixture-rig", stateDir: dir, rebuild: true });
+      if ("error" in rb) throw new Error(rb.error);
+      expect(readFileSync(outcomesFile(dir, "fixture-rig"), "utf8")).toBe(before);
+    });
+  });
+});
+
+describe("storedCommits (R22 F-S3)", () => {
+  test("only a well-formed commits object is carried", () => {
+    const S = "a".repeat(40);
+    expect(storedCommits(JSON.stringify({ commits: { start: S, end: null, files: null } }))).toEqual({ start: S, end: null, files: null });
+    expect(storedCommits(JSON.stringify({ commits: { start: "nope", end: S, files: 1 } }))).toBeUndefined();
+    expect(storedCommits(JSON.stringify({ commits: { start: S, end: S, files: -1 } }))).toBeUndefined();
+    expect(storedCommits(JSON.stringify({}))).toBeUndefined();
+    expect(storedCommits("not json")).toBeUndefined();
   });
 });

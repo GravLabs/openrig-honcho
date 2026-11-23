@@ -163,6 +163,22 @@ describe("V4 stale-check: runStaleCheck against a fake model", () => {
     }
   });
 
+  test("v0.5.9: an id the lead kept is never proposed again", async () => {
+    const dir = makeTempDir("stale-kept-");
+    const model = await startFakeModel(scriptReply);
+    try {
+      const { writeStaleState } = await import("../../plugin/src/stale.ts");
+      writeStaleState(dir, WS, { version: 1, classes: {}, lastCheckedAt: null, proposals: [], kept: [O1] });
+      const r = await runStaleCheck(mkConfig(dir), target(model.url), baseItems());
+      expect(r.added).toBe(0); // the model proposes O1 (and rule R1); O1 is kept
+      const st = readStaleState(dir, WS);
+      expect(st!.proposals).toEqual([]);
+      expect(st!.kept).toEqual([O1]);
+    } finally {
+      model.stop();
+    }
+  });
+
   test("(a) a rule-classified entry is never proposed, wire shape pinned", async () => {
     const dir = makeTempDir("stale-a-");
     const model = await startFakeModel(scriptReply);
