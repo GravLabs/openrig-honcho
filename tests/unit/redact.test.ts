@@ -513,3 +513,41 @@ describe("T4-fix rulings (edb8a30)", () => {
     expect(parsed.user).toBe("bob");
   });
 });
+
+// v0.5.10 (review R22 N-S4): AWS access key ids. Fixtures are built at run
+// time so no key-shaped literal sits in the repository (GitHub push
+// protection and the scan both read source text).
+describe("v0.5.10: AWS access key ids", () => {
+  const body = ["IOSF", "ODNN", "7EXA", "MPLE"].join(""); // 16 chars, the AWS docs' example body
+  const key = (prefix: string): string => prefix + body;
+  test("every documented prefix, alone and inside a sentence", () => {
+    for (const p of ["AKIA", "ASIA", "ABIA", "ACCA", "AGPA", "AIDA", "AIPA", "ANPA", "ANVA", "APKA", "AROA", "ASCA", "A3T1"]) {
+      const r = redact(`because ${key(p)} leaked`);
+      expect(r.text).toBe("because [REDACTED:aws] leaked");
+      expect(r.counts.aws).toBe(1);
+    }
+  });
+  test("quoted, after a colon, at the edges, two of them", () => {
+    expect(redact(`id="${key("AKIA")}"`).text).toBe('id="[REDACTED:aws]"');
+    expect(redact(`${key("AKIA")}`).text).toBe("[REDACTED:aws]");
+    const two = redact(`${key("AKIA")} and ${key("ASIA")}`);
+    expect(two.text).toBe("[REDACTED:aws] and [REDACTED:aws]");
+    expect(two.counts.aws).toBe(2);
+  });
+  test("R23 F-R2: percent-escaped and underscore-glued neighbours", () => {
+    const k = key("AKIA");
+    for (const [input, want] of [
+      [`GET /x?id%3D${k}%26y`, "GET /x?id%3D[REDACTED:aws]%26y"],
+      [`path%2F${k}%2Fnext`, "path%2F[REDACTED:aws]%2Fnext"],
+      [`a%20${k}`, "a%20[REDACTED:aws]"],
+      [`log%252F${k}`, "log%252F[REDACTED:aws]"],
+      [`AWS_ACCESS_KEY_ID_${k}`, "AWS_ACCESS_KEY_ID_[REDACTED:aws]"],
+      [`${k}_suffix`, "[REDACTED:aws]_suffix"],
+    ])
+      expect(redact(input).text).toBe(want);
+  });
+  test("kept: a short or longer upper-case run, a lower-case body, an unknown prefix", () => {
+    for (const keep of [`AKIA${body.slice(0, 15)}`, `AKIA${body}X`, `AKIA${body.toLowerCase()}`, `AXYZ${body}`, "AKIAS ARE BIRDS"])
+      expect(redact(`x ${keep} y`).text).toBe(`x ${keep} y`);
+  });
+});

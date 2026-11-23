@@ -210,7 +210,8 @@ describe("RK5 missionIdIsSecretShaped: the ordinary/secret boundary (brief: no o
       // call; pinned as CURRENT behaviour.
       // FLIPPED (architect 01:28Z, T16m Observation 3 ruled): the AWS
       // access key id shape is now a provider-token prefix - refused.
-      expect(missionIdIsSecretShaped("AKIAIOSFODNN7EXAMPLE")).toBe(true); // fake-secret
+      // built at run time: no key-shaped literal in tracked source (R23 F-R1)
+      expect(missionIdIsSecretShaped(["AKIA", "IOSFODNN", "7EXAMPLE"].join(""))).toBe(true);
     },
   );
 });

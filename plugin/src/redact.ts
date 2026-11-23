@@ -1,11 +1,12 @@
-// Redaction (ADR-0003 "Redaction" table, 9 kinds): the last gate before a
+// Redaction (ADR-0003 "Redaction" table, 11 kinds): the last gate before a
 // string leaves the seat. Pure: no env, no files, no network. Patterns
 // describe shapes only - this file never contains or looks for a real value,
 // and tests synthesize fakes (HARD LIMIT in the T4 brief).
 //
 // Apply strictly in the ADR's table order so a secret consumed by an earlier
 // kind is never counted twice:
-//   anthropic, strata, jwt, bearer, pem, assignment, json-secret, hex64,
+//   anthropic, strata, jwt, gittoken, aws, bearer, pem, assignment,
+//   json-secret, hex64,
 //   opaque, device-code (T16c, ADR-0011 decision 6 - last: it masks only an
 //   8-9 char code, never a run an earlier kind already consumed)
 // Consequences of that order, encoded in the tests:
@@ -115,6 +116,20 @@ export function redact(text: string): Redacted {
       text,
       /\b(?:gh[pousr]_[A-Za-z0-9_]{36,}?gl(?:pat|dt|rt|ptt|soat|ft|imt|agent)-[A-Za-z0-9_-]{20,}|github_pat_[A-Za-z0-9_]{50,}?gl(?:pat|dt|rt|ptt|soat|ft|imt|agent)-[A-Za-z0-9_-]{20,}|gh[pousr]_[A-Za-z0-9_]{36,}|github_pat_[A-Za-z0-9_]{50,}|gl(?:pat|dt|rt|ptt|soat|ft|imt|agent)-[A-Za-z0-9_-]{20,})/g,
       "gittoken",
+      counts,
+    );
+    // 3c. aws (v0.5.10, review R22 N-S4, owner 2026-11-23): an AWS access key
+    // id - a four-letter type prefix and 16 upper-case letters or digits. The
+    // 20-character id is too short for opaque and has no name to trip
+    // assignment, so it passed in plain text. Bounded by a non-alphanumeric
+    // character, an underscore (AWS_ACCESS_KEY_ID_<id>) or a percent escape
+    // (%2F, %3D and the double-encoded %252F of access logs and signed URLs -
+    // review R23 F-R2), so a longer upper-case run that merely contains the
+    // prefix is not cut.
+    text = replaceOnce(
+      text,
+      /(?<=^|[^A-Za-z0-9]|_|%[0-9A-Fa-f]{2}|%25[0-9A-Fa-f]{2})(?:AKIA|ASIA|ABIA|ACCA|AGPA|AIDA|AIPA|ANPA|ANVA|APKA|AROA|ASCA|A3T[A-Z0-9])[A-Z0-9]{16}(?=$|[^A-Za-z0-9]|_|%[0-9A-Fa-f]{2})/g,
+      "aws",
       counts,
     );
     // 4. bearer - label included in the replacement (not a keep-name kind).

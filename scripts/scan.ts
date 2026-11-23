@@ -52,7 +52,7 @@ export interface ScanResult {
   summary: string;
 }
 
-const HIGH = ["anthropic", "strata", "jwt", "pem", "hex64", "opaque", "json-secret", "gittoken"];
+const HIGH = ["anthropic", "strata", "jwt", "pem", "hex64", "opaque", "json-secret", "gittoken", "aws"];
 const TESTS_PREFIX = "tests/";
 const SKILLS_PREFIX = ".claude/skills/";
 /** Architect ruling 04:06Z (T9): release checksums ship lowercase "<64hex>

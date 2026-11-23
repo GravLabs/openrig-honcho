@@ -1,5 +1,13 @@
 # Changelog
 
+## v0.5.10 (2026-11-23)
+
+- **AWS access key ids are redacted.** A 20-character AWS access key id (`AKIA...`,
+  `ASIA...` and the other documented prefixes) was too short for the long-token rule and
+  passed through to shared memory as plain text. It is now replaced with
+  `[REDACTED:aws]` everywhere text is redacted: recorded messages, `remember`, `ask`,
+  `search` and the stale review. Found by review.
+
 ## v0.5.9 (2026-11-23)
 
 - **Review every stale proposal at once.** The lead seat has a new tool,

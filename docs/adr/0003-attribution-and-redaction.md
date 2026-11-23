@@ -87,6 +87,8 @@ replacing a match with `[REDACTED:<kind>]`. Patterns describe shapes, never valu
 | `anthropic` | `sk-ant-[A-Za-z0-9_-]{20,}` |
 | `strata` | `strata_[0-9a-z]{32,}` |
 | `jwt` | `eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}` |
+| `gittoken` | GitHub `gh[pousr]_…{36,}`, `github_pat_…{50,}`, GitLab `gl(pat|dt|rt|ptt|soat|ft|imt|agent)-…{20,}` (word-bounded) |
+| `aws` | `(AKIA|ASIA|ABIA|ACCA|AGPA|AIDA|AIPA|ANPA|ANVA|APKA|AROA|ASCA|A3T[A-Z0-9])[A-Z0-9]{16}`, bounded by a non-alphanumeric character, `_` or a percent escape (`%2F`, `%252F`) (access key id; v0.5.10). Stated: any upper-case text of exactly that shape is masked too (a false positive, the safe direction); an id glued to more upper-case letters or digits is a longer run and is not; mission ids of this shape are refused as secret-shaped (all prefixes, review R23) |
 | `bearer` | `(?i)(authorization:\s*(bearer|basic)\s+|bearer\s+)\S{16,}` |
 | `pem` | `-----BEGIN [A-Z ]*PRIVATE KEY-----` … `-----END …-----` |
 | `assignment` | `(?i)\b[A-Z0-9_]*(KEY|SECRET|TOKEN|PASSWORD|PASSWD|CREDENTIAL)[A-Z0-9_]*\s*[=:]\s*["']?[^\s"']{8,}` (value replaced, name kept) |
