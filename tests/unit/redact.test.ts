@@ -541,6 +541,7 @@ describe("v0.5.10: AWS access key ids", () => {
       [`path%2F${k}%2Fnext`, "path%2F[REDACTED:aws]%2Fnext"],
       [`a%20${k}`, "a%20[REDACTED:aws]"],
       [`log%252F${k}`, "log%252F[REDACTED:aws]"],
+      [`x%252F${k}%252Fy`, "x%252F[REDACTED:aws]%252Fy"], // double-encoded both sides (R23 owed pin)
       [`AWS_ACCESS_KEY_ID_${k}`, "AWS_ACCESS_KEY_ID_[REDACTED:aws]"],
       [`${k}_suffix`, "[REDACTED:aws]_suffix"],
     ])

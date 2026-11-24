@@ -152,9 +152,27 @@ records with metadata and listed back by metadata, compared by hash.
 
 ### W4 and W8
 
-W4 (Honcho's own summaries and peer cards against in-house summaries) did not run: the host ran low
-on memory during the deriver pass and the run was stopped; its scratch workspace was deleted by hand.
-So the decision bar's W4 condition is unmeasured for every candidate.
+W4 ran on 2026-11-24 (owner: "W4 first, then decide"), in an engine hour kept clear for it, after the
+first attempt was stopped by low host memory and two more by engine holds. The same 120 fictional
+messages (8 sessions, 6 of them with 17-21 messages) went into a scratch workspace with Honcho's
+deriver on (server defaults); the deriver drained in 31 minutes (124 work units, all completed).
+
+- **Summaries:** Honcho summarised 4 of the 6 working sessions - the ones with 20 or more messages; the
+  17- and 19-message sessions got none (consistent with a 20-message summary threshold, inferred, not
+  read from Honcho's code). For those 4 sessions, Honcho's summary and a summary the local model wrote
+  from the same messages (one call each) were graded blind on one rubric against the session's
+  messages: **equal** - faithful 7 of 8, useful 8 of 8, one unsupported statement each.
+- **Peer cards:** none of the three seats had a peer card after the drain (0 entries each), so there
+  was nothing to grade. On this data and configuration, Honcho's peer cards add nothing.
+- **Cost:** Honcho's summaries came from 31 minutes of deriver work on the shared engine; the in-house
+  summaries took one model call per session, seconds in total.
+- **Caveat:** four sessions and one judge are a small sample: this shows parity, not a ranking. A
+  first grading pass that gave every seat all four summaries as its "profile" scored Honcho far lower
+  and was discarded as unfair; the per-session grading above is the one that counts.
+
+So W4 does not favour Honcho: the model-backed parts that only Honcho provides today can be matched by
+one summary call per session. The bar (no candidate at least as good on W1, W3 and W4 *and* clearly
+better) still keeps Honcho, but the lock-in is smaller than W8 suggested.
 
 W8: all server access already goes through one interface (`HonchoClient`, 15 methods in use). Storage,
 the ledger and search are commodity: a plain store, Mem0 or Cognee hold them exactly. What only Honcho
@@ -162,7 +180,7 @@ gives us today is the model-backed part: session summaries, peer cards and `ask`
 
 ### Verdict
 
-- **Stay on Honcho.** Nothing meets the bar: no candidate was measured on W4, and the only one
+- **Stay on Honcho.** Nothing meets the bar: W4 shows parity, not a gain, and the only one
   clearly better on W1 (HippoRAG 2) calls the model on every read, takes 0.6-1 s, and is research
   code with a 7 GB GPU stack, so it does not fit a hook's 1 s budget.
 - **Graph approaches do not pay off for our workload.** Graphiti scored lowest (27% continuity, 20%
@@ -170,10 +188,36 @@ gives us today is the model-backed part: session summaries, peer cards and `ask`
   near 0.9 s. HippoRAG's lead is two to three questions over plain hybrid search.
 - **We are not locked in.** A plain hybrid store with no model at write time matched or beat Honcho on
   W1, W2 and W3 at 44 ms. If Honcho had to go, storage and search move with little loss; the real
-  switching cost is rewriting summaries, peer cards and `ask`.
+  switching cost is rewriting summaries, peer cards and `ask` - and W4 (2026-11-24) shows one local
+  summary call per session matches Honcho's summaries, while peer cards produced nothing here.
 - **Two cheap lessons for Honcho as it is:** Honcho's misses were the history and provenance
   questions that its seat-pair filter and distance cut-off hide; adding lexical (BM25) fusion to
-  `search`, as the plain store does, is worth a small test. And rerun W4 when the host has memory to
-  spare, before any change of store is considered.
+  `search`, as the plain store does, closes those misses on the bench (Keyword fusion test below).
+
+## Keyword fusion test (2026-11-24)
+
+Owner, after W4: "Yes, test it". Offline, no model and no server: Honcho's saved ranked answers for
+the 45 questions (the plugin's own read paths, from the W1 run) fused by reciprocal rank with an
+in-process BM25 over the records the plugin can already list for the same question - the
+conclusions of the observer/observed pairs that `search` queries, record time at or before the
+question's `as_of`. Metric: every expected record in the top 10, and outdated records in the top 10.
+
+| | All expected in top 10 | history | provenance | other jobs | Outdated records in top 10 |
+|---|---|---|---|---|---|
+| Honcho as today | 93.3% (42 of 45) | 60% | 80% | 100% | 15 |
+| Honcho + BM25 fusion | **100% (45 of 45)** | **100%** | **100%** | 100% | 17 |
+
+Adding the messages to the BM25 corpus changes nothing (every expected record is a conclusion), and
+weighting Honcho's rank double gives the same result. The fusion fixes exactly the three misses the
+bake-off found (history and provenance). Cost: the two extra outdated records come from history
+questions, which ask about the past; the plugin's ledger rules and labels still mark what is not in
+force. Then the size check, read-only and counts only, on the two older pilots: a seat's own pair holds
+5,251 to 28,295 conclusions (up to 62,243 about one seat across all observers), against 25-40 per pair
+on the bench; the ledger pair holds 19 and 224. Listing a seat pair at 100 per page is 50-280 requests,
+far outside search's 3 s wall, so the bench result does not carry over as built. What would carry
+over: (a) BM25 over the ledger pair only - `search` already reads it whole - which helps decision and
+history questions about the ledger but not the seat-conclusion misses above; or (b) a local keyword
+index the plugin keeps up to date incrementally (new conclusions since a cursor), a larger change and
+new local state, which belongs with the v0.6 work the owner is holding for usage data.
 
 Scripts and raw results: the architect's scratch folder `backend-eval/`, not kept in the repo.

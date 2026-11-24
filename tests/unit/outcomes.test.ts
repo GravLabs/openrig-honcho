@@ -421,6 +421,23 @@ describe("collectOutcomes", () => {
     });
   });
 
+  test("R24 F-K24: a row the done list returns in another state never enters the file", async () => {
+    await withRunner(async (dir) => {
+      const d2 = await startFakeDaemon({
+        queueListDone: [...docsFixture(), doc(ID_B + "1", { state: "in-progress" }), doc(ID_B + "2", { state: undefined })],
+        queueListAll: allDocsFixture(),
+        transitions: DONE_TRS,
+      });
+      try {
+        const r = await collectOutcomes({ daemonUrl: d2.url, rig: "fixture-rig", stateDir: dir });
+        if ("error" in r) throw new Error(r.error);
+        expect(r.closedRows).toBe(3);
+      } finally {
+        d2.close();
+      }
+    });
+  });
+
   test("a row of ANOTHER rig (destination) never enters the file", async () => {
     await withRunner(async (dir, url) => {
       const d2 = await startFakeDaemon({

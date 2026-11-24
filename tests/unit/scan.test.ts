@@ -90,6 +90,14 @@ describe("scan.ts on tmp repos", () => {
   const FAKE_GH_FINE = ["github_pat_", "A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6Q7r8S9t0U1v2W3x4Y5"].join(""); // fake-secret 50 (the long body is also an opaque shape - the marker is what lets this tracked line pass the real-repo scan)
   const FAKE_GL_PAT = ["glpat-", "AbCdEfGhIjKlMnOpQrSt"].join(""); // fake-secret 20
 
+  test("v0.5.10 aws HIGH (R23 F-R1 pin): a planted AWS access key id FAILS outside tests/", () => {
+    const fakeAws = ["AKIA", "IOSFODNN", "7EXAMPLE"].join(""); // built at run time
+    const r = scanRepo(mkRepo({ "src.txt": `id = ${fakeAws}\n` }));
+    expect(r.ok).toBe(false);
+    expect(r.fails.some((x) => x.file === "src.txt" && x.kind === "aws")).toBe(true);
+    expect(render(r)).not.toContain("IOSFODNN");
+  });
+
   test("F1 gittoken HIGH: planted GitHub classic, fine-grained and GitLab fakes FAIL outside tests/", () => {
     const dir = mkRepo({
       "src1.txt": `x = ${FAKE_GH_CLASSIC}\n`,

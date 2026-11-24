@@ -353,7 +353,10 @@ export function memoryWindow(
     if (l.hook === "recall" && l.event !== "pointer" && l.pointer === "held") {
       m.pointerHeld += 1;
     }
-    if (l.hook === "session-start" && typeof l.moment === "string") m.digestShown += 1;
+    // a failed session-start showed no digest (R24 F-H; same rule as the report)
+    if (l.hook === "session-start" && typeof l.moment === "string") {
+      if (l.ok !== false) m.digestShown += 1;
+    }
     else if (l.hook === "recall" && l.event === "injected") {
       if (l.arm === "held") m.recallHeld += 1;
       else m.recallShown += 1;
@@ -594,9 +597,11 @@ export async function collectOutcomes(deps: CollectDeps): Promise<CollectResult 
   // the state-less list. If it fails, links fall back to closed rows only.
   const all = await fetchQueueListAll(deps.daemonUrl);
   const corpusForLinks = all.ok ? all.docs : done.docs; // follow-on links need open rows too
+  // the list asked for done rows; a row that is not done is not recorded
+  // (R24 F-K24: the report and summarize count every logged row as closed)
   const rows = done.docs.filter((d) => {
     const dest = str(d.destinationSession) ?? "";
-    return dest.endsWith(`@${deps.rig}`);
+    return dest.endsWith(`@${deps.rig}`) && str(d.state) === "done";
   });
   // reverse index: rows of this rig whose BODY names a qitem id (bodies are
   // read here and nowhere else; only regex-matched ids are kept).
@@ -793,6 +798,8 @@ export function summarize(records: OutcomeRecord[]): SeatSummary[] {
     const claimedRows = rs.filter((r) => r.claimed !== null);
     out.push({
       seat,
+      // every collected row is a done row (the collector lists state done);
+      // closed === null only means the daemon left out the close time (R24 F-I)
       closed: rs.length,
       claimedRows: claimedRows.length,
       medianClaimToCloseMs: median(spans),

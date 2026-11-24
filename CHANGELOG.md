@@ -1,5 +1,16 @@
 # Changelog
 
+## v0.5.11 (2026-11-24)
+
+- **A memory report.** `bun openrig-honcho/bin/report.ts` writes one self-contained HTML
+  page per workspace showing what the rig's memory holds (messages, derived conclusions,
+  the ledger by kind and state, per seat), how the seats use it day by day (digests,
+  memory added to prompts, claim pointers, search, ask, remember, retire), whether work
+  goes better with memory (rework and time to close, for the claim pointer's holdout
+  and for memory shown or not), the ledger as a timeline, and hook health. It runs no
+  model and sends nothing anywhere; the page is a private local file. `--counts-only`
+  leaves out all memory text.
+
 ## v0.5.10 (2026-11-23)
 
 - **AWS access key ids are redacted.** A 20-character AWS access key id (`AKIA...`,

@@ -352,6 +352,20 @@ flowchart LR
     pointer, lessons), measuring how much useful content survives as well as attack
     success. Trust labels stay capped sections, never rank weights: a trust weight is
     either inert or quietly hides everything untrusted (2608.21230).
+  - **A local keyword index beside Honcho's semantic search** (owner, 2026-11-24, after
+    the backend evaluation: "Plan a local index for v0.6"). On the fictional bench,
+    fusing Honcho's results with BM25 over the same pairs' conclusions found every
+    expected record (45 of 45, against 42): the history and provenance questions that
+    Honcho's distance cut-off hides. On a real rig a seat's pair holds 5,000-28,000
+    conclusions, so `search` cannot list them per call. The plan: each seat keeps a
+    local index (SQLite FTS5 in its state folder, 0700/0600) of the conclusions of the
+    pairs `search` queries, updated incrementally from a created-at cursor off the hot
+    path (the Stop hook or a sweep, bounded pages per run, never blocking), and `search`
+    fuses Honcho's ranks with the index's by reciprocal rank inside its existing wall.
+    The index is a cache: deleting it only means a slower first sync; content stays
+    redacted as stored; retired and used entries keep their ledger marks. Measure
+    before shipping: index size and sync time on the busier pilot, search p95 against
+    its wall, and the bench again. Built only when the v0.6 hold lifts.
   Not borrowed: model judges or auditors, trust weights, cryptographic provenance, a
   grader that changes itself, automatic retires or edits. Reports:
   the architect's `paper-evals-2026-11/` scratch folder.
