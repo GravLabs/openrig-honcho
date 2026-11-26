@@ -27,15 +27,32 @@
 // shared model on the rest. Full B run after a passed gate: 15 sessions;
 // A's two arms (x n) are unchanged and run only with --scen all|A.
 //
-// Run: bun run scenario [--dry] [--n <runsPerArm>] [--scen A|B|all] [--t20c]
+// Run: bun run scenario [--dry [ARM]] [--n <runsPerArm>] [--scen A|B|all|tools] [--t20c]
 // `--t20c` = the T20c rerun only: other-scope x5 (must now WAIT), then
 // publish x3 (must still PUBLISH); no control gate, no A arms.
-// `--dry` = ONE run (A, digest on) and it prints the raw reply for pinning;
-// the full run records only counts/verdicts in the report - model output is
-// NOT written to the report or to anything committed.
+// `--dry [ARM]` = ONE run (A, digest on; with --scen tools: the ARM after
+// --dry, default C, skill on; T21b: `--dry D` scores the owner-decision arm) and it
+// prints the raw reply / tool-call list for pinning; the full run records
+// only counts/verdicts in the report - model output is NOT written to the
+// report or to anything committed.
 // scenario-report.json is git-ignored at the repo root.
+//
+// T21 (row qitem-20261125232020-db31b96f32d3e373): `--scen tools` scores TOOL
+// CHOICE - C/D/D0/E/F/F0 verdicts are pure functions of the session's tool
+// calls (scenario-core), parsed from `--output-format stream-json --verbose`.
+// Sessions run with `--plugin-dir` (the plugin as installed; skill-off arm =
+// a temp copy minus skills/rig-memory) and `--allowedTools mcp__rig_memory`
+// (headless -p otherwise denies MCP calls; refused Edit/Bash attempts still
+// appear as tool_use blocks and count as attempted actions). No manual
+// SessionStart settings for tools runs - the plugin's own hooks.json fires.
+// Default N=3 per arm, sequential (shared engine). The FULL 36-session run is
+// the architect's; here --scen tools --dry runs the ONE authorized session.
+// T21b (row qitem-20261125233850-1f69bc65f32bdef3): D/D0 are headerless
+// in-seat owner turns (a From header reads as relayed); the C arm is a plain
+// NON-LEAD seat (HONCHO_LEADER_PEER "lead" != HONCHO_PEER "build"), so it
+// sees the non-lead tool list; D/E/F/D0/F0 stay self-led.
 
-import { mkdtempSync, readFileSync, rmSync, writeFileSync, existsSync } from "node:fs";
+import { cpSync, mkdtempSync, readFileSync, rmSync, writeFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Config } from "../plugin/src/env.ts";
@@ -47,18 +64,28 @@ import {
   SCENARIO_SETTINGS,
   childEnv,
   fixtureQid,
+  leaderPeerForArm,
+  openStaleRow,
   openWorkRowA,
   openWorkRowB,
   otherQid,
+  parseRememberedId,
   plainSeedForB,
   preconditionMiss,
+  preconditionToolsOpen,
+  promptForArm,
   requireScenarioEnv,
   seedFixture,
   seedForB,
   startFakeDaemon,
+  streamModelOf,
+  toolCallsFromStream,
   verdictA,
   verdictB,
+  verdictForArm,
   type BArm,
+  type ToolArm,
+  type ToolCall,
   type Verdict,
 } from "./scenario-core.ts";
 import { scratchClient, scratchWorkspace, type Scratch } from "../tests/support/scratch.ts";
@@ -71,8 +98,11 @@ const CLAUDE_BIN = Bun.which("claude") ?? "claude";
 const SESSION_TIMEOUT_MS = 420_000;
 const REPORT_PATH = join(REPO, "scenario-report.json");
 
-type Scenario = "A" | "B";
-type Arm = "digest-on" | "digest-off" | BArm;
+type Scenario = "A" | "B" | "tools";
+/** T21 tool-arm names: the scenario letter + the skill arm (the only Run
+ * fields needed to group the report; verdict + tool calls carry the rest). */
+type ToolArmName = `${ToolArm}-${"on" | "off"}`;
+type Arm = "digest-on" | "digest-off" | BArm | ToolArmName;
 
 interface RunRecord {
   scenario: Scenario;
@@ -89,6 +119,9 @@ interface RunRecord {
   invalid?: string; // T24 guard (architect 01:45Z): seeded counts not visible in the digest - the run proves NOTHING (neither PASS nor FAIL)
   deleteAccepted?: boolean; // scratch workspace DELETE accepted by the server
   note?: string; // arm meaning where it is not the headline (B/digest-off)
+  /** T21: the session's tool calls, NAMES + ok ONLY - inputs are model text
+   * and never enter the report (the row's hard limit). */
+  toolCalls?: { name: string; ok: boolean }[];
 }
 
 const mkConfig = (
@@ -115,8 +148,9 @@ const mkConfig = (
 });
 
 /** remember through the plugin's own MCP path (the digest integration test's
- * pattern) - never a hand-written server write. */
-async function seedRemember(cfg: Config, client: ReturnType<typeof scratchClient>, args: Record<string, unknown>): Promise<void> {
+ * pattern) - never a hand-written server write. Returns the tool's answer
+ * text (T21 F parses the new ledger id out of it; A/B ignore it). */
+async function seedRemember(cfg: Config, client: ReturnType<typeof scratchClient>, args: Record<string, unknown>): Promise<string> {
   const line = await handleLine(
     JSON.stringify({
       jsonrpc: "2.0",
@@ -131,6 +165,34 @@ async function seedRemember(cfg: Config, client: ReturnType<typeof scratchClient
   if (r.result?.isError === true) {
     throw new Error(`seed: remember errored: ${String(r.result.content?.[0]?.text).slice(0, 200)}`);
   }
+  return String(r.result?.content?.[0]?.text ?? "");
+}
+
+/** The one session-start event this run's plugin log holds: injected block
+ * size + the digest counts (shared by A/B and T21 tool runs). */
+function readSessionStartEvent(logFile: string): {
+  blockBytes: number;
+  digestFields: Record<string, unknown>;
+} {
+  let blockBytes = -1;
+  const digestFields: Record<string, unknown> = {};
+  if (existsSync(logFile)) {
+    for (const l of readFileSync(logFile, "utf8").split("\n")) {
+      if (l === "") continue;
+      try {
+        const e = JSON.parse(l) as Record<string, unknown>;
+        if (e.hook === "session-start" && e.event === "startup") {
+          blockBytes = typeof e.bytes === "number" ? e.bytes : -1;
+          for (const k of ["n_open", "n_decisions", "n_approvals", "n_away", "has_pointer"]) {
+            if (e[k] !== undefined) digestFields[k] = e[k];
+          }
+        }
+      } catch {
+        // skip unparsable line
+      }
+    }
+  }
+  return { blockBytes, digestFields };
 }
 
 interface Envelope {
@@ -297,25 +359,8 @@ async function runSession(
     const model = env1?.modelUsage !== undefined ? Object.keys(env1.modelUsage)[0] ?? "?" : "?";
 
     // the plugin's own log line: the one session-start event for this run
-    let blockBytes = -1;
-    const digestFields: Record<string, unknown> = {};
     const logFile = join(stateDir, "log", `${scratch.name}.log`);
-    if (existsSync(logFile)) {
-      for (const l of readFileSync(logFile, "utf8").split("\n")) {
-        if (l === "") continue;
-        try {
-          const e = JSON.parse(l) as Record<string, unknown>;
-          if (e.hook === "session-start" && e.event === "startup") {
-            blockBytes = typeof e.bytes === "number" ? e.bytes : -1;
-            for (const k of ["n_open", "n_decisions", "n_approvals", "n_away", "has_pointer"]) {
-              if (e[k] !== undefined) digestFields[k] = e[k];
-            }
-          }
-        } catch {
-          // skip unparsable line
-        }
-      }
-    }
+    const { blockBytes, digestFields } = readSessionStartEvent(logFile);
 
     // T24 guard (architect 01:45Z): the run's own logged counts must prove
     // the seeded state reached the digest, or the run is INVALID (a digest
@@ -399,6 +444,189 @@ async function runSession(
   }
 }
 
+/** T21 dry keeps the FULL parsed tool-call list (inputs included) for the
+ * one-shot print only - the report and anything committed carry names+ok. */
+const TOOL_DRY: { arm: ToolArm; calls: ToolCall[] }[] = [];
+
+/** Dry print only: the first string-bearing input fields, short. */
+function briefInput(c: ToolCall): string {
+  const i = c.input;
+  if (i === null || typeof i !== "object") return "";
+  const rec = i as Record<string, unknown>;
+  const parts: string[] = [];
+  for (const k of ["query", "fact", "kind", "target", "file_path", "path", "command", "mission", "summary"]) {
+    if (parts.length >= 2) break;
+    const v = rec[k];
+    if (typeof v === "string" && v !== "") parts.push(`${k}="${v.replace(/\s+/g, " ").slice(0, 60)}"`);
+  }
+  return parts.map((p) => `[${p}]`).join(" ");
+}
+
+/** T21: one tool-choice session. The verdict consumes ONLY the tool-call
+ * list parsed from the stream - the reply text is never read or kept. The
+ * skill-off arm is a temp copy of the plugin minus skills/rig-memory (hooks
+ * and mcp-servers identical, so only the skill text differs). */
+async function runToolSession(arm: ToolArm, skill: "on" | "off", run: number): Promise<RunRecord> {
+  const armName: ToolArmName = `${arm}-${skill}`;
+  const qid = fixtureQid(run);
+  const sessionName = `build@scen-tools-${armName}-${run}`;
+  const stateDir = mkdtempSync(join(tmpdir(), "t21-state-"));
+  const cfgDir = mkdtempSync(join(tmpdir(), "t21-cfg-"));
+  const fixtureDir = mkdtempSync(join(tmpdir(), "t21-fixture-"));
+  const dirs: string[] = [stateDir, cfgDir, fixtureDir];
+  seedFixture(fixtureDir);
+  let scratch: Scratch | undefined;
+  let daemon: ReturnType<typeof startFakeDaemon> | undefined;
+  const t0 = Date.now();
+  try {
+    scratch = await scratchWorkspace(); // real server, scratch name, deriver off
+    // the daemon port in this cfg is a placeholder: seeding (remember) never
+    // touches the queue; the real daemon starts below, after F's seed.
+    const cfg = mkConfig(scratch.name, stateDir, 1, sessionName);
+
+    // F seeds ONE decision through the plugin's own path and names its REAL
+    // id in the stale row (the server cannot backdate an entry - the age is
+    // honest and 0; noted in the row report). Every other arm seeds nothing.
+    let staleId: string | null = null;
+    let staleIdProblem: string | undefined;
+    if (arm === "F") {
+      const answer = await seedRemember(cfg, scratchClient(scratch.name), {
+        fact: "ship v1 from tag a1b2c3",
+        reason: "the release call",
+        kind: "decision",
+      });
+      staleId = parseRememberedId(answer);
+      if (staleId === null) staleIdProblem = `F seed id unparsable from: ${answer.slice(0, 80)}`;
+    }
+
+    const rows: Record<string, unknown>[] =
+      arm === "C" || arm === "F0"
+        ? [openWorkRowA(qid, sessionName)]
+        : arm === "F" && staleId !== null
+          ? [openStaleRow(qid, sessionName, staleId, 0)]
+          : [];
+    daemon = startFakeDaemon(rows);
+
+    // plugin arms: ON = the plugin in place; OFF = the same tree minus the
+    // rig-memory skill. With --plugin-dir the plugin's OWN hooks.json fires
+    // SessionStart, so NO manual settings hook here (the A/B manual hook
+    // would fire a second time alongside the plugin's).
+    let pluginDir = join(REPO, "plugin");
+    if (skill === "off") {
+      pluginDir = mkdtempSync(join(tmpdir(), "t21-plugin-"));
+      dirs.push(pluginDir);
+      cpSync(join(REPO, "plugin"), pluginDir, { recursive: true });
+      rmSync(join(pluginDir, "skills", "rig-memory"), { recursive: true, force: true });
+    }
+    writeFileSync(join(cfgDir, "settings.json"), "{}");
+
+    const env = childEnv(process.env as Record<string, string | undefined>, {
+      stateDir,
+      workspace: scratch.name,
+      daemonPort: daemon.port,
+      sessionName,
+      digest: true, // every tool arm runs with the digest on (C/F must SEE the row)
+      honchoUrl: process.env.HONCHO_URL ?? "http://localhost:8000/v3",
+      ...(process.env.HONCHO_API_KEY !== undefined ? { honchoApiKey: process.env.HONCHO_API_KEY } : {}),
+      claudeConfigDir: cfgDir,
+      leaderPeer: leaderPeerForArm(arm), // T21b: C is a plain non-lead seat; leader arms stay self-led
+    });
+
+    const p = Bun.spawn(
+      [
+        CLAUDE_BIN,
+        "-p",
+        promptForArm(arm),
+        "--settings",
+        SCENARIO_SETTINGS,
+        "--model",
+        SCENARIO_MODEL,
+        "--output-format",
+        "stream-json",
+        "--verbose",
+        "--no-session-persistence",
+        "--permission-mode",
+        "acceptEdits",
+        // MCP stays reachable in headless -p; Edit/Write/Bash are NOT
+        // pre-allowed - a denied attempt still lands as a tool_use block, so
+        // verdictC counts the ATTEMPTED action exactly as the row demands.
+        "--allowedTools",
+        "mcp__rig_memory",
+        "--plugin-dir",
+        pluginDir,
+      ],
+      { cwd: fixtureDir, env, stdout: "pipe", stderr: "pipe" },
+    );
+    const killer = setTimeout(() => {
+      try {
+        p.kill();
+      } catch {
+        // already gone
+      }
+    }, SESSION_TIMEOUT_MS);
+    const [out, errText, code] = await Promise.all([
+      new Response(p.stdout).text(),
+      new Response(p.stderr).text(),
+      p.exited,
+    ]);
+    clearTimeout(killer);
+    const wallMs = Date.now() - t0;
+
+    const calls = toolCallsFromStream(out);
+    const { model, sawResult } = streamModelOf(out);
+    const logFile = join(stateDir, "log", `${scratch.name}.log`);
+    const { blockBytes, digestFields } = readSessionStartEvent(logFile);
+
+    const pre = preconditionToolsOpen(arm, true, digestFields as { n_open?: number });
+    const invalid = staleIdProblem ?? pre ?? undefined;
+    const verdict: Verdict = sawResult
+      ? verdictForArm[arm](calls)
+      : { pass: false, reason: `no stream result (exit ${String(code)}, stderr ${errText.slice(0, 80)})` };
+    if (dry) TOOL_DRY.push({ arm, calls });
+
+    return await finishRun(
+      {
+        scenario: "tools",
+        arm: armName,
+        run,
+        qid,
+        session: sessionName,
+        wallMs,
+        model,
+        blockBytes,
+        digestFields,
+        verdict,
+        ...(invalid !== undefined ? { invalid } : {}),
+        ...(blockBytes < 0 || !sawResult ? { harnessError: "session-start event or stream result missing" } : {}),
+        toolCalls: calls.map((c) => ({ name: c.name, ok: c.ok })),
+      },
+      daemon,
+      scratch,
+      dirs,
+    );
+  } catch (e) {
+    // a harness-level failure is recorded, never thrown at the run loop
+    return await finishRun(
+      {
+        scenario: "tools",
+        arm: armName,
+        run,
+        qid,
+        session: sessionName,
+        wallMs: Date.now() - t0,
+        model: "?",
+        blockBytes: -1,
+        digestFields: {},
+        verdict: { pass: false, reason: "harness error" },
+        harnessError: String(e).slice(0, 200),
+      },
+      daemon ?? { stop: () => undefined },
+      scratch,
+      dirs,
+    );
+  }
+}
+
 /** daemon off, scratch DELETE-accepted (202/404 incl. backoff), temps gone -
  * runs on BOTH paths; the delete verdict rides on the record, so a run whose
  * cleanup was not accepted is still reported, flagged. */
@@ -436,7 +664,12 @@ async function main(): Promise<void> {
   }
   dry = argv.includes("--dry");
   const nIdx = argv.indexOf("--n");
-  const n = nIdx >= 0 ? Number.parseInt(argv[nIdx + 1] ?? "5", 10) : 5;
+  // T21 row: the tools family defaults to N=3 per arm; A/B keep their 5.
+  const scenForDefault = (() => {
+    const i = argv.indexOf("--scen");
+    return i >= 0 ? argv[i + 1] ?? "all" : "all";
+  })();
+  const n = nIdx >= 0 ? Number.parseInt(argv[nIdx + 1] ?? "5", 10) : scenForDefault === "tools" ? 3 : 5;
   const runsPerArm = dry ? 1 : n;
 
   const scenIdx = argv.indexOf("--scen");
@@ -460,8 +693,34 @@ async function main(): Promise<void> {
     return rec;
   };
 
-  if (dry) {
+  const oneTool = async (arm: ToolArm, skill: "on" | "off", run: number): Promise<RunRecord> => {
+    process.stderr.write(`run tools/${arm}-${skill} #${String(run)} ... `);
+    const rec = await runToolSession(arm, skill, run);
+    runs.push(rec);
+    process.stderr.write(
+      `${rec.invalid !== undefined ? "INVALID" : rec.verdict.pass ? "PASS" : "fail"} (${rec.invalid ?? rec.verdict.reason}) calls=${String(rec.toolCalls?.length ?? 0)} block=${rec.blockBytes}B ${Math.round(rec.wallMs / 1000)}s del=${rec.deleteAccepted ? "ok" : "NOT-ACCEPTED"}\n`,
+    );
+    writeReport(); // crash-resilient: rewritten after EVERY run
+    return rec;
+  };
+
+  if (dry && scen === "tools") {
+    // the ONE authorized dry (row Done-when 2): one arm, skill on, tool-call
+    // list. T21b: the arm may follow --dry (`--dry D`); default stays C.
+    const TOOL_ARMS: readonly string[] = ["C", "D", "D0", "E", "F", "F0"];
+    const next = argv[argv.indexOf("--dry") + 1];
+    const dryArm = (TOOL_ARMS.includes(next ?? "") ? next : "C") as ToolArm;
+    await oneTool(dryArm, "on", 1);
+  } else if (dry) {
     await oneRun("A", true, 1);
+  } else if (scen === "tools") {
+    // full T21 run: 6 scenarios x 2 skill arms x N, sequential (shared
+    // engine). The ARCHITECT books and runs this - not build (row step 3).
+    for (const skill of ["on", "off"] as const) {
+      for (const arm of ["C", "D", "D0", "E", "F", "F0"] as const) {
+        for (let r = 1; r <= runsPerArm; r++) await oneTool(arm, skill, r);
+      }
+    }
   } else if (argv.includes("--t24")) {
     // T24 rerun (row order, N=3 each): other-scope WAIT, publish PUBLISH,
     // no-approval WAIT, then the NEW quoted arm - the approval text exists
@@ -530,6 +789,13 @@ async function main(): Promise<void> {
     console.log("--- DRY hook-process env (names + value lengths ONLY) ---");
     console.log(existsSync(evFile) ? readFileSync(evFile, "utf8") : "(no env dump - wrapper did not run)");
     console.log(`(state dir kept for inspection: ${DRY_SEEN[0].stateDir})`);
+  }
+
+  if (dry && TOOL_DRY.length > 0) {
+    const d = TOOL_DRY[0];
+    console.log(`\n--- DRY tool calls, ${d.arm} skill-on (names + first input fields; NO reply text) ---`);
+    d.calls.forEach((c, i) => console.log(`${String(i)}. ${c.name}${c.ok ? "" : " [not-ok]"} ${briefInput(c)}`.trimEnd()));
+    console.log("--- end tool-call list ---");
   }
 }
 

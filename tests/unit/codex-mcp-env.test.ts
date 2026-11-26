@@ -132,6 +132,18 @@ describe("C5j: bin/status.ts reads the settings file the same way", () => {
   test("with --settings and no HONCHO env: the config loads - memory OK, exit 0", async () => {
     const fake: FakeHoncho = await startFakeHoncho();
     const f = mkSeat(fake);
+    // ADR-0021 d2: healthy also means the hooks run; on a Codex seat that is
+    // the hooks.json beside the settings folder's parent naming our bins.
+    writeFileSync(
+      join(f.settings, "..", "..", "hooks.json"),
+      JSON.stringify({
+        hooks: {
+          SessionStart: [
+            { hooks: [{ type: "command", command: `bun run "/home/x/clone/openrig-honcho/bin/session-start.ts"` }] },
+          ],
+        },
+      }),
+    );
     // the peer still comes from the seat's own OPENRIG_SESSION_NAME (the
     // seat prints this command INTO that seat's terminal); no HONCHO_* here
     const r = await runStatus(["--harness", "codex", "--settings", f.settings], {

@@ -591,9 +591,11 @@ describe("T8 review: status", () => {
       const out = JSON.parse(text.slice(text.indexOf("\n") + 1));
       // O3 item 4: the report grew `outcomes` (collector state) - strict
       // list retargeted, same discipline as the T8c-fix note below.
+      // ADR-0021 d6: grew `auto_memory` (status line; never a health signal).
       expect(Object.keys(out)).toEqual([
         "config", "server", "session", "counters", "spool",
         "last_error_at", "last_error_class", "queue", "outcomes", "log_tail", "problems", "healthy",
+        "auto_memory",
       ]);
       expect(out.config).toEqual({
         host: new URL(h.fake.url).host,

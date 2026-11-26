@@ -228,8 +228,12 @@ describe("C5a: Codex settings from one owned file", () => {
     await badFile("settings-world-readable", path);
   });
 
-  test("relative path: one settings-relative-path line, plugin off, exit 0", async () => {
-    await badFile("settings-relative-path", "relative-settings.json");
+  // ADR-0021 decision 2 flipped this pin: a relative --settings path now
+  // RESOLVES against the current folder (the bin's cwd here is the repo
+  // root, where no such file exists), so it reports settings-missing instead
+  // of the old settings-relative-path auto-disable.
+  test("relative path: resolves against cwd; absent there, one settings-missing line, exit 0", async () => {
+    await badFile("settings-missing", "relative-settings-does-not-exist.json");
   });
 
   test("the --settings= form: one settings-bad-flag line, plugin off, exit 0", async () => {

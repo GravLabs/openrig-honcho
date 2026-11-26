@@ -15,7 +15,9 @@
 import { join } from "node:path";
 import { writeJsonAtomic } from "./lock.ts";
 import { readClosed } from "./closed.ts";
-import { readFileSync, existsSync } from "node:fs";
+import { createQueueRow } from "./nudge.ts";
+import { readFileSync, existsSync, writeFileSync, unlinkSync, chmodSync, renameSync } from "node:fs";
+import { randomBytes } from "node:crypto";
 import { currentLedger, toEntries, usedApproval, type LedgerEntry } from "./ledger.ts";
 import type { Conclusion } from "./honcho.ts";
 import type { Config } from "./env.ts";
@@ -95,10 +97,17 @@ export interface StaleState {
   /** v0.5.9 (ADR-0019 amended 2026-11-23): old ids the lead chose to keep
    * (stale_review keep): never proposed again. Absent in older files. */
   kept?: string[];
+  /** ADR-0021 d3: old ids an earlier --notify row already named, so the next
+   * day does not post the same entry again. Absent in older files; an older
+   * plugin reads the file fine (readStaleState rebuilds known fields only). */
+  notified?: string[];
 }
 
 /** At most this many kept ids are stored (oldest dropped first). */
 export const KEPT_MAX = 1000;
+
+/** ADR-0021 d3: at most this many notified ids (oldest dropped first). */
+export const NOTIFIED_MAX = 1000;
 
 /** <state-dir>/stale/<workspace>.json */
 export function staleStatePath(stateDir: string, workspace: string): string {
@@ -135,12 +144,18 @@ export function readStaleState(stateDir: string, workspace: string): StaleState 
     const kept = Array.isArray(v.kept)
       ? [...new Set(v.kept.filter((k): k is string => typeof k === "string" && /^d-[0-9a-f]{8}$/.test(k)))].slice(-KEPT_MAX)
       : [];
+    // ADR-0021 d3: same grammar and cap as kept. Unknown fields (an older
+    // plugin's file) are ignored by this rebuild - never a null read.
+    const notified = Array.isArray(v.notified)
+      ? [...new Set(v.notified.filter((k): k is string => typeof k === "string" && /^d-[0-9a-f]{8}$/.test(k)))].slice(-NOTIFIED_MAX)
+      : [];
     return {
       version: 1,
       classes,
       lastCheckedAt: typeof v.lastCheckedAt === "string" ? v.lastCheckedAt : null,
       proposals,
       ...(kept.length > 0 ? { kept } : {}),
+      ...(notified.length > 0 ? { notified } : {}),
     };
   } catch {
     return null;
@@ -358,4 +373,73 @@ export function keepProposals(st: StaleState, ids: string[]): { kept: string[]; 
   const evicted = Math.max(0, all.length - KEPT_MAX);
   st.kept = all.slice(-KEPT_MAX);
   return { kept, refused, evicted };
+}
+
+// ------------------------------------------------------- notify (ADR-0021 d3)
+
+/**
+ * ADR-0021 decision 3: `stale-check --notify <seat@rig>`. When pending
+ * proposals exist that no earlier row named (`notified`), write a 0600 body
+ * file in the state dir and post ONE queue row through the allowlisted
+ * runner (nudge.createQueueRow). The body holds ids and ages only - never a
+ * fact, a reason or any memory text. On success the named ids join `notified`
+ * (capped like kept, oldest dropped) and the body file is removed; on any
+ * failure `notified` is untouched. "posted" | "none" (nothing fresh) |
+ * "failed". Never throws; the caller keeps its own exit code either way.
+ */
+export async function notifyStaleProposals(
+  config: Config,
+  items: Conclusion[],
+  session: string,
+  deps: { run?: (cmd: string, args: string[], timeoutMs: number) => Promise<{ code: number; stdout: string }> } = {},
+): Promise<"posted" | "none" | "failed"> {
+  try {
+    const st = readStaleState(config.stateDir, config.workspace);
+    if (st === null) return "none";
+    const closed = readClosed(config.stateDir, config.workspace);
+    const inForce = new Set(currentLedger(toEntries(items), closed).map((e) => e.id));
+    const notified = new Set(st.notified ?? []);
+    const fresh = pendingForReview(st, inForce).filter((p) => !notified.has(p.oldId));
+    if (fresh.length === 0) return "none";
+    const daysOld = (iso: string): number => {
+      const t = Date.parse(iso);
+      return Number.isFinite(t) ? Math.max(0, Math.floor((Date.now() - t) / 86_400_000)) : 0;
+    };
+    const body =
+      fresh.map((p) => `${p.oldId} ${daysOld(p.oldAt)} days`).join("\n") +
+      "\nOpen stale_review on your seat; keep or retire each. Proposed by the daily stale check (openrig-honcho).";
+    const bodyPath = join(config.stateDir, "stale", `${config.workspace}.notify.txt`);
+    // F-D24 (R25 recheck, probe G G11): never write THROUGH a planted link.
+    // The body lands on a unique temp name in the same folder (O_EXCL, then
+    // chmod so no umask can widen it) and rename moves it over the path -
+    // rename REPLACES a symlink or hard link instead of writing through it.
+    // Same shape as writeJsonAtomic in lock.ts.
+    const tmp = `${bodyPath}.${process.pid}.${randomBytes(4).toString("hex")}.tmp`;
+    try {
+      writeFileSync(tmp, body, { mode: 0o600, flag: "wx" });
+      chmodSync(tmp, 0o600);
+      renameSync(tmp, bodyPath);
+    } catch {
+      try {
+        unlinkSync(tmp);
+      } catch {
+        // the temp was never created: nothing to clean
+      }
+      return "failed";
+    }
+    const summary = `Stale review: ${fresh.length} ledger entries may be out of date - run stale_review`;
+    const ok = await createQueueRow(config.stateDir, session, summary, bodyPath, deps);
+    try {
+      unlinkSync(bodyPath);
+    } catch {
+      // best effort: the file is 0600 inside the state dir either way
+    }
+    if (!ok) return "failed";
+    const all = [...new Set([...(st.notified ?? []), ...fresh.map((p) => p.oldId)])];
+    st.notified = all.slice(-NOTIFIED_MAX);
+    if (!writeStaleState(config.stateDir, config.workspace, st)) return "failed";
+    return "posted";
+  } catch {
+    return "failed";
+  }
 }

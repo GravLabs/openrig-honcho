@@ -7,11 +7,15 @@
 //
 // Failure rule (row: "the plugin stays off for that run exactly as it does
 // today with a bad setting"): any problem with the file - missing,
-// unreadable, not JSON, group/world readable, not a regular file (F7), a
-// relative or absent path, the --settings= form - is reported as one name-only token for _config.log and
+// unreadable, not JSON, group/world readable, not a regular file (F7), an
+// absent path, the --settings= form - is reported as one name-only token for _config.log and
 // the hook exits 0 with the plugin off. A token names the problem; it never
 // carries a path, a key or a value.
+// ADR-0021 decision 2: a RELATIVE --settings path resolves against the
+// current folder (it used to report the seat as disabled - what a hand-run
+// Codex status hit). mcp.ts and status.ts share this reader.
 import { readFileSync, statSync } from "node:fs";
+import { isAbsolute, resolve } from "node:path";
 
 export interface SettingsOutcome {
   /** The HONCHO_* string values the file holds ({} when no --settings flag). */
@@ -22,8 +26,10 @@ export interface SettingsOutcome {
 
 /** The path a --settings flag names, or null when the flag is absent. The
  * space-separated form is the only one accepted (same strictness as the
- * harness flag); `--settings=...` yields "" so the caller reports it. */
-function settingsPath(argv: readonly string[]): string | null {
+ * harness flag); `--settings=...` yields "" so the caller reports it.
+ * Exported for status.ts, which needs the path itself for the Codex
+ * hooks.json lookup, not only the file's values (ADR-0021 decision 2). */
+export function settingsPath(argv: readonly string[]): string | null {
   const i = argv.findIndex((a) => a === "--settings" || a.startsWith("--settings="));
   if (i < 0) return null;
   if (argv[i] !== "--settings") return ""; // the = form: wrong shape, never read
@@ -41,10 +47,11 @@ export function readSettingsFile(argv: readonly string[]): SettingsOutcome {
   const path = settingsPath(argv);
   if (path === null) return { vars: {}, problem: null }; // no flag: today's path
   if (path === "") return { vars: {}, problem: "settings-bad-flag" };
-  if (!path.startsWith("/")) return { vars: {}, problem: "settings-relative-path" };
+  // ADR-0021 decision 2: a relative path resolves against the current folder.
+  const abs = isAbsolute(path) ? path : resolve(path);
   let st: ReturnType<typeof statSync>;
   try {
-    st = statSync(path);
+    st = statSync(abs);
   } catch (err) {
     return {
       vars: {},
@@ -61,7 +68,7 @@ export function readSettingsFile(argv: readonly string[]): SettingsOutcome {
   if (!st.isFile()) return { vars: {}, problem: "settings-not-a-file" };
   let raw: string;
   try {
-    raw = readFileSync(path, "utf8");
+    raw = readFileSync(abs, "utf8");
   } catch {
     return { vars: {}, problem: "settings-unreadable" };
   }

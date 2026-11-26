@@ -13,8 +13,9 @@
 //   (a JSON parse error message can quote it, so raw parse errors are dropped);
 // - "rig_memory" in disabledMcpjsonServers -> refuse (exit 1, zero writes);
 // - backups <file>.bak-openrig-honcho-<UTC stamp> at mode 0600; atomic write
-//   (temp in the same dir, fsync, rename); settings.local.json ends 0600,
-//   .mcp.json keeps its existing mode;
+//   (temp in the same dir, fsync, rename); settings.local.json keeps its
+//   existing mode (F-R26-2; 0600 when we create it), .mcp.json keeps its
+//   existing mode;
 // - idempotent: a second run changes nothing and writes no backup;
 // - uninstall reverts ONLY an install from THIS plugin path: a hook group or
 //   mcpServers.rig_memory naming PLUGIN_DIR is the proof; without it
@@ -76,6 +77,15 @@
 //   ours leaves no lock behind; the folder's .gitignore (already *) covers it
 //   and the record never lists it. HONCHO_INSTALL_SEAM_MS (1..10000, test
 //   seam only) pauses the taker inside the two takeover windows.
+//
+// ADR-0021 decision 6 (owner 2026-11-26, "Every rig seat"): every install
+//   folder gets "autoMemoryEnabled": false in its .claude/settings.local.json
+//   - Claude Code's own auto-memory is NOT inherited by subfolders (probed
+//   2026-11-26), so hook-skipped folders need their own key. install.json
+//   carries autoMemoryAdded only when WE added the key; a key the user
+//   already had is left alone, any value, and named in the output; uninstall
+//   removes only our key. Codex installs are not touched (item 4, report
+//   only).
 
 import {
   accessSync,
@@ -107,6 +117,19 @@ import {
   codexNormalizedTimeout,
   codexTrustedHash,
 } from "../src/codex-trust.ts";
+// T15b (ADR-0010 decision 1) + ADR-0021 decision 1: the "ours" matcher and
+// the working-tree-bounded ancestor scan live in plugin/src so status.ts
+// asks the same question the installer just answered.
+import {
+  CODEX_RECORD_DIR_REL,
+  CODEX_SETTINGS_REL,
+  codexHookGroups,
+  findAncestorWithOurCodexHooks,
+  findAncestorWithOurHooks,
+  OPENRIG_HONCHO_SEGMENT_RE,
+  projectRootMarkers,
+  type AncestorScan,
+} from "../src/hookCoverage.ts";
 
 /** Synchronous short wait (bun has no sleepSync export on this host's
  * version; Atomics.wait on a fresh SAB is the import-free primitive). */
@@ -240,45 +263,11 @@ function installedFromOurPath(cur: { settings?: Json; mcp?: Json }): boolean {
   return false;
 }
 
-/** T15b (ADR-0010 decision 1): "ours in an ancestor" = a hook command naming
- * one of our four bins inside a folder named openrig-honcho. The ancestor is
- * a different copy of the plugin (pilot's own), so PLUGIN_DIR cannot
- * decide it - the folder NAME and the bin names do. */
-const OPENRIG_HONCHO_SEGMENT_RE = /(?:^|[/\\])openrig-honcho[/\\]/;
-const OUR_BIN_SEGMENT_RE = /(?:^|[/\\])bin[/\\](?:session-start|recall|user-prompt|stop)\.ts/;
-
-const namesOurBin = (v: unknown): boolean => {
-  if (typeof v === "string")
-    return OPENRIG_HONCHO_SEGMENT_RE.test(v) && OUR_BIN_SEGMENT_RE.test(v);
-  if (Array.isArray(v)) return v.some(namesOurBin);
-  if (isJsonObject(v)) return Object.values(v).some(namesOurBin);
-  return false;
-};
-
-/** Every ancestor of dir, parent first up to the filesystem root: does its
- * .claude/settings.local.json or .claude/settings.json run our hooks for it?
- * READ-ONLY - the whole check never writes; an unreadable or invalid ancestor
- * file is ignored for this check. Returns the first such ancestor dir. */
-function findAncestorWithOurHooks(dir: string): string | null {
-  let cur = dirname(dir);
-  for (;;) {
-    for (const rel of [join(".claude", "settings.local.json"), join(".claude", "settings.json")]) {
-      try {
-        const parsed: unknown = JSON.parse(readFileSync(join(cur, rel), "utf8"));
-        if (isJsonObject(parsed) && isJsonObject(parsed.hooks)) {
-          for (const groups of Object.values(parsed.hooks as Json)) {
-            if (Array.isArray(groups) && groups.some((g) => namesOurBin(g))) return cur;
-          }
-        }
-      } catch {
-        // absent, unreadable or invalid: ignored for this check
-      }
-    }
-    const parent = dirname(cur);
-    if (parent === cur) return null; // reached the root
-    cur = parent;
-  }
-}
+// T15b (ADR-0010 decision 1) bounded by ADR-0021 decision 1: findAncestorWithOurHooks
+// and the "ours" matcher live in ../src/hookCoverage.ts so the installer and
+// status ask one shared question: an ancestor's hooks cover a folder only
+// inside the same git working tree (Claude Code's real rule, probed 2026-11-25;
+// a plain-folder pilot root is not a repository, so its hooks never covered its pods).
 
 /** F3 preflight: the directory must exist and be writable+traversable, or be
  * reachable through writable ancestors (mkdir -p will create it later). */
@@ -742,6 +731,18 @@ interface InstallRecord {
    * this ancestor folder already runs them; records its directory. Unset
    * records (and v0.2.0 files on disk) keep today's exact shape. */
   hooksSkipped?: string;
+  /** ADR-0021 decision 6: true only when this install ADDED the top-level
+   * autoMemoryEnabled=false key to the folder's settings.local.json. Absent
+   * is a normal record: v0.5.11 or earlier, or a run that left the user's
+   * own key alone. */
+  autoMemoryAdded?: boolean;
+  /** F-R26-1 (R26, takeover rule): set once the owner took the key over -
+   * they deleted it or changed it after we set it. The claim above is DROPPED
+   * at the same moment (so uninstall can never remove a key the owner just
+   * chose), and this marker is what keeps a later install from re-adding a
+   * key that is now simply absent. Only ever true; absent means never taken
+   * over. */
+  autoMemoryHandoff?: true;
 }
 
 /** Rule 6: a record that is unreadable, the wrong shape or names another
@@ -757,12 +758,19 @@ function loadInstallRecord(path: string): InstallRecord | null {
   }
   const bad = `${INSTALL_JSON_REL}: not a valid install record - refusing, nothing written`;
   if (!isJsonObject(parsed)) die(bad);
-  // T15b: hooksSkipped is the only optional key; every other shape (missing,
-  // extra, or other keys) still refuses. An absent hooksSkipped is a normal
-  // v0.2.0 record.
+  // T15b: hooksSkipped; ADR-0021 d6: autoMemoryAdded; F-R26-1:
+  // autoMemoryHandoff - the three optional keys. An absent optional key is a
+  // normal record (v0.2.0/v0.5.11 shape); every other shape (extra or
+  // wrong-combination keys) still refuses.
   const keySet = Object.keys(parsed).sort().join(",");
-  if (keySet !== "enabledAdded,envAdded,plugin,version" && keySet !== "enabledAdded,envAdded,hooksSkipped,plugin,version")
-    die(bad);
+  const OPTIONAL_RECORD_KEYS = ["autoMemoryAdded", "autoMemoryHandoff", "hooksSkipped"];
+  const OK_RECORD_KEY_SETS = new Set<string>(
+    Array.from({ length: 8 }, (_, mask) =>
+      [...["enabledAdded", "envAdded", "plugin", "version"],
+        ...OPTIONAL_RECORD_KEYS.filter((_, i) => mask & (1 << i))].sort().join(","),
+    ),
+  );
+  if (!OK_RECORD_KEY_SETS.has(keySet)) die(bad);
   if (parsed.version !== 1) die(bad);
   if (typeof parsed.plugin !== "string") die(bad);
   if (typeof parsed.enabledAdded !== "boolean") die(bad);
@@ -783,12 +791,16 @@ function loadInstallRecord(path: string): InstallRecord | null {
     if (typeof parsed.hooksSkipped !== "string" || parsed.hooksSkipped === "") die(bad);
     hooksSkipped = parsed.hooksSkipped;
   }
+  if (parsed.autoMemoryAdded !== undefined && typeof parsed.autoMemoryAdded !== "boolean") die(bad);
+  if (parsed.autoMemoryHandoff !== undefined && parsed.autoMemoryHandoff !== true) die(bad);
   return {
     version: 1,
     plugin: parsed.plugin,
     envAdded: [...(parsed.envAdded as string[])],
     enabledAdded: parsed.enabledAdded,
     ...(hooksSkipped !== undefined ? { hooksSkipped } : {}),
+    ...(parsed.autoMemoryAdded !== undefined ? { autoMemoryAdded: parsed.autoMemoryAdded as boolean } : {}),
+    ...(parsed.autoMemoryHandoff === true ? { autoMemoryHandoff: true as const } : {}),
   };
 }
 
@@ -1039,8 +1051,9 @@ function planInstall(
   // is object-or-absent / array-or-absent.
   let skipLineAt = -1;
   if (ancestorHooksDir !== null) {
-    // T15b (ADR-0010 decision 1): the ancestor's settings apply to seats
-    // opened in this folder, so adding ours here would run every hook twice.
+    // T15b (ADR-0010 decision 1, bounded by ADR-0021 decision 1): this
+    // ancestor is in the same git working tree, so its settings apply to
+    // seats opened here - adding ours would run every hook twice.
     // Install everything except hooks; if an earlier install put ours here,
     // remove them in place (foreign groups keep their order). The ancestor
     // file itself is never written.
@@ -1134,6 +1147,45 @@ function planInstall(
     enabledAdded = true;
   }
 
+  // ADR-0021 decision 6 (owner 2026-11-26 "Every rig seat"): turn Claude
+  // Code's own auto-memory off for this folder - told an owner rule, the T21
+  // lead wrote private memory files instead of calling remember (1/3 with
+  // the skill, 0/3 without; 6/6 with auto-memory off). Probed 2026-11-26:
+  // the key is NOT inherited by subfolders, so every install folder gets
+  // its own, hook-skipped ones included. v0.5.11 never wrote this key, so
+  // an existing key without our record is not ours even in a v0.1.1-style
+  // install (unlike env).
+  // F-R26-1 (R26, takeover rule): a key of ours that the owner changed or
+  // deleted is the owner's choice - we drop the claim (the record no longer
+  // says we added it, so uninstall can never remove a key the owner just
+  // chose) and mark the handoff, which is what keeps a later install from
+  // re-adding a key that is now simply absent. Never re-add after a handoff.
+  let autoMemoryAdded = record?.autoMemoryAdded === true;
+  let autoMemoryHandoff = record?.autoMemoryHandoff === true;
+  if (!("autoMemoryEnabled" in settings)) {
+    if (autoMemoryAdded) {
+      autoMemoryAdded = false;
+      autoMemoryHandoff = true;
+      lines.push("settings: autoMemoryEnabled is yours now (changed after we set it); left as is");
+    } else if (autoMemoryHandoff) {
+      // taken over earlier: the key stays absent, quietly
+    } else {
+      settings.autoMemoryEnabled = false;
+      autoMemoryAdded = true;
+      lines.push("settings: autoMemoryEnabled=false (Claude Code auto-memory off for this seat)");
+    }
+  } else if (settings.autoMemoryEnabled !== false) {
+    if (autoMemoryAdded) {
+      autoMemoryAdded = false;
+      autoMemoryHandoff = true;
+      lines.push("settings: autoMemoryEnabled is yours now (changed after we set it); left as is");
+    } else {
+      lines.push("settings: left autoMemoryEnabled (not added by this install)");
+    }
+  }
+  // key present and false, not claimed (or claimed and ours): nothing to do -
+  // the user's own same-value key is left silently, as a same-value env key is.
+
   const settingsChanged = !deepEqual(settings, cur.settings ?? {});
 
   // .mcp.json: mcpServers.<ours>; a foreign rig_memory is refused, not replaced
@@ -1169,12 +1221,16 @@ function planInstall(
     envAdded: [...envAdded].sort(),
     enabledAdded,
     ...(ancestorHooksDir !== null ? { hooksSkipped: ancestorHooksDir } : {}),
+    ...(autoMemoryAdded ? { autoMemoryAdded: true } : {}),
+    ...(autoMemoryHandoff ? { autoMemoryHandoff: true } : {}),
   };
   const recordChanged = record === null || !deepEqual(nextRecord, record);
   if (recordChanged) {
     lines.push(
       `record: install.json (envAdded: ${nextRecord.envAdded.join(", ") || "none"}; enabledAdded: ${nextRecord.enabledAdded}` +
-        `${ancestorHooksDir !== null ? `; hooksSkipped: ${ancestorHooksDir}` : ""})`,
+        `${ancestorHooksDir !== null ? `; hooksSkipped: ${ancestorHooksDir}` : ""}` +
+        `${autoMemoryAdded ? "; autoMemoryAdded: true" : ""}` +
+        `${autoMemoryHandoff ? "; autoMemoryHandoff: true (claim dropped)" : ""})`,
     );
   }
   if (skipLineAt >= 0 && !settingsChanged && !mcpChanged && !skills && !recordChanged) {
@@ -1243,6 +1299,17 @@ function planUninstall(cur: { settings?: Json; mcp?: Json }, record: InstallReco
     lines.push(`settings: enabledMcpjsonServers -= ${SERVER_NAME}`);
   } else if (enabled !== undefined && enabled.includes(SERVER_NAME)) {
     lines.push(`settings: left enabledMcpjsonServers entry ${SERVER_NAME} (not added by this install)`);
+  }
+
+  // ADR-0021 decision 6: our autoMemoryEnabled key goes only when the record
+  // says WE added it; a key the user had stays and is named. A v0.5.11 (or
+  // no-record v0.1.1-style) install never wrote it, so without that record
+  // the key is left - unlike env, rule 5 does not claim it.
+  if ("autoMemoryEnabled" in settings && record?.autoMemoryAdded === true) {
+    delete settings.autoMemoryEnabled;
+    lines.push("settings: removed autoMemoryEnabled (this install added it)");
+  } else if ("autoMemoryEnabled" in settings) {
+    lines.push("settings: left autoMemoryEnabled (not added by this install)");
   }
 
   const mcp = structuredClone(cur.mcp ?? {}) as Json;
@@ -1454,7 +1521,10 @@ function main(): void {
     if (plan.settings !== null) {
       mkdirSync(join(args.dir, ".claude"), { recursive: true });
       const content = `${JSON.stringify(plan.settings, null, detectIndent(settingsPath))}\n`;
-      targets.push({ label: SETTINGS_REL, path: settingsPath, tmp: writeTemp(settingsPath, content, 0o600) });
+      // F-R26-2 (R26): an existing settings file keeps the mode its owner gave
+      // it, the way the .mcp.json write does; a file we create is still 0600.
+      const settingsKeepMode = existsSync(settingsPath) ? statSync(settingsPath).mode & 0o777 : 0o600;
+      targets.push({ label: SETTINGS_REL, path: settingsPath, tmp: writeTemp(settingsPath, content, settingsKeepMode) });
     }
     if (plan.mcp !== null) {
       const keepMode = existsSync(mcpPath) ? statSync(mcpPath).mode & 0o777 : 0o644;
@@ -1567,8 +1637,8 @@ function main(): void {
 const CODEX_HOOKS_REL = join(".codex", "hooks.json");
 const CODEX_CONFIG_REL = join(".codex", "config.toml");
 const CODEX_SKILLS_REL = join(".agents", "skills", "rig-memory");
-const CODEX_RECORD_DIR_REL = join(".codex", "openrig-honcho");
-const CODEX_SETTINGS_REL = join(CODEX_RECORD_DIR_REL, "settings.json");
+// CODEX_RECORD_DIR_REL / CODEX_SETTINGS_REL come from ../src/hookCoverage.ts
+// (F-B move); both files must name the same folders.
 const CODEX_INSTALL_JSON_REL = join(CODEX_RECORD_DIR_REL, "install.json");
 const CODEX_BACKUPS_REL = join(CODEX_RECORD_DIR_REL, "backups");
 const CODEX_BLOCK_BEGIN = "# BEGIN openrig-honcho rig_memory (managed - do not edit inside)";
@@ -1690,38 +1760,8 @@ function loadCodexRecord(path: string): CodexRecord | null {
   };
 }
 
-/** The hook groups a Codex seat runs: the Claude install's groups, same
- * order and timeouts, with the two Codex flags appended (decision 9).
- * C5l2: the plugin folder is a parameter (defaulting to OURS) so the
- * ancestor-skip check can rebuild the exact bytes a DIFFERENT copy of this
- * plugin left in an ancestor - nothing else passes it. */
-function codexHookGroups(settingsAbs: string, pluginDir: string = PLUGIN_DIR): Json {
-  const tail = `--harness codex --settings "${settingsAbs}"`;
-  const bin = (n: string): string => join(pluginDir, "bin", n);
-  return {
-    SessionStart: [
-      {
-        matcher: "startup|resume|clear|compact|fork",
-        hooks: [{ type: "command", command: `bun run "${bin("session-start.ts")}" ${tail}`, timeout: 8 }],
-      },
-    ],
-    UserPromptSubmit: [
-      { hooks: [{ type: "command", command: `bun run "${bin("recall.ts")}" ${tail}`, timeout: 5 }] },
-      {
-        hooks: [{ type: "command", command: `bun run "${bin("user-prompt.ts")}" ${tail}`, timeout: 30, async: true }],
-      },
-    ],
-    // Stop is SYNC on Codex (unlike the Claude file): codex-rs
-    // hooks/src/engine/command_runner.rs:190-196 aborts all async hook tasks
-    // at shutdown, and codex exec reaches shutdown right after dispatching
-    // the async Stop - the write never lands (live proof run 1, 04:21Z). A
-    // sync handler is awaited by the dispatcher, so the last memory write of
-    // a session cannot be outrun by the process exiting.
-    Stop: [
-      { hooks: [{ type: "command", command: `bun run "${bin("stop.ts")}" ${tail}`, timeout: 30 }] },
-    ],
-  };
-}
+// codexHookGroups moved to ../src/hookCoverage.ts (F-B, R25): the ancestor
+// scan and status need the exact same group bytes, from one definition.
 
 /**
  * Our whole managed block, header before any key (the probe's TOML trap).
@@ -1797,184 +1837,12 @@ function refuseCodexUserLayerDup(): void {
   }
 }
 
-/**
- * F15 (C5g, review F15) / F16 (C5h, review F16): the root markers Codex
- * uses are configurable - project_root_markers in the config (codex
- * config/src/project_root_markers.rs, default [".git"]), and an EMPTY list
- * DISABLES root detection. So absent (=> [".git"]) and empty (=> no marker
- * ever matches, nothing above the seat loads) mean different things and
- * stay distinct here. F16: Codex reads real TOML - multi-line arrays,
- * trailing commas and single-quoted strings all count - so the reader is
- * Bun.TOML (built in, READ-ONLY: the file is never written back through
- * it), not a hand-rolled single-line guesser; a warning that Codex refuses
- * the config must be TRUE, not a parser limitation. Absent: [.git]. An
- * array of strings, the empty array included: used as given. Anything else
- * (a scalar, an array with a non-string) and a file that does not parse at
- * all come back as problem + the .git default, and the caller says so in
- * the install output - in both cases Codex really does refuse the config.
- * User layer only (ADR-0016): Codex discovers roots from the layers merged
- * BEFORE project discovery - managed and CLI layers are out of scope.
- */
-function projectRootMarkers(userCfgText: string | undefined): { markers: string[]; problem: string | null } {
-  if (userCfgText === undefined) return { markers: [".git"], problem: null };
-  let doc: Record<string, unknown>;
-  try {
-    doc = Bun.TOML.parse(userCfgText) as Record<string, unknown>;
-  } catch (e) {
-    const msg = String((e as Error).message ?? e).split("\n")[0] ?? "";
-    return { markers: [".git"], problem: `does not parse as TOML (${msg})` };
-  }
-  if (doc.project_root_markers === undefined) return { markers: [".git"], problem: null }; // ABSENT
-  const v = doc.project_root_markers;
-  if (Array.isArray(v) && v.every((x) => typeof x === "string")) {
-    return { markers: v as string[], problem: null }; // strings only; [] = detection OFF
-  }
-  return { markers: [".git"], problem: "project_root_markers is not an array of strings" };
-}
-/**
- * C5d (the ADR-0010 decision-1 shape on the Codex side): does an ANCESTOR of
- * this folder already run our hooks? Codex layers project folders by walking
- * from the seat up to the root, reading each .codex/ folder it finds
- * (config/src/loader/mod.rs, the comment near line 134), so a second hooks
- * file below an ancestor that runs our hooks would fire every hook twice.
- * Detection is by content, like the Claude scan - but since C5l (S1) by
- * EXACT content: a group deep-equal to one this installer writes for the
- * ANCESTOR's own settings path (rebuilt with codexHookGroups) - and since
- * C5l2 (finding 3) rebuilt with the PLUGIN FOLDER THE ANCESTOR'S OWN
- * COMMAND NAMES, so an ancestor installed from a different copy of this
- * plugin (another checkout, a packaged copy) still skips instead of
- * double-firing: the skip only WITHHOLDS our own hooks, it grants nothing.
- * Naming our bin or our path in any other shape is not proof that Codex
- * fires OUR hooks there, and skipping on such "proof" would leave the seat
- * running nobody's hooks. READ-ONLY: unreadable or invalid ancestor files
- * are ignored for this check.
- *
- * C5l3 (fix 3): ANY one matching group used to skip. That is unsafe in the
- * other direction: an ancestor whose file was trimmed to one event turns
- * the OTHER events off for every seat below it if we skip, while our own
- * install would make the event it DOES hold fire twice. So: skip only on
- * a FULL ancestor (every one of our groups, in every event); an ancestor
- * holding SOME but not all is a REFUSAL with zero writes (the caller
- * names it and its events); holding none of ours is normal install.
- *
- * F12 (C5f, review F12): Codex loads ancestor project layers only UP TO the
- * project root marker (markers: the configured project_root_markers, default
- * [".git"]: codex config/src/loader/mod.rs:1468 and 1835-1880 with
- * project_root_markers.rs:5). An ancestor above that marker, or with no
- * marker anywhere, is NEVER loaded for this seat - skipping on it would
- * leave the seat running zero hooks. So the first ancestor with our hooks
- * counts only when the upward walk reaches a root marker at or above it; a
- * marker below it stops the search, and no marker to the filesystem root
- * finds nothing (an EMPTY markers list disables root detection that way,
- * matching Codex - F15). Returns that ancestor dir, parent first, or null.
- */
-/** C5l2 (finding 3): the plugin folders an ancestor's OWN commands name,
- * in our exact run-shape - bun run "<folder>/bin/<our bin>.ts" … - where
- * the folder sits inside a folder named openrig-honcho, the one shape a
- * copy of our plugin tree runs from. C5l3 (F21): the named bin file must
- * EXIST - a copy deleted after install is a ghost that runs nobody's
- * hooks, and skipping on it would leave the seat running zero hooks (the
- * exact harm the skip is meant to prevent, inverted). De-duplicated; []
- * when nothing matches, so a near-miss command (unquoted, no --settings,
- * foreign shape) yields no candidate and the match falls back to OUR copy
- * - which it fails. */
-const ANCESTOR_PLUGIN_DIR_RE = /"([^"]+)[/\\]bin[/\\](session-start|recall|user-prompt|stop)\.ts"/g;
-function ancestorCodexPluginDirs(hooks: Json): string[] {
-  const dirs = new Set<string>();
-  for (const groups of Object.values(hooks)) {
-    if (!Array.isArray(groups)) continue;
-    for (const g of groups) {
-      if (!isJsonObject(g) || !Array.isArray(g.hooks)) continue;
-      for (const h of g.hooks as unknown[]) {
-        if (!isJsonObject(h)) continue;
-        const cmd: unknown = h.command;
-        if (typeof cmd !== "string") continue;
-        for (const m of cmd.matchAll(ANCESTOR_PLUGIN_DIR_RE)) {
-          const folder = m[1] as string;
-          if (folder === "" || !OPENRIG_HONCHO_SEGMENT_RE.test(`${folder}/`)) continue;
-          if (existsSync(join(folder, "bin", `${m[2] as string}.ts`))) dirs.add(folder);
-        }
-      }
-    }
-  }
-  return [...dirs];
-}
-
-/** The C5l3 shape the ancestor scan returns: the nearest FULL ancestor to
- * skip on, and the nearest PARTIAL one (some groups held, not all) that
- * must instead refuse the install. A full ancestor anywhere wins: we then
- * write no hooks at all and add no double-fire, whatever sits above. */
-type AncestorScan = {
-  skip: string | null;
-  partial: { dir: string; held: string[]; missing: string[] } | null;
-};
-
-/** Classify one ancestor file against our groups rebuilt per candidate
- * plugin folder: FULL when every group of ours appears under its own
- * event (for some candidate), PARTIAL when some but not all appear (the
- * candidate with the most matches names the events), NONE otherwise. */
-function classifyAncestor(hooksObj: Json, settings: string): { full: boolean; held: string[]; missing: string[] } {
-  const cands = ancestorCodexPluginDirs(hooksObj);
-  let best: { held: string[]; missing: string[] } | null = null;
-  let bestMatched = 0;
-  for (const pd of cands.length > 0 ? cands : [PLUGIN_DIR]) {
-    const ourGroups = codexHookGroups(settings, pd);
-    const held: string[] = [];
-    const missing: string[] = [];
-    let matched = 0;
-    let required = 0;
-    for (const [event, ours] of Object.entries(ourGroups)) {
-      const want = asArray(ours) ?? [];
-      required += want.length;
-      const theirs = asArray(hooksObj[event]) ?? [];
-      const n = theirs.filter((g) => want.some((wg) => deepEqual(wg, g))).length;
-      if (n > 0) held.push(event);
-      if (n < want.length) missing.push(event);
-      matched += Math.min(n, want.length);
-    }
-    if (required > 0 && matched === required) return { full: true, held: [], missing: [] };
-    if (matched > bestMatched) {
-      bestMatched = matched;
-      best = { held, missing };
-    }
-  }
-  return { full: false, held: best?.held ?? [], missing: best?.missing ?? [] };
-}
-
-function findAncestorWithOurCodexHooks(dir: string, markers: string[]): AncestorScan {
-  const hasMarker = (p: string): boolean => markers.some((m) => existsSync(join(p, m)));
-  if (hasMarker(dir)) return { skip: null, partial: null }; // the seat IS the project root: no ancestor loads
-  let skip: string | null = null;
-  let partial: AncestorScan["partial"] = null;
-  let cur = dirname(dir);
-  for (;;) {
-    if (skip === null) {
-      try {
-        const parsed: unknown = JSON.parse(readFileSync(join(cur, ".codex", "hooks.json"), "utf8"));
-        if (isJsonObject(parsed) && isJsonObject(parsed.hooks)) {
-          // S1 (C5l): rebuilt from the ANCESTOR's own settings path - the
-          // exact bytes our installer would have left there - and compared
-          // with deepEqual, never by substring. C5l2: the rebuild runs
-          // once per LIVE plugin folder the ancestor's commands name (its
-          // own copy included), so a different copy of this plugin still
-          // matches; with no candidate the only one is OURS, and a
-          // near-miss or a ghost copy matches nothing and does not skip.
-          const verdict = classifyAncestor(parsed.hooks as Json, join(cur, CODEX_SETTINGS_REL));
-          if (verdict.full) skip = cur;
-          else if (verdict.held.length > 0 && partial === null) {
-            partial = { dir: cur, held: verdict.held, missing: verdict.missing };
-          }
-        }
-      } catch {
-        // absent, unreadable or invalid: ignored for this check
-      }
-    }
-    if (hasMarker(cur)) return { skip, partial }; // the root layer loads; above it nothing does
-    const parent = dirname(cur);
-    if (parent === cur) return { skip: null, partial: null }; // no marker to the fs root: no ancestor layer loads
-    cur = parent;
-  }
-}
+// projectRootMarkers moved to ../src/hookCoverage.ts (F-B, R25): status
+// must read the root markers exactly as the install decided them.
+// The Codex ancestor scan (ancestorCodexPluginDirs, AncestorScan,
+// classifyAncestor, findAncestorWithOurCodexHooks) moved VERBATIM to
+// ../src/hookCoverage.ts (F-B, R25): status re-derives the installer's
+// hook-skip answer with the SAME code, so the two cannot disagree.
 
 /** The hooks.json container shapes we may merge into (F1 as in Claude). */
 function checkCodexHooksContainers(cur: Json): void {

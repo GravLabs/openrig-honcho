@@ -7,6 +7,65 @@
 // error_class only (X1: no secrets, no echoed content).
 
 import { existsSync, readFileSync, statSync } from "node:fs";
+
+/** ADR-0021 decision 6 (status line): is Claude Code's own auto-memory off
+ * for this folder, and where does that answer come from? N-R26-3 (R26):
+ * Claude Code's own precedence - the FIRST file that sets the key wins:
+ * the folder's .claude/settings.local.json, then its .claude/settings.json,
+ * then the user's ~/.claude/settings.json, then the default (on). The
+ * detail names the exact file the value came from. An unreadable or
+ * non-object FIRST (folder-local) file is reported honestly - Claude Code
+ * reads that file too - while unreadable files further down the chain are
+ * simply skipped. Any other answer is reported honestly as on with its
+ * source: on is NOT unhealthy (the seat may want auto-memory). */
+export interface AutoMemoryState {
+  off: boolean;
+  detail: string;
+}
+
+export function autoMemoryState(cwd: string, home: string): AutoMemoryState {
+  const files = [
+    join(cwd, ".claude", "settings.local.json"),
+    join(cwd, ".claude", "settings.json"),
+    ...(home === "" ? [] : [join(home, ".claude", "settings.json")]),
+  ];
+  for (const [i, file] of files.entries()) {
+    let parsed: unknown;
+    let text: string;
+    try {
+      text = readFileSync(file, "utf8");
+    } catch (e) {
+      // an ABSENT file simply moves to the next source; a present-but-
+      // unreadable folder-local file is the honest answer (Claude Code
+      // reads it too), and deeper files are skipped.
+      if ((e as { code?: string }).code !== "ENOENT" && i === 0) {
+        return { off: false, detail: `no readable ${file} (Claude default: on)` };
+      }
+      continue;
+    }
+    try {
+      parsed = JSON.parse(text);
+    } catch {
+      if (i === 0) return { off: false, detail: `no readable JSON in ${file} (Claude default: on)` };
+      continue;
+    }
+    if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+      if (i === 0) return { off: false, detail: `${file} is not a JSON object (Claude default: on)` };
+      continue;
+    }
+    const rec = parsed as Record<string, unknown>;
+    if ("autoMemoryEnabled" in rec) {
+      return {
+        off: rec.autoMemoryEnabled === false,
+        detail: `autoMemoryEnabled=${JSON.stringify(rec.autoMemoryEnabled)} in ${file}`,
+      };
+    }
+  }
+  return {
+    off: false,
+    detail: `no autoMemoryEnabled in ${files[0]}, ${files[1]} or the user settings (Claude default: on)`,
+  };
+}
 import { join } from "node:path";
 import type { Config } from "./env.ts";
 import type { HonchoClient } from "./honcho.ts";
@@ -50,6 +109,9 @@ export interface StatusReport {
   };
   last_error_at: string | null;
   last_error_class: string | null;
+  /** ADR-0021 d6: set by the callers (bin and the status tool) from
+   * autoMemoryState(cwd); never a health signal. */
+  auto_memory?: AutoMemoryState;
   queue: unknown;
   /** O3 item 4 (ADR-0017 decision 4): the outcome collector is on-demand
    * only, so its last run is the outcomes file's mtime and its records are

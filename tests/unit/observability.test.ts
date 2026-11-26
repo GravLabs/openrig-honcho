@@ -106,9 +106,11 @@ const runBin = async (
   env: Record<string, string>,
   stdin: string,
   argv: string[] = [],
+  cwd: string = process.cwd(),
 ): Promise<{ code: number; out: string; err: string }> => {
   const p = Bun.spawn([process.execPath, join(REPO, "plugin/bin", bin), ...argv], {
     env,
+    cwd,
     stdin: "pipe",
     stdout: "pipe",
     stderr: "pipe" });
@@ -120,6 +122,20 @@ const runBin = async (
     new Response(p.stderr).text(),
   ]);
   return { code, out, err };
+};
+
+// ADR-0021 decision 2: the status bin calls a seat UNHEALTHY unless our
+// hooks cover the folder it runs in. These bin fixtures are config-only
+// seats, so the healthy pins plant a hooks file in the seat folder and run
+// the bin from there (the same shape review-t8c's healthy test adopted).
+const OUR_HOOKS_OBS = {
+  hooks: {
+    SessionStart: [{ hooks: [{ type: "command", command: `bun run "${join(REPO, "bin", "session-start.ts")}"` }] }],
+  },
+};
+const giveHooks = (dir: string): void => {
+  mkdirSync(join(dir, ".claude"), { recursive: true });
+  writeFileSync(join(dir, ".claude", "settings.local.json"), `${JSON.stringify(OUR_HOOKS_OBS, null, 2)}\n`);
 };
 
 describe("log.ts logEvent (O1)", () => {
@@ -399,10 +415,11 @@ describe("status: MCP tool + bin (O3)", () => {
       const env = {
         HOME: dir, HONCHO_STATE_DIR: dir, HONCHO_ENABLED: "true",
         HONCHO_URL: fake.url, HONCHO_WORKSPACE: WS, HONCHO_PEER: SELF };
-      const human = await runBin("status.ts", env, "");
+      giveHooks(dir);
+      const human = await runBin("status.ts", env, "", [], dir);
       expect(human.code).toBe(0);
       expect(human.out).toContain("memory: OK");
-      const j = await runBin("status.ts", env, "", ["--json"]);
+      const j = await runBin("status.ts", env, "", ["--json"], dir);
       expect(j.code).toBe(0);
       const st = JSON.parse(j.out) as Record<string, any>;
       expect(st.healthy).toBe(true);
@@ -422,10 +439,11 @@ describe("status: MCP tool + bin (O3)", () => {
       const env = {
         HOME: dir, HONCHO_STATE_DIR: dir, HONCHO_ENABLED: "true",
         HONCHO_URL: fake.url, HONCHO_WORKSPACE: WS, HONCHO_PEER: SELF };
-      const human = await runBin("status.ts", env, "");
+      giveHooks(dir);
+      const human = await runBin("status.ts", env, "", [], dir);
       expect(human.code).toBe(0);
       expect(human.out).toContain("memory: OK");
-      const j = await runBin("status.ts", env, "", ["--json"]);
+      const j = await runBin("status.ts", env, "", ["--json"], dir);
       expect(j.code).toBe(0);
       const st = JSON.parse(j.out) as Record<string, any>;
       expect(st.healthy).toBe(true);
@@ -445,19 +463,20 @@ describe("status: MCP tool + bin (O3)", () => {
       const env = {
         HOME: dir, HONCHO_STATE_DIR: dir, HONCHO_ENABLED: "true",
         HONCHO_URL: fake.url, HONCHO_WORKSPACE: WS, HONCHO_PEER: SELF };
-      const never = await runBin("status.ts", env, "");
+      giveHooks(dir);
+      const never = await runBin("status.ts", env, "", [], dir);
       expect(never.code, never.out + never.err).toBe(0);
       expect(never.out).toContain("outcomes: never run");
-      const jn = JSON.parse((await runBin("status.ts", env, "", ["--json"])).out) as Record<string, any>;
+      const jn = JSON.parse((await runBin("status.ts", env, "", ["--json"], dir)).out) as Record<string, any>;
       expect(jn.outcomes).toEqual({ last_run_at: null, records: 0 });
       expect(jn.healthy).toBe(true); // never-run is a fact, not a problem
       // three records at the collector's own path (one blank line between)
       const file = join(dir, "outcomes", `${WS}.jsonl`);
       mkdirSync(join(dir, "outcomes"), { recursive: true, mode: 0o700 });
       writeFileSync(file, '{"qitemId":"a"}\n{"qitemId":"b"}\n\n{"qitemId":"c"}\n', { mode: 0o600 });
-      const human = await runBin("status.ts", env, "");
+      const human = await runBin("status.ts", env, "", [], dir);
       expect(human.out).toMatch(/outcomes: last run \d{4}-\d{2}-\d{2}T\S+, 3 records/);
-      const j = JSON.parse((await runBin("status.ts", env, "", ["--json"])).out) as Record<string, any>;
+      const j = JSON.parse((await runBin("status.ts", env, "", ["--json"], dir)).out) as Record<string, any>;
       expect(j.outcomes.records).toBe(3);
       // the time IS the file's mtime - the report invents no clock
       expect(j.outcomes.last_run_at).toBe(statSync(file).mtime.toISOString());

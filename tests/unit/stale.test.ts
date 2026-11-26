@@ -9,7 +9,7 @@
 // Ledger entry ids here are d- + 8 HEX (the grammar parseEntry enforces).
 
 import { describe, expect, test } from "bun:test";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { Config } from "../../plugin/src/env.ts";
 import { createClient, type Conclusion } from "../../plugin/src/honcho.ts";
@@ -338,6 +338,86 @@ describe("V4 stale-check: the bin and the digest", () => {
       await fake.stop();
     }
   });
+
+  // ADR-0021 d3: the --notify flag at the bin. Neither test can reach a real
+  // rig: the bad session is refused by createQueueRow BEFORE the runner, and
+  // the quiet case never reaches the runner at all (no fresh ids).
+  const notifyBase = async (): Promise<{ fake: FakeHoncho; model: { stop: () => void }; dir: string }> => {
+    const fake: FakeHoncho = await startFakeHoncho();
+    const model = await startFakeModel(scriptReply);
+    const dir = makeTempDir("stale-n-");
+    fake.addConclusion(WS, {
+      content: ent(O1, "decision", "alfa: ship v1 from tag a1b2c3"),
+      observer_id: SELF,
+      observed_id: LEDGER_PEER,
+      created_at: ago(5 * HOUR),
+    });
+    fake.addConclusion(WS, {
+      content: ent(N1, "status", "delta: main moved to v2"),
+      observer_id: SELF,
+      observed_id: LEDGER_PEER,
+      created_at: ago(1 * HOUR),
+    });
+    return { fake, model, dir };
+  };
+  const notifyEnv = (dir: string, fake: FakeHoncho): Record<string, string> => ({
+    HOME: dir,
+    HONCHO_STATE_DIR: dir,
+    HONCHO_URL: fake.url,
+    HONCHO_WORKSPACE: WS,
+    HONCHO_PEER: SELF,
+    HONCHO_LEADER_PEER: SELF,
+    HONCHO_API_KEY: "k",
+    STALE_TEST_KEY: KEY,
+  });
+  test("--notify with a bad session: exit 0, counts printed, one notify-failed line, state untouched", async () => {
+    const { fake, model, dir } = await notifyBase();
+    try {
+      const r = await runBin(notifyEnv(dir, fake), [
+        "--url", model.url, "--model", "fake-model", "--key-env", "STALE_TEST_KEY",
+        "--notify", "lead@rig; rm",
+      ]);
+      expect(r.code, r.err).toBe(0); // the post failure never changes the exit code
+      expect(r.out).toContain("proposals added:");
+      expect(r.err).toContain("stale-check: notify failed");
+      const st = readStaleState(dir, WS);
+      expect(st?.proposals.map((p) => p.oldId)).toEqual([O1]); // the run's own proposal
+      expect(st?.notified).toBeUndefined(); // refusal leaves nothing recorded
+      expect(existsSync(join(dir, "stale", `${WS}.notify.txt`))).toBe(false);
+    } finally {
+      model.stop();
+      await fake.stop();
+    }
+  });
+
+  test("--notify when every pending id is already named: quiet run, exit 0, no failure line", async () => {
+    const { fake, model, dir } = await notifyBase();
+    try {
+      seedStaleNotified(dir); // O1 pre-named
+      const r = await runBin(notifyEnv(dir, fake), [
+        "--url", model.url, "--model", "fake-model", "--key-env", "STALE_TEST_KEY",
+        "--notify", "lead@rigx",
+      ]);
+      expect(r.code, r.err).toBe(0);
+      expect(r.out).toContain("proposals added:");
+      expect(r.err).toBe(""); // nothing to post, nothing failed
+      expect(readStaleState(dir, WS)?.notified).toEqual([O1]); // preserved through the run
+      expect(existsSync(join(dir, "stale", `${WS}.notify.txt`))).toBe(false);
+    } finally {
+      model.stop();
+      await fake.stop();
+    }
+  });
+
+  const seedStaleNotified = (dir: string): void => {
+    writeStaleState(dir, WS, {
+      version: 1,
+      classes: {},
+      lastCheckedAt: null,
+      proposals: [],
+      notified: [O1],
+    });
+  };
 
   // digest-side fixtures share one leader setup
   const leaderSetup = async (): Promise<{

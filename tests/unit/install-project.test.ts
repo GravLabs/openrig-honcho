@@ -98,8 +98,10 @@ describe("install-project: merge over the pilot-shaped fixture", () => {
     const r = await run(dir, [...INSTALL, "--leader", "lead-seat"]);
     expect(r.code, r.all).toBe(0);
     const s = readJson(SETTINGS(dir));
-    // every original key present, same ORDER (all our targets already existed)
-    expect(Object.keys(s)).toEqual(Object.keys(settingsFixture));
+    // every original key present, same ORDER (all our targets already
+    // existed); only our new autoMemoryEnabled key appends (ADR-0021 d6)
+    expect(Object.keys(s)).toEqual([...Object.keys(settingsFixture), "autoMemoryEnabled"]);
+    expect(s.autoMemoryEnabled).toBe(false);
     // foreign env: untouched values, our keys appended after them
     expect(Object.keys(s.env)).toEqual([...Object.keys(settingsFixture.env), "HONCHO_URL", "HONCHO_WORKSPACE", "HONCHO_LEADER_PEER"]);
     for (const [k, v] of Object.entries(settingsFixture.env)) expect(s.env[k]).toBe(v);
@@ -550,13 +552,16 @@ describe("install-project: T12c rules (F1-F4 + the container rule)", () => {
 });
 
 describe("install-project: file mode discipline", () => {
-  test("settings ends 600 even when it started 644; a new settings is 600; backups 600", async () => {
+  // F-R26-2 (R26) amended this rule: settings.local.json KEEPS the mode its
+  // owner gave it (the .mcp.json rule); only a file we create is 0600.
+  test("settings keeps the 644 it started with; a new settings is 600; backups 600", async () => {
     const dir = mkProject({ settings: settingsFixture, mcp: mcpFixture, modes: { settings: 0o644 } });
     await run(dir, INSTALL);
-    expect(statSync(SETTINGS(dir)).mode & 0o777).toBe(0o600);
+    expect(statSync(SETTINGS(dir)).mode & 0o777).toBe(0o644);
     const backs = backupNames(dir);
     expect(backs.length).toBeGreaterThan(0);
     for (const f of backs) expect(statSync(join(BACKUPS(dir), f)).mode & 0o777).toBe(0o600);
+    rmSync(dir, { recursive: true, force: true });
   });
 });
 
@@ -583,7 +588,9 @@ describe("install-project: T13b install record (ADR-0008 amendment)", () => {
       version: 1,
       plugin: PLUGIN,
       envAdded: ["HONCHO_LEADER_PEER", "HONCHO_URL", "HONCHO_WORKSPACE"], // sorted, names only
-      enabledAdded: true });
+      enabledAdded: true,
+      autoMemoryAdded: true, // ADR-0021 d6: we added the key
+    });
     expect(statSync(RECORD(dir)).mode & 0o777).toBe(0o600);
     expect(readFileSync(GITIGNORE(dir), "utf8")).toBe("*\n");
     expect(readdirSync(dir).sort()).toEqual([".claude", ".mcp.json"]); // nothing else in the root
@@ -682,6 +689,7 @@ describe("install-project: T13b install record (ADR-0008 amendment)", () => {
       plugin: PLUGIN,
       envAdded: ["HONCHO_URL", "HONCHO_WORKSPACE"],
       enabledAdded: true, // rule 5: the present entry counts as added
+      autoMemoryAdded: true, // v0.1.1 never wrote the auto-memory key: WE added it
     });
   });
 
@@ -1064,13 +1072,14 @@ describe("install-project: the T14e lock windows", () => {
   );
 });
 
-// T15b (ADR-0010 decision 1): a parent folder's .claude/settings.local.json
-// applies to seats opened in its subfolders, so an install there already runs
-// our hooks for this folder. A subfolder install then SKIPS hooks (everything
-// else installs), removes ours if an earlier install added them, and never
-// writes outside the target. The ancestor is recognised by a hook command
-// naming one of our four bins inside a folder named openrig-honcho - a decoy
-// path under /home/x names a clone we never touch.
+// T15b (ADR-0010 decision 1), bounded by ADR-0021 decision 1: a parent
+// folder's .claude/settings.local.json applies to seats opened in its
+// subfolders ONLY inside one git working tree, so an install there already
+// runs our hooks for this folder. A subfolder install then SKIPS hooks
+// (everything else installs), removes ours if an earlier install added them,
+// and never writes outside the target. The ancestor is recognised by a hook
+// command naming one of our four bins inside a folder named openrig-honcho -
+// a decoy path under /home/x names a clone we never touch.
 describe("install-project: T15b ancestor hook guard", () => {
   const RECORD = (d: string) => join(d, ".claude/openrig-honcho/install.json");
   const PSETTINGS = (d: string, file: string) => join(d, ".claude", file);
@@ -1089,10 +1098,14 @@ describe("install-project: T15b ancestor hook guard", () => {
       SessionStart: [{ hooks: [{ type: "command", command: "echo parent-foreign" }] }] } };
 
   // outer (the ancestor) / pods (the target), both temp; caller seeds the
-  // ancestor file it wants
+  // ancestor file it wants. outer holds a .git directory: under ADR-0021
+  // decision 1 the skip only applies inside one working tree, and these
+  // tests pin the inside-the-tree behaviour (the outside cases are the
+  // ADR-0021 block below).
   function mkNested(): { outer: string; inner: string } {
     const outer = makeTempDir("install-anc-");
     mkdirSync(join(outer, ".claude"), { recursive: true });
+    mkdirSync(join(outer, ".git"));
     const inner = join(outer, "pods");
     mkdirSync(inner);
     return { outer, inner };
@@ -1135,8 +1148,9 @@ describe("install-project: T15b ancestor hook guard", () => {
     expect(r.all).not.toContain("hooks: skipped");
     const s = readJson(SETTINGS(inner));
     expect(Object.keys(s.hooks).sort()).toEqual(["SessionStart", "Stop", "UserPromptSubmit"]); // installed as today
-    expect(readJson(RECORD(inner)).hooksSkipped).toBeUndefined(); // record keeps the old key set
-    expect(Object.keys(readJson(RECORD(inner))).sort().join(",")).toBe("enabledAdded,envAdded,plugin,version");
+    expect(readJson(RECORD(inner)).hooksSkipped).toBeUndefined(); // no skip recorded
+    // ADR-0021 d6 added autoMemoryAdded to the key set (the key was added here)
+    expect(Object.keys(readJson(RECORD(inner))).sort().join(",")).toBe("autoMemoryAdded,enabledAdded,envAdded,plugin,version");
     rmSync(outer, { recursive: true, force: true });
   });
 
@@ -1206,6 +1220,242 @@ describe("install-project: T15b ancestor hook guard", () => {
     expect(existsSync(SETTINGS(inner))).toBe(false); // nothing written
     expect(existsSync(join(inner, ".claude"))).toBe(false); // not even the folder
     expect(sha(readFileSync(PSETTINGS(outer, "settings.local.json")))).toBe(before);
+    rmSync(outer, { recursive: true, force: true });
+  });
+});
+
+// ADR-0021 decision 1 (v0.5.12): the ancestor rule follows Claude Code's real
+// one. A probe on 2026-11-25 showed a root folder's hooks reach a subfolder
+// only when the root is a git working tree, so an ancestor above the
+// working-tree root must NOT make the installer skip hooks: a plain-folder pilot root is not a
+// repository and its pods/ seat had never run our hooks. A working
+// tree is the nearest folder at or above the install folder holding a `.git`
+// entry, directory or file (linked worktrees use a file).
+describe("install-project: ADR-0021 ancestor rule follows the git working tree", () => {
+  const RECORD = (d: string) => join(d, ".claude/openrig-honcho/install.json");
+  const PSETTINGS = (d: string, file: string) => join(d, ".claude", file);
+  const OUR_CLONE = "/home/x/clone/openrig-honcho/plugin/bin";
+  const ancestorOurs = {
+    hooks: {
+      SessionStart: [{ hooks: [{ type: "command", command: `bun run "${OUR_CLONE}/session-start.ts"` }] }],
+      UserPromptSubmit: [{ hooks: [{ type: "command", command: `bun run "${OUR_CLONE}/recall.ts"` }] }],
+      Stop: [{ hooks: [{ type: "command", command: `bun run "${OUR_CLONE}/stop.ts"` }] }] } };
+
+  const threeEvents = ["SessionStart", "Stop", "UserPromptSubmit"];
+
+  test("non-git root runs our hooks: pods is NOT skipped, hooks are written there", async () => {
+    const outer = makeTempDir("install-nogit-"); // no .git anywhere up the tree
+    mkdirSync(join(outer, ".claude"), { recursive: true });
+    writeFileSync(PSETTINGS(outer, "settings.local.json"), `${JSON.stringify(ancestorOurs, null, 2)}\n`);
+    const inner = join(outer, "pods");
+    mkdirSync(inner);
+    const r = await run(inner, INSTALL);
+    expect(r.code, r.all).toBe(0);
+    expect(r.all).not.toContain("hooks: skipped");
+    expect(Object.keys(readJson(SETTINGS(inner)).hooks).sort()).toEqual(threeEvents);
+    expect(readJson(RECORD(inner)).hooksSkipped).toBeUndefined();
+    rmSync(outer, { recursive: true, force: true });
+  });
+
+  test("git root (a .git directory) runs our hooks: pods still skips", async () => {
+    const outer = makeTempDir("install-gitdir-");
+    mkdirSync(join(outer, ".claude"), { recursive: true });
+    mkdirSync(join(outer, ".git"));
+    writeFileSync(PSETTINGS(outer, "settings.local.json"), `${JSON.stringify(ancestorOurs, null, 2)}\n`);
+    const inner = join(outer, "pods");
+    mkdirSync(inner);
+    const r = await run(inner, INSTALL);
+    expect(r.code, r.all).toBe(0);
+    expect(r.all).toContain(`hooks: skipped, ${outer} already runs them for this folder`);
+    expect(readJson(SETTINGS(inner)).hooks).toBeUndefined();
+    expect(readJson(RECORD(inner)).hooksSkipped).toBe(outer);
+    rmSync(outer, { recursive: true, force: true });
+  });
+
+  test("a .git FILE at the root behaves exactly like a directory", async () => {
+    const outer = makeTempDir("install-gitfile-");
+    mkdirSync(join(outer, ".claude"), { recursive: true });
+    writeFileSync(join(outer, ".git"), "gitdir: /elsewhere/worktree\n"); // linked worktree shape
+    writeFileSync(PSETTINGS(outer, "settings.local.json"), `${JSON.stringify(ancestorOurs, null, 2)}\n`);
+    const inner = join(outer, "pods");
+    mkdirSync(inner);
+    const r = await run(inner, INSTALL);
+    expect(r.code, r.all).toBe(0);
+    expect(r.all).toContain(`hooks: skipped, ${outer} already runs them for this folder`);
+    expect(readJson(SETTINGS(inner)).hooks).toBeUndefined();
+    rmSync(outer, { recursive: true, force: true });
+  });
+
+  test("ancestor with our hooks ABOVE the working-tree root: not skipped", async () => {
+    const outer = makeTempDir("install-above-"); // outer: our hooks, no .git
+    mkdirSync(join(outer, ".claude"), { recursive: true });
+    writeFileSync(PSETTINGS(outer, "settings.local.json"), `${JSON.stringify(ancestorOurs, null, 2)}\n`);
+    const repo = join(outer, "repo"); // repo: the working-tree root, no hooks
+    mkdirSync(repo);
+    mkdirSync(join(repo, ".git"));
+    const inner = join(repo, "pods"); // install target
+    mkdirSync(inner);
+    const r = await run(inner, INSTALL);
+    expect(r.code, r.all).toBe(0);
+    expect(r.all).not.toContain("hooks: skipped");
+    expect(Object.keys(readJson(SETTINGS(inner)).hooks).sort()).toEqual(threeEvents);
+    expect(readJson(RECORD(inner)).hooksSkipped).toBeUndefined();
+    rmSync(outer, { recursive: true, force: true });
+  });
+});
+
+// ADR-0021 decision 6 (owner 2026-11-26 "Every rig seat"): every install
+// folder gets "autoMemoryEnabled": false; the record names it only when we
+// added it; uninstall removes only our key. A user key of ANY value is left
+// and named. v0.5.11 records without the key stay normal (upgrade path).
+describe("install-project: ADR-0021 d6 auto-memory off in every seat folder", () => {
+  const REC = (d: string) => join(d, ".claude/openrig-honcho/install.json");
+  const OUR_CLONE = "/home/x/clone/openrig-honcho/plugin/bin";
+  const PLUGIN = realpathSync(join(REPO, "plugin"));
+
+  test("fresh install adds the key, records it, names it", async () => {
+    const dir = mkProject();
+    const r = await run(dir, INSTALL);
+    expect(r.code, r.all).toBe(0);
+    expect(readJson(SETTINGS(dir)).autoMemoryEnabled).toBe(false);
+    expect(readJson(REC(dir)).autoMemoryAdded).toBe(true);
+    expect(r.all).toContain("autoMemoryEnabled=false");
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  test("idempotent re-run: no change, no backup, key stays", async () => {
+    const dir = mkProject();
+    expect((await run(dir, INSTALL)).code).toBe(0);
+    const before = readBytes(SETTINGS(dir));
+    const r = await run(dir, INSTALL);
+    expect(r.code, r.all).toBe(0);
+    expect(r.all).toContain("nothing to change (already installed)");
+    expect(readBytes(SETTINGS(dir)).equals(before)).toBe(true);
+    expect(backupNames(dir)).toEqual([]);
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  test("F-R26-1 our key flipped to true by hand is the owner's: kept, claim dropped", async () => {
+    const dir = mkProject();
+    expect((await run(dir, INSTALL)).code).toBe(0);
+    const s = readJson(SETTINGS(dir));
+    s.autoMemoryEnabled = true;
+    writeFileSync(SETTINGS(dir), `${JSON.stringify(s, null, 2)}\n`);
+    const r = await run(dir, INSTALL);
+    expect(r.code, r.all).toBe(0);
+    expect(readJson(SETTINGS(dir)).autoMemoryEnabled).toBe(true); // left as the owner set it
+    expect(r.all).toContain("autoMemoryEnabled is yours now (changed after we set it); left as is");
+    const rec = readJson(REC(dir));
+    expect("autoMemoryAdded" in rec).toBe(false); // claim dropped BEFORE the record was written
+    expect(rec.autoMemoryHandoff).toBe(true);
+    const u = await run(dir, ["--uninstall"]); // uninstall reads the record, never the value
+    expect(u.code, u.all).toBe(0);
+    expect(readJson(SETTINGS(dir)).autoMemoryEnabled).toBe(true); // uninstall leaves the owner's key
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  test("F-R26-1 our key deleted is the owner's: not re-added now, never again", async () => {
+    const dir = mkProject();
+    expect((await run(dir, INSTALL)).code).toBe(0);
+    const s = readJson(SETTINGS(dir));
+    delete s.autoMemoryEnabled;
+    writeFileSync(SETTINGS(dir), `${JSON.stringify(s, null, 2)}\n`);
+    const r = await run(dir, INSTALL);
+    expect(r.code, r.all).toBe(0);
+    expect("autoMemoryEnabled" in readJson(SETTINGS(dir))).toBe(false); // absent stays absent
+    expect(r.all).toContain("autoMemoryEnabled is yours now (changed after we set it); left as is");
+    expect(readJson(REC(dir)).autoMemoryHandoff).toBe(true);
+    const r2 = await run(dir, INSTALL); // a third install: still quiet
+    expect(r2.code, r2.all).toBe(0);
+    expect("autoMemoryEnabled" in readJson(SETTINGS(dir))).toBe(false);
+    expect(r2.all).not.toContain("autoMemoryEnabled=false");
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  test("F-R26-2 an existing settings file keeps its mode; one we create is 0600", async () => {
+    const dir = mkProject({ settings: { statusLine: { type: "command", command: "echo mine" } }, modes: { settings: 0o644 } });
+    const r = await run(dir, INSTALL);
+    expect(r.code, r.all).toBe(0);
+    expect(readJson(SETTINGS(dir)).autoMemoryEnabled).toBe(false); // the key did land
+    expect(statSync(SETTINGS(dir)).mode & 0o777).toBe(0o644); // and the mode survived
+    const fresh = mkProject(); // no settings file at all
+    expect((await run(fresh, INSTALL)).code).toBe(0);
+    expect(statSync(SETTINGS(fresh)).mode & 0o777).toBe(0o600);
+    rmSync(dir, { recursive: true, force: true });
+    rmSync(fresh, { recursive: true, force: true });
+  });
+
+  test("a user-owned key (any value) is left and named on install AND uninstall, never recorded", async () => {
+    const dir = mkProject({ settings: { autoMemoryEnabled: true } });
+    const r1 = await run(dir, INSTALL);
+    expect(r1.code, r1.all).toBe(0);
+    expect(readJson(SETTINGS(dir)).autoMemoryEnabled).toBe(true);
+    expect("autoMemoryAdded" in readJson(REC(dir))).toBe(false); // not ours
+    expect(r1.all).toContain("left autoMemoryEnabled (not added by this install)");
+    const r2 = await run(dir, ["--uninstall"]);
+    expect(r2.code, r2.all).toBe(0);
+    expect(readJson(SETTINGS(dir)).autoMemoryEnabled).toBe(true); // still there
+    expect(r2.all).toContain("left autoMemoryEnabled (not added by this install)");
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  test("uninstall of our install removes exactly the key", async () => {
+    const dir = mkProject();
+    expect((await run(dir, INSTALL)).code).toBe(0);
+    const r = await run(dir, ["--uninstall"]);
+    expect(r.code, r.all).toBe(0);
+    expect("autoMemoryEnabled" in readJson(SETTINGS(dir))).toBe(false);
+    expect(r.all).toContain("removed autoMemoryEnabled (this install added it)");
+    expect(existsSync(REC(dir))).toBe(false);
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  test("reinstall over the v0.5.11 layout: a record without the new key is normal", async () => {
+    const dir = mkProject({
+      settings: {
+        env: { HONCHO_URL: "http://10.9.9.9/v3", HONCHO_WORKSPACE: "honcho-bridge-scratch-inst" },
+        enabledMcpjsonServers: ["rig_memory"],
+      },
+      mcp: { mcpServers: { rig_memory: { command: "bun", args: ["run", `${PLUGIN}/bin/mcp.ts`] } } },
+    });
+    mkdirSync(join(dir, ".claude", "openrig-honcho"), { recursive: true });
+    writeFileSync(
+      REC(dir),
+      `${JSON.stringify({ version: 1, plugin: PLUGIN, envAdded: ["HONCHO_URL", "HONCHO_WORKSPACE"], enabledAdded: true }, null, 2)}\n`,
+    );
+    chmodSync(REC(dir), 0o600);
+    const r = await run(dir, INSTALL);
+    expect(r.code, r.all).toBe(0); // the absent key is a NORMAL record, not a refusal
+    expect(readJson(SETTINGS(dir)).autoMemoryEnabled).toBe(false);
+    expect(readJson(REC(dir)).autoMemoryAdded).toBe(true); // record rewritten with it
+    const u = await run(dir, ["--uninstall"]);
+    expect(u.code, u.all).toBe(0);
+    expect("autoMemoryEnabled" in readJson(SETTINGS(dir))).toBe(false);
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  test("hook-skipped install (T15b shape) still gets its own key - not inherited", async () => {
+    const outer = makeTempDir("install-am-anc-");
+    mkdirSync(join(outer, ".claude"), { recursive: true });
+    mkdirSync(join(outer, ".git"));
+    writeFileSync(
+      join(outer, ".claude/settings.local.json"),
+      `${JSON.stringify({
+        hooks: {
+          SessionStart: [{ hooks: [{ type: "command", command: `bun run "${OUR_CLONE}/session-start.ts"` }] }],
+          UserPromptSubmit: [{ hooks: [{ type: "command", command: `bun run "${OUR_CLONE}/recall.ts"` }] }],
+          Stop: [{ hooks: [{ type: "command", command: `bun run "${OUR_CLONE}/stop.ts"` }] }],
+        },
+      }, null, 2)}\n`,
+    );
+    const inner = join(outer, "pods");
+    mkdirSync(inner);
+    const r = await run(inner, INSTALL);
+    expect(r.code, r.all).toBe(0);
+    expect(r.all).toContain("hooks: skipped"); // hooks skipped...
+    expect(readJson(SETTINGS(inner)).autoMemoryEnabled).toBe(false); // ...the key is not
+    expect(readJson(REC(inner)).hooksSkipped).toBe(outer);
+    expect(readJson(REC(inner)).autoMemoryAdded).toBe(true);
     rmSync(outer, { recursive: true, force: true });
   });
 });

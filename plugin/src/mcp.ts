@@ -38,7 +38,7 @@ import {
   validQitem,
   type LedgerEntry,
 } from "./ledger.ts";
-import { collectStatus } from "./status.ts";
+import { autoMemoryState, collectStatus } from "./status.ts";
 import { classTag, trustClass, trustTag, type TrustClass } from "./trust.ts";
 import { ownerTurnCheck, readTurn } from "./turn.ts";
 import { readFileSync } from "node:fs";
@@ -131,7 +131,7 @@ function toolList(deps: McpDeps): unknown[] {
     {
       name: "ask",
       description:
-        "Slow reasoning over everything the rig remembers (30-50 s, times out at 90 s). Use search first; ask only when a lookup was not enough.",
+        "Use when search was not enough and the question needs reasoning across many sessions (\"why did we move off X, and what broke?\"). Slow: 30-50 s, times out at 90 s; not on every turn.",
       inputSchema: {
         type: "object",
         properties: {
@@ -145,7 +145,7 @@ function toolList(deps: McpDeps): unknown[] {
     {
       name: "search",
       description:
-        "Fast lookup in the rig's shared memory (about a second): past decisions, work done, and what another seat found. Use it before guessing about past work. ask is slow (30-50 s) and reasons over everything; use ask for questions that need reasoning, not for lookups.",
+        "Use before you claim a queue item, before you decide something the team may already have decided, when asked what was decided or why, and right after a compaction. Fast lookup (about a second) in the rig's shared memory: past decisions, work done, what another seat found. Query with the thing's name, e.g. words from the queue summary.",
       inputSchema: {
         type: "object",
         properties: {
@@ -166,7 +166,7 @@ function toolList(deps: McpDeps): unknown[] {
     tools.push({
       name: "remember",
       description:
-        "Record an explicit decision, owner approval or status report (leader only) into shared memory. Optional: reason, scope (rig | mission | a qitem id; default mission), supersedes (an in-force d-id this replaces), kind (decision default | approval | status; the newest status per scope and mission is the one in force). kind approval, and superseding an approval, are accepted only on a turn the owner started. For a one-time approval, pass ends_with (the qitem id of the row doing that work): it is used once that row closes. The reply names the new decision id.",
+        "Use in the same turn when the owner states a rule or decision for the team (\"from now on ...\", \"we always ...\"): record it here, not in a local memory file, which no other seat sees. For what the team must keep doing (leader only): an owner decision, a convention the team must follow, an approval on the owner's own word, or release/branch/waiting-for state as a status. One clear sentence with the reason; not for progress notes. Optional: reason, scope (rig | mission | a qitem id; default mission), supersedes (an in-force d-id this replaces), kind (decision default | approval | status; the newest status per scope and mission is the one in force). kind approval, and superseding an approval, are accepted only on a turn the owner started. For a one-time approval, pass ends_with (the qitem id of the row doing that work): it is used once that row closes. The reply names the new decision id.",
       inputSchema: {
         type: "object",
         properties: {
@@ -186,7 +186,7 @@ function toolList(deps: McpDeps): unknown[] {
     tools.push({
       name: "retire",
       description:
-        "Retire a decision, approval or status (leader only): it stays in memory for history but leaves every in-force view.",
+        "Use when a decision, approval or status no longer holds (leader only); prefer remember with supersedes when something replaces it. It stays in memory as history but leaves every in-force view.",
       inputSchema: {
         type: "object",
         properties: {
@@ -200,7 +200,7 @@ function toolList(deps: McpDeps): unknown[] {
     tools.push({
       name: "stale_review",
       description:
-        "List every pending stale proposal (leader only): the older entry, why a newer one may have made it stale, its age, and the exact retire call. Pass keep (d-ids) for entries that should stand: they are never proposed again. Nothing is retired by this tool.",
+        "Use when the daily stale check posts a row or the digest says entries may be out of date (leader only). Lists every pending stale proposal: the older entry, why a newer one may have made it stale, its age, and the exact retire call. Pass keep (d-ids) for entries that should stand: they are never proposed again. Nothing is retired by this tool.",
       inputSchema: {
         type: "object",
         properties: {
@@ -216,7 +216,7 @@ function toolList(deps: McpDeps): unknown[] {
   tools.push(
     {
       name: "mission",
-      description: "Set the rig's active mission; returns the normalised id and scope.",
+      description: "Use when the rig starts a clearly separate OpenRig mission: memory (digests, recall) is then kept per mission. Queue items tagged mission:<id> set it by themselves; most rigs stay in general. Returns the normalised id and scope.",
       inputSchema: {
         type: "object",
         properties: { id: { type: "string" } },
@@ -225,7 +225,7 @@ function toolList(deps: McpDeps): unknown[] {
     },
     {
       name: "status",
-      description: "Is memory working? Config, server, session, spool, last error, queue.",
+      description: "Use when memory seems absent or wrong: config, server, session, spool, last error, queue.",
       inputSchema: { type: "object", properties: {} },
     },
   );
@@ -940,6 +940,8 @@ async function callStatus(deps: McpDeps): Promise<ToolResult> {
   // V2 (ADR-0019 d2): one label line above the JSON - status reports OpenRig
   // state (authoritative); the JSON bytes and the bin (collectStatus) unchanged.
   const report = await collectStatus(config, client);
+  // ADR-0021 d6: the same auto-memory line the bin prints; never a health signal.
+  report.auto_memory = autoMemoryState(process.cwd(), process.env.HOME ?? "");
   const stale = staleServerProblem(LOADED_VERSION, installedVersion(PLUGIN_DIR));
   if (stale !== null) {
     report.problems.push(stale);

@@ -238,6 +238,32 @@ off and writes the reason, never the value, to `<state dir>/log/_config.log`.
 | `HONCHO_RECALL_NOVELTY` | on | `off` keeps recall items the seat's transcript already holds, and blocks of one item. |
 | `HONCHO_SKIP_ROUTINE` | on | `off` sends routine status messages through the deriver as well. |
 
+### Claude Code's own auto-memory (v0.5.12)
+
+From v0.5.12 the installer writes `"autoMemoryEnabled": false` into every
+folder it installs into (`.claude/settings.local.json`). Such a seat no
+longer loads Claude Code's private memory notes; the note files stay on
+disk untouched, and nothing else about the seat changes. The key is not
+inherited by subfolders, so each folder gets its own. `status` prints an
+`auto-memory:` line and names the file the answer came from, following
+Claude Code's own precedence: the folder's `.claude/settings.local.json`,
+then its `.claude/settings.json`, then your `~/.claude/settings.json`,
+then Claude Code's default (on).
+
+To opt a seat out for good, delete that key or set it to true in the
+folder's `.claude/settings.local.json`: the installer sees your edit,
+drops its claim on the key, and never re-adds it - your choice stays
+across reinstalls, and an uninstall will not remove a key you chose. A
+key that was yours before the install is never touched at all, and the
+uninstall removes only a key the installer itself added. If you uninstall
+from a folder whose install record is gone (an old install from before
+records, or a hand-removed one), the uninstall leaves autoMemoryEnabled
+exactly as it is; delete the key by hand if you want Claude Code's
+auto-memory back. To turn Claude Code's auto-memory off again after an opt-out, either set the key
+back to `false` by hand (it stays yours, so an uninstall leaves it), or uninstall and reinstall the
+folder (the installer then adds and owns the key again). Codex seats are unchanged: Codex has no memory feature
+on by default.
+
 ## The `rig_memory` tools
 
 | Tool | Use it when |

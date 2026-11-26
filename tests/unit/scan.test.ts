@@ -319,3 +319,59 @@ describe("GATED_COMMIT pin (T13a: release.ts writes it under release/)", () => {
     expect(r.ok).toBe(true);
   });
 });
+
+// ADR-0021 d3 (X5 amended): the runner speaks two queue verbs and lives in
+// nudge.ts; the scan pins both quoted pairs and the rig argv head.
+describe("scan.ts: the queue verb pins (ADR-0021 d3)", () => {
+  const NUDGE_OK =
+    "import { execFile } from \"node:child_process\";\n" +
+    "execFile(cmd, args, {}, cb);\n" +
+    "const a = run(\"rig\", [\"queue\", \"show\", id, \"--json\"], 3000);\n" +
+    "const b = run(\"rig\", args, 10000);\n";
+
+  test("both allowlisted shapes pass", () => {
+    const r = scanRepo(mkRepo({ "plugin/src/nudge.ts": NUDGE_OK }));
+    expect(r.fails).toEqual([]);
+    expect(r.ok).toBe(true);
+  });
+
+  test("any other quoted queue verb fails, wherever it sits in plugin/", () => {
+    const bad = NUDGE_OK + "const c = run(\"rig\", [\"queue\", \"purge\", id, \"--json\"]);\n";
+    const r = scanRepo(mkRepo({ "plugin/src/nudge.ts": bad }));
+    expect(r.fails.some((f) => f.kind === "queue_verb")).toBe(true);
+    const r2 = scanRepo(mkRepo({
+      "plugin/src/nudge.ts": NUDGE_OK,
+      "plugin/src/other.ts": "const c = [\"queue\", \"delete\", x];\n",
+    }));
+    expect(r2.fails.some((f) => f.kind === "queue_verb" && f.file === "plugin/src/other.ts")).toBe(true);
+  });
+
+  test("a rig argv head outside nudge.ts fails; prose mentioning rig does not", () => {
+    const r = scanRepo(mkRepo({
+      "plugin/src/nudge.ts": NUDGE_OK,
+      "plugin/src/other.ts": "const c = run(\"rig\", [\"queue\", \"show\", x, \"--json\"], 1);\n",
+    }));
+    expect(r.fails.some((f) => f.kind === "rig_call" && f.file === "plugin/src/other.ts")).toBe(true);
+    // the exact real inject.ts comment shape: no argv follows, not a call
+    const prose = scanRepo(mkRepo({
+      "plugin/src/nudge.ts": NUDGE_OK,
+      "plugin/src/other.ts": "// a ledger scope is \"rig\", \"mission\", or a qitem id\n",
+    }));
+    expect(prose.fails.some((f) => f.kind === "rig_call")).toBe(false);
+    expect(prose.ok).toBe(true);
+  });
+
+  test("a queue create argv without --source fails; with it passes (timer probe)", () => {
+    const noSrc =
+      NUDGE_OK +
+      "const c = run(\"rig\", [\"queue\", \"create\", \"--destination\", s, \"--summary\", t, \"--body-file\", p, \"--tags\", \"openrig-honcho,stale-review\", \"--json\"], 10000);\n";
+    const r = scanRepo(mkRepo({ "plugin/src/nudge.ts": noSrc }));
+    expect(r.fails.some((f) => f.kind === "queue_source" && f.file === "plugin/src/nudge.ts")).toBe(true);
+    const ok =
+      NUDGE_OK +
+      "const c = run(\"rig\", [\"queue\", \"create\", \"--destination\", s, \"--source\", src, \"--summary\", t, \"--body-file\", p, \"--tags\", \"openrig-honcho,stale-review\", \"--json\"], 10000);\n";
+    const r2 = scanRepo(mkRepo({ "plugin/src/nudge.ts": ok }));
+    expect(r2.fails).toEqual([]);
+    expect(r2.ok).toBe(true);
+  });
+});

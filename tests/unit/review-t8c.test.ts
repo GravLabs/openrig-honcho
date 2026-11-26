@@ -128,8 +128,10 @@ const spawnBin = async (
   env: Record<string, string>,
   stdinText?: string,
   args: string[] = [],
+  cwd?: string, // ADR-0021 d2: status answers about the CURRENT folder
 ): Promise<{ code: number; out: string; err: string }> => {
   const p = Bun.spawn([process.execPath, join(REPO, binRel), ...args], {
+    ...(cwd !== undefined ? { cwd } : {}),
     env,
     stdin: "pipe",
     stdout: "pipe",
@@ -408,9 +410,22 @@ describe("T8c review: bin/status.ts exit codes", () => {
   test("healthy: exit 0, healthy true", async () => {
     const h = await mk();
     try {
-      const r = await spawnBin("plugin/bin/status.ts", binEnv(h.dir, h.fake.url), undefined, ["--json"]);
+      // ADR-0021 decision 2: missing hooks make a seat unhealthy, so a seat
+      // that must be healthy needs hooks where it sits - a settings file
+      // naming our bins (decoy clone path) in the seat folder.
+      mkdirSync(join(h.dir, ".claude"), { recursive: true });
+      writeFileSync(
+        join(h.dir, ".claude", "settings.local.json"),
+        JSON.stringify({
+          hooks: {
+            SessionStart: [
+              { hooks: [{ type: "command", command: 'bun run "/home/x/clone/openrig-honcho/bin/session-start.ts"' }] }],
+          } }, null, 2) + "\n",
+      );
+      const r = await spawnBin("plugin/bin/status.ts", binEnv(h.dir, h.fake.url), undefined, ["--json"], h.dir);
       const j = JSON.parse(r.out) as Record<string, any>;
       expect(j.healthy).toBe(true);
+      expect(j.hooks).toEqual({ present: true, where: join(h.dir, ".claude", "settings.local.json") });
       expect(r.code).toBe(0);
       expect(r.err).toBe("");
     } finally {

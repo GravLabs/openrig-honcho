@@ -5,17 +5,20 @@
 //   bun plugin/bin/stale-check.ts --url <OpenAI-compatible base, e.g.
 //     http://host:port/v1> --model <name> --key-env <NAME>
 //     [--workspace <ws>] [--state-dir <dir>] [--timeout-ms <n>]
+//     [--notify <seat@rig>]
 // Honcho side: loadConfig from the environment like status.ts (--workspace /
 // --state-dir override the resolved values). The model API key is read ONLY
 // from process.env[<NAME>]: never printed, logged, stored or echoed in an
 // error; an unset variable refuses the run. Reads the ledger read-only
 // (fetchLedgerPair), computes in force with ledger.ts, and stores proposals
-// plus rule-or-state classes in one local 0600 file. Prints COUNTS only.
+// plus rule-or-state classes in one local 0600 file. Prints COUNTS only;
+// --notify <seat@rig> (ADR-0021 d3) may post ONE queue row naming pending
+// ids with ages - never memory text - through the allowlisted runner.
 
 import { loadConfig } from "../src/env.ts";
 import { createClient } from "../src/honcho.ts";
 import { fetchLedgerPair } from "../src/reader.ts";
-import { runStaleCheck, type ModelTarget } from "../src/stale.ts";
+import { notifyStaleProposals, runStaleCheck, type ModelTarget } from "../src/stale.ts";
 
 function flag(argv: string[], name: string): string | undefined {
   const i = argv.indexOf(name);
@@ -30,7 +33,7 @@ async function main(): Promise<void> {
   const model = flag(argv, "--model");
   const keyEnv = flag(argv, "--key-env");
   const usage = (why: string): never => {
-    process.stderr.write(`stale-check: ${why}\nusage: stale-check --url <base-url/v1> --model <name> --key-env <ENVVAR> [--workspace <ws>] [--state-dir <dir>] [--timeout-ms <n>]\n`);
+    process.stderr.write(`stale-check: ${why}\nusage: stale-check --url <base-url/v1> --model <name> --key-env <ENVVAR> [--workspace <ws>] [--state-dir <dir>] [--timeout-ms <n>] [--notify <seat@rig>]\n`);
     process.exit(2);
   };
   if (url === undefined || !/^https?:\/\//.test(url)) usage("--url <OpenAI-compatible base, e.g. http://host:port/v1> is required");
@@ -91,6 +94,14 @@ async function main(): Promise<void> {
   process.stdout.write(
     `entries classified: ${r.classified} | entries checked: ${r.checked} | proposals added: ${r.added} | model seconds: ${r.modelSeconds}\n`,
   );
+  // ADR-0021 decision 3: the counts print either way; a failed post costs
+  // one stderr line and changes nothing else (same exit code, notified not
+  // touched). No memory text leaves this process.
+  const notify = flag(argv, "--notify");
+  if (notify !== undefined) {
+    const n = await notifyStaleProposals(config, pair.items, notify);
+    if (n === "failed") process.stderr.write("stale-check: notify failed\n");
+  }
 }
 
 main().catch(() => {

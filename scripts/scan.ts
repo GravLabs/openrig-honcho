@@ -24,7 +24,11 @@
 //     exec(, no spawn(, no shell: true, no eval(, no new Function; the
 //     child_process module is importable only in nudge.ts (a bare `.exec(`
 //     on a RegExp - the 6 existing call sites - is not the child_process
-//     surface; the import check is what closes that door).
+//     surface; the import check is what closes that door). ADR-0021 d3
+//     (X5 amended): the only quoted rig verbs in plugin/ are "queue","show"
+//     and "queue","create" (adjacent quoted literals), and a "rig" argv
+//     head (quoted "rig" followed by the argv: an array literal or the args
+//     variable) outside nudge.ts fails.
 
 import { execSync } from "node:child_process";
 
@@ -271,6 +275,24 @@ export function scanRepo(root: string): ScanResult {
       void m;
       if (!isNudge) execFileOutsideNudge += 1;
     }
+    // ADR-0021 d3 (X5 amended): the runner speaks exactly two queue verbs;
+    // any other quoted "queue",<verb> pair in plugin/ fails, and so does a
+    // "rig" argv head (quoted "rig" followed by the argv: a literal array or
+    // the args variable) anywhere outside nudge.ts. A "rig" mentioned in
+    // prose without an argv is not a call (see the scope comment in
+    // inject.ts) and does not match.
+    for (const m of text.matchAll(/"queue"\s*,\s*"([a-zA-Z-]+)"/g))
+      if (m[1] !== "show" && m[1] !== "create")
+        fail(rel, lineOf(text, m.index as number), "queue_verb", `the only quoted "queue" verbs in plugin/ are "show" and "create" (X5)`);
+    // the create argv must declare its origin: the daily check runs from a
+    // systemd timer, outside any seat, where queue create refuses without
+    // --source (architect probe 2026-11-25)
+    for (const m of text.matchAll(/"queue"\s*,\s*"create"/g))
+      if (!text.includes('"--source"'))
+        fail(rel, lineOf(text, m.index as number), "queue_source", `the "queue","create" argv must carry a quoted "--source" (the timer is not a seat, X5)`);
+    if (!isNudge)
+      for (const m of text.matchAll(/"rig"\s*,\s*(?:\[|args\b)/g))
+        fail(rel, lineOf(text, m.index as number), "rig_call", `a "rig" argv head outside plugin/src/nudge.ts (X5)`);
     for (const m of text.matchAll(/exec\s*\(/g)) {
       const before = text[(m.index as number) - 1];
       if (before !== ".") fail(rel, lineOf(text, m.index as number), "exec", "bare exec( is forbidden (X5)");

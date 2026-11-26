@@ -1,5 +1,29 @@
 # Changelog
 
+## v0.5.12 (2026-11-26)
+
+- **Every seat gets its hooks.** The installer no longer assumes a parent folder's hooks
+  cover a subfolder. Claude Code applies them only inside one git repository, so seats in
+  a subfolder of a plain folder (a `pods/` folder under a non-git root) had never recorded anything or been
+  shown memory. The installer now writes the hooks there. Inside one repository nothing
+  changes.
+- **`status` says whether the hooks run.** A seat whose hooks never fire is reported
+  unhealthy, with the folder to install in. It also understands hooks that come from a
+  parent folder (Claude Code and Codex), hooks loaded with the plugin itself
+  (`--plugin-dir`), and a relative `--settings` path.
+- **Stale review arrives as a queue row.** `stale-check.ts --notify <lead>@<rig>` posts one
+  row to the lead when stale proposals are waiting that no earlier row named. The row
+  holds ids and ages only, never memory text.
+- **Claude Code's own auto-memory is turned off in rig seats.** Told an owner rule, the
+  lead often saved it to Claude Code's private memory, which no other seat sees, instead
+  of the shared ledger. In tests the lead recorded the rule in 1 of 3 sessions, and in 6
+  of 6 with auto-memory off. The installer sets `"autoMemoryEnabled": false` in every
+  folder it installs into. A seat can opt out by deleting the key or setting it to true;
+  the installer then leaves it alone for good. `status` shows which applies.
+- **A skill that says when.** The `rig-memory` skill and every tool description now open
+  with when to reach for memory: before claiming a queue item, before deciding, when asked
+  why, and after a compaction. Leads get guidance on what to record.
+
 ## v0.5.11 (2026-11-24)
 
 - **A memory report.** `bun openrig-honcho/bin/report.ts` writes one self-contained HTML

@@ -14,17 +14,40 @@
 import { isKillSwitch, loadConfig } from "../src/env.ts";
 import { createClient } from "../src/honcho.ts";
 import { logConfigProblem } from "../src/log.ts";
-import { collectStatus, type StatusReport } from "../src/status.ts";
+import { autoMemoryState, collectStatus, type AutoMemoryState, type StatusReport } from "../src/status.ts";
 import { resolveHarness } from "../src/harness.ts";
-import { harnessUnknownWithSettings, readSettingsFile } from "../src/settings.ts";
+import { harnessUnknownWithSettings, readSettingsFile, settingsPath } from "../src/settings.ts";
+import { findHookCoverage, type HookCoverage } from "../src/hookCoverage.ts";
+import { isAbsolute, join, resolve } from "node:path";
 
-function humanLines(st: StatusReport): string[] {
+// ADR-0021 decision 2: a seat whose config works but whose hooks never fire
+// records nothing and is shown no memory - the plain-folder pods/ finding. Missing
+// hooks make the seat unhealthy.
+function humanLines(
+  st: StatusReport,
+  hooks: HookCoverage,
+  auto: AutoMemoryState,
+  harness: string,
+  seatFolder: string,
+): string[] {
   const s = st.server;
   const c = st.counters;
+  const healthy = st.healthy && hooks.present;
   const sp = (v: { bytes: number; lines: number } | { error: string }): string =>
     "bytes" in v ? `${v.bytes} B/${v.lines} l` : v.error;
   const lines = [
-    `memory: ${st.healthy ? "OK" : "UNHEALTHY"}`,
+    `memory: ${healthy ? "OK" : "UNHEALTHY"}`,
+    hooks.present
+      ? hooks.from !== undefined
+        ? `hooks: ok - hooks come from ${hooks.from}` // F-B: a legitimate hook-skipped seat (Codex ancestor layer)
+        : "hooks: ok"
+      : `hooks: missing - this seat records nothing and is shown no memory; run the install in ${seatFolder}`,
+    // ADR-0021 decision 6: informational - on does NOT make the seat unhealthy.
+    // Codex has no equivalent on by default (probed 2026-11-26: features
+    // memories=false), so the line says the key means nothing there.
+    `auto-memory: ${harness === "codex"
+      ? "n/a - Codex seat: no Claude auto-memory, and Codex memory is off by default"
+      : auto.off ? `off - ${auto.detail}` : `on - ${auto.detail}`}`,
     `config: ${st.config.host} ws=${st.config.workspace} peer=${st.config.peer}` +
       ` leader=${st.config.leader ?? "-"} profile=${st.config.profile_workspace ?? "-"}`,
     `server: ${s.reachable ? `reachable ${s.version ?? "?"}` : `unreachable (${s.error_class ?? "?"})`}`,
@@ -73,11 +96,34 @@ async function main(): Promise<void> {
     apiKey: cfg.apiKey,
     timeoutMs: cfg.timeoutMs,
   });
+  // ADR-0021 decision 2: do our hooks actually run for this folder?
+  const seatSettings = harness === "codex" ? settingsPath(process.argv.slice(2)) : null;
+  const hooks = findHookCoverage({
+    cwd: process.cwd(),
+    home: process.env.HOME ?? "",
+    harness,
+    settingsPath:
+      seatSettings !== null && seatSettings !== ""
+        ? isAbsolute(seatSettings)
+          ? seatSettings
+          : resolve(seatSettings)
+        : null,
+    // F-B: the ancestor scan needs the root markers, read exactly as the
+    // installer reads them (config.toml beside the seat's Codex home).
+    ...(harness === "codex"
+      ? { codexHome: process.env.CODEX_HOME ?? join(process.env.HOME ?? "", ".codex") }
+      : {}),
+    // item 5: plugin mode - this process's CLAUDE_PLUGIN_ROOT, when set.
+    pluginRoot: process.env.CLAUDE_PLUGIN_ROOT ?? null,
+  });
   try {
     const st = await collectStatus(cfg, client);
-    if (json) process.stdout.write(`${JSON.stringify(st, null, 2)}\n`);
-    else process.stdout.write(`${humanLines(st).join("\n")}\n`);
-    process.exit(st.healthy ? 0 : 1);
+    const healthy = st.healthy && hooks.present;
+    // ADR-0021 d6, not a health signal; N-R26-3: Claude's own precedence
+    const auto = autoMemoryState(process.cwd(), process.env.HOME ?? "");
+    if (json) process.stdout.write(`${JSON.stringify({ ...st, healthy, hooks, auto_memory: auto }, null, 2)}\n`);
+    else process.stdout.write(`${humanLines(st, hooks, auto, harness, process.cwd()).join("\n")}\n`);
+    process.exit(healthy ? 0 : 1);
   } catch {
     // a status tool that itself throws must still answer with the exit code
     if (json) process.stdout.write(`${JSON.stringify({ enabled: true, healthy: false, problems: ["status check failed"] })}\n`);

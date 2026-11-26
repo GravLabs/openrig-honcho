@@ -7,11 +7,19 @@
 // unchanged and no subprocess at all).
 
 import { describe, expect, test } from "bun:test";
+import { chmodSync, mkdirSync, symlinkSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import { makeTempDir } from "../support/tempdir.ts";
 import type { Config } from "../../plugin/src/env.ts";
 import { createClient } from "../../plugin/src/honcho.ts";
 import { readRigMission, setRigMission } from "../../plugin/src/missions.ts";
-import { applyQueueMissionHint, missionFromQitem, qitemIdFromNudge } from "../../plugin/src/nudge.ts";
+import {
+  applyQueueMissionHint,
+  createQueueRow,
+  missionFromQitem,
+  qitemIdFromNudge,
+  rigArgvAllowed,
+} from "../../plugin/src/nudge.ts";
 import { recordPrompt, type WriterDeps } from "../../plugin/src/writer.ts";
 import { startFakeHoncho, type FakeHoncho } from "../support/fake-honcho.ts";
 
@@ -225,5 +233,140 @@ describe("applyQueueMissionHint + recordPrompt (E11 writer path)", () => {
     } finally {
       process.env.PATH = saved;
     }
+  });
+});
+
+// ADR-0021 decision 3 (X5 amended): the runner allowlist and the queue
+// create shape. Everything runs with an injected `run` - no test here may
+// spawn a real rig; refused shapes are refused before the runner is reached.
+const CREATE_OK = [
+  "queue", "create",
+  "--destination", "lead@rigx",
+  "--source", "stale-check@rigx", // the timer that runs the check is not a seat
+  "--summary", "Stale review: 2 ledger entries may be out of date - run stale_review",
+  "--body-file", "/state/stale/ws.notify.txt",
+  "--tags", "openrig-honcho,stale-review",
+  "--json",
+];
+
+describe("X5 runner allowlist + createQueueRow (ADR-0021 d3)", () => {
+  test("rigArgvAllowed accepts exactly the two shapes", () => {
+    expect(rigArgvAllowed("rig", ["queue", "show", QID, "--json"])).toBe(true);
+    expect(rigArgvAllowed("rig", CREATE_OK)).toBe(true);
+  });
+
+  test("rigArgvAllowed refuses everything else, one refusal per rule", () => {
+    const bads: [string, string[]][] = [
+      ["bun", ["queue", "show", QID, "--json"]], // not rig
+      ["rig", ["queue", "purge", QID, "--json"]], // unknown verb
+      ["rig", ["queue", "show", QID]], // missing --json
+      ["rig", ["queue", "show", "qitem-; rm", "--json"]], // id grammar
+      ["rig", ["queue", "show", QID, "--json", "--extra"]], // over-long
+      ["rig", ["queue", "create", "--destination", "lead@rig; rm", "--source", "stale-check@rigx", "--summary", "s", "--body-file", "/s/b.txt", "--tags", "openrig-honcho,stale-review", "--json"]], // session
+      ["rig", ["queue", "create", "--destination", `${"a".repeat(101)}@r`, "--source", "stale-check@r", "--summary", "s", "--body-file", "/s/b.txt", "--tags", "openrig-honcho,stale-review", "--json"]], // session length
+      ["rig", ["queue", "create", "--destination", "lead@rigx", "--summary", "s", "--body-file", "/s/b.txt", "--tags", "openrig-honcho,stale-review", "--json"]], // missing --source (the pre-timer 11-arg shape)
+      ["rig", ["queue", "create", "--destination", "lead@rigx", "--source", "other@rigx", "--summary", "s", "--body-file", "/s/b.txt", "--tags", "openrig-honcho,stale-review", "--json"]], // source not the fixed stale-check
+      ["rig", ["queue", "create", "--destination", "lead@rigx", "--source", "stale-check@otherrig", "--summary", "s", "--body-file", "/s/b.txt", "--tags", "openrig-honcho,stale-review", "--json"]], // source rig differs from destination rig
+      ["rig", ["queue", "create", "--destination", "lead@rigx", "--source", "stale-check@rigx", "--summary", "x".repeat(161), "--body-file", "/s/b.txt", "--tags", "openrig-honcho,stale-review", "--json"]], // summary length
+      ["rig", ["queue", "create", "--destination", "lead@rigx", "--source", "stale-check@rigx", "--summary", "two\nlines", "--body-file", "/s/b.txt", "--tags", "openrig-honcho,stale-review", "--json"]], // summary newline
+      ["rig", ["queue", "create", "--destination", "lead@rigx", "--source", "stale-check@rigx", "--summary", "s", "--body-file", "relative/b.txt", "--tags", "openrig-honcho,stale-review", "--json"]], // relative body
+      ["rig", ["queue", "create", "--destination", "lead@rigx", "--source", "stale-check@rigx", "--summary", "s", "--body-file", "/s/b.txt", "--tags", "openrig-honcho", "--json"]], // tags
+      ["rig", ["queue", "create", "--destination", "lead@rigx", "--source", "stale-check@rigx", "--summary", "s", "--body-file", "/s/b.txt", "--tags", "openrig-honcho,stale-review"]], // missing --json
+    ];
+    for (const [cmd, args] of bads) expect(rigArgvAllowed(cmd, args)).toBe(false);
+    // the source flag is positional: right after --destination, nowhere else
+    const misplaced = [...CREATE_OK];
+    misplaced.splice(4, 2); // pull --source + value out from after --destination
+    misplaced.splice(6, 0, "--source", "stale-check@rigx"); // push it past --summary
+    expect(rigArgvAllowed("rig", misplaced)).toBe(false);
+  });
+
+  test("createQueueRow passes exactly the allowlisted argv with a 10 s budget", async () => {
+    const dir = makeTempDir("nudge-cc-");
+    mkdirSync(join(dir, "stale"));
+    const body = join(dir, "stale", "ws.notify.txt");
+    writeFileSync(body, "d-aaaa0001 21 days\n");
+    chmodSync(body, 0o600); // the real caller (stale.ts:412) does; F-C now enforces it
+    const calls: { cmd: string; args: string[]; t: number }[] = [];
+    const ok = await createQueueRow(dir, "lead@rigx", "Stale review: 1 ledger entries may be out of date - run stale_review", body, {
+      run: async (cmd, args, t) => {
+        calls.push({ cmd, args, t });
+        return { code: 0, stdout: "{}" };
+      },
+    });
+    expect(ok).toBe(true);
+    expect(calls.length).toBe(1);
+    expect(calls[0].cmd).toBe("rig");
+    expect(calls[0].t).toBe(10000);
+    expect(calls[0].args).toEqual([
+      "queue", "create", "--destination", "lead@rigx",
+      "--source", "stale-check@rigx", "--summary",
+      "Stale review: 1 ledger entries may be out of date - run stale_review",
+      "--body-file", body, "--tags", "openrig-honcho,stale-review", "--json",
+    ]);
+    expect(rigArgvAllowed(calls[0].cmd, calls[0].args)).toBe(true);
+  });
+
+  test("F-C (R25, probe D N2): a symlinked or non-0600 body file is refused", async () => {
+    const dir = makeTempDir("nudge-fc-");
+    mkdirSync(join(dir, "stale"));
+    const run = async (): Promise<{ code: number; stdout: string }> => ({ code: 0, stdout: "{}" });
+    // a symlink INSIDE the state dir whose content lives outside it: refused
+    const link = join(dir, "stale", "ws.notify.txt");
+    symlinkSync("/etc/hostname", link);
+    expect(await createQueueRow(dir, "lead@rigx", "s", link, { run })).toBe(false);
+    // a world-readable regular file (the probe N2 note): refused - mode 0600
+    const plain = join(dir, "stale", "plain.txt");
+    writeFileSync(plain, "d-aaaa0001 21 days\n"); // default 0644
+    expect(await createQueueRow(dir, "lead@rigx", "s", plain, { run })).toBe(false);
+    chmodSync(plain, 0o600); // a 0600 regular file: the standard shape, accepted
+    expect(await createQueueRow(dir, "lead@rigx", "s", plain, { run })).toBe(true);
+  });
+
+  test("the argv carries --source stale-check@<rig of destination>: the timer is not a seat", async () => {
+    // architect probe 2026-11-25: queue create from the systemd timer refuses
+    // with "--source is required when OPENRIG_SESSION_NAME is not set"
+    const dir = makeTempDir("nudge-src-");
+    mkdirSync(join(dir, "stale"));
+    const body = join(dir, "stale", "ws.notify.txt");
+    writeFileSync(body, "d-aaaa0001 21 days\n");
+    chmodSync(body, 0o600); // F-C: createQueueRow now requires the 0600 regular file
+    const seen: string[][] = [];
+    const ok = await createQueueRow(dir, "lead@deep-rig2", "s", body, {
+      run: async (_c, args) => {
+        seen.push(args);
+        return { code: 0, stdout: "{}" };
+      },
+    });
+    expect(ok).toBe(true);
+    expect(seen.length).toBe(1);
+    expect(seen[0][4]).toBe("--source");
+    expect(seen[0][5]).toBe("stale-check@deep-rig2");
+    expect(rigArgvAllowed("rig", seen[0])).toBe(true);
+  });
+
+  test("every refusal returns false WITHOUT touching the runner; failures are false", async () => {
+    const dir = makeTempDir("nudge-cr-");
+    mkdirSync(join(dir, "stale"));
+    const body = join(dir, "stale", "ws.notify.txt");
+    writeFileSync(body, "d-aaaa0001 21 days\n");
+    chmodSync(body, 0o600); // so the last assertions really reach the runner (F-C)
+    const boom = async (): Promise<{ code: number; stdout: string }> => {
+      throw new Error("the runner must not be reached for a refused shape");
+    };
+    expect(await createQueueRow(dir, "lead@rig; rm", "s", body, { run: boom })).toBe(false);
+    expect(await createQueueRow(dir, "lead@rig", "x".repeat(161), body, { run: boom })).toBe(false);
+    expect(await createQueueRow(dir, "lead@rig", "a\nb", body, { run: boom })).toBe(false);
+    expect(await createQueueRow(dir, "lead@rig", "s", join(dir, "..", "outside.txt"), { run: boom })).toBe(false); // outside the state dir
+    expect(await createQueueRow(dir, "lead@rig", "s", join(dir, "absent.txt"), { run: boom })).toBe(false); // not a file
+    mkdirSync(join(dir, "adir"));
+    expect(await createQueueRow(dir, "lead@rig", "s", join(dir, "adir"), { run: boom })).toBe(false); // a directory
+    // a good shape with a failing run is still false, both ways
+    expect(await createQueueRow(dir, "lead@rig", "ok summary", body, { run: async () => ({ code: 1, stdout: "" }) })).toBe(false);
+    expect(await createQueueRow(dir, "lead@rig", "ok summary", body, {
+      run: async () => {
+        throw new Error("timeout");
+      },
+    })).toBe(false);
   });
 });
