@@ -6,9 +6,10 @@
 import type { Config } from "../src/env.ts";
 import { isKillSwitch, loadConfig } from "../src/env.ts";
 import { createClient } from "../src/honcho.ts";
-import { bindEventFields, logConfigProblem, logEvent } from "../src/log.ts";
+import { bindEventFields, logConfigProblem, logEvent, modelFromInput } from "../src/log.ts";
 import { takeOnce } from "../src/once.ts";
-import { recordReply } from "../src/stop.ts";
+import { readTranscriptLines, recordReply, scanUsedSplit, transcriptModel } from "../src/stop.ts";
+import { readShown } from "../src/shown.ts";
 // C2 (ADR-0016): shared stdin seam; Codex Stop records last_assistant_message
 // and never reads the (non-Claude-shaped) transcript - stopHookInput drops
 // the path for codex only.
@@ -66,6 +67,10 @@ async function main(): Promise<void> {
       // C2b (review F1): Codex's own turn identity; forwarded to the writer
       // ONLY under --harness codex (Claude's E3 hash stays transcript-only).
       turn_id?: unknown;
+      // ADR-0022 d1: Codex's Stop input carries the model id (probe
+      // 2026-11-26: SessionStart/UserPromptSubmit/Stop all do; Claude's do
+      // not). Never forwarded anywhere but this run's ONE log line.
+      model?: unknown;
     } = {};
     try {
       parsed = JSON.parse(raw) as typeof parsed;
@@ -83,6 +88,38 @@ async function main(): Promise<void> {
     // C2 (ADR-0016): Codex gets no transcript_path - the reply can then only
     // come from last_assistant_message. Claude input is byte-for-byte as before.
     const input = stopHookInput(harness, parsed);
+    // B10 (architect note 2026-11-26): the transcript is read ONCE here and
+    // its lines shared by the model scan, the used-id scan and the writer's
+    // segment scan - the Stop keeps one read no matter how many consumers.
+    const txLines = readTranscriptLines(input.transcript_path);
+    // ADR-0022 decision 1: the model id rides every line this run can know.
+    // Codex: the input's own model (stopHookInput dropped the transcript for
+    // codex, so there is no other source). Claude: no model in any input
+    // field - the newest assistant entry of the transcript this Stop already
+    // reads. Bound BEFORE any log line of the run (the library's dup line
+    // included); a rejected or absent value binds nothing.
+    const model = modelFromInput(parsed.model) ?? transcriptModel(input.transcript_path, txLines);
+    if (model !== undefined) bindEventFields({ model });
+    // ADR-0022 decision 3 (B10, amended after review R27): the ids shown
+    // earlier in THIS session that appear in this turn bind before recordReply
+    // as cited (assistant text / last message) and acted (tool_use inputs),
+    // plus `used` = cited + acted for compatibility - each list only when
+    // non-empty, absent means empty (the model field's precedent). The
+    // library's dup/unexpected lines merge them too. In-process only.
+    const sid = typeof parsed.session_id === "string" ? parsed.session_id : "";
+    const shownList = sid !== "" ? readShown(cfg.stateDir, cfg.workspace, sid) : [];
+    if (shownList.length > 0) {
+      const { cited, acted } = scanUsedSplit(
+        shownList,
+        input.transcript_path,
+        typeof input.last_assistant_message === "string" ? input.last_assistant_message : undefined,
+        txLines,
+      );
+      const used = [...new Set([...cited, ...acted])].sort();
+      if (cited.length > 0) bindEventFields({ cited });
+      if (acted.length > 0) bindEventFields({ acted });
+      if (used.length > 0) bindEventFields({ used });
+    }
     // F11 (C5f): Codex Stop runs SYNC with a 30 s hook timeout
     // (codexHookGroups), but HONCHO_TIMEOUT_MS bounds each REQUEST, and one
     // Stop makes sequential requests - 20000 measured 40 s, 60000 measured
@@ -132,7 +169,7 @@ async function main(): Promise<void> {
         ...(harness === "codex" && typeof input.turn_id === "string" && input.turn_id !== "" ? { turn_id: input.turn_id } : {}),
       },
       cfg,
-      { client, now: () => new Date().toISOString() },
+      { client, now: () => new Date().toISOString(), ...(txLines !== undefined ? { lines: txLines } : {}) },
     );
     // on the contained-exception and E3-dedupe paths recordReply already
     // wrote this run's single event; do not double-log it here

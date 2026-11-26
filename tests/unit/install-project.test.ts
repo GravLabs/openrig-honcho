@@ -840,7 +840,9 @@ describe("install-project: T14c apply lock", () => {
     expect(r.code, r.all).toBe(0);
     expect(r.all).toContain("stale");
     expect(readJson(SETTINGS(dir)).env.HONCHO_URL).toBe("http://10.9.9.9/v3");
-    expect(readJson(join(dir, ".claude", "openrig-honcho", "install.json")).plugin).toContain("openrig-honcho");
+    // B8: the record names the folder the installer ran from - assert that,
+    // not a clone folder name (broke in any clone not named openrig-honcho).
+    expect(readJson(join(dir, ".claude", "openrig-honcho", "install.json")).plugin).toBe(realpathSync(join(REPO, "plugin")));
     expect(existsSync(LOCK(dir))).toBe(false); // released
   });
 

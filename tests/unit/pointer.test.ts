@@ -36,6 +36,7 @@ import {
 } from "../../plugin/src/pointer.ts";
 import { startFakeDaemon, type FakeDaemon } from "../support/fake-daemon.ts";
 import { startFakeHoncho, type FakeHoncho } from "../support/fake-honcho.ts";
+import { readShown } from "../../plugin/src/shown.ts";
 
 const REPO = join(import.meta.dir, "..", "..");
 const BIN = join(import.meta.dir, "..", "..", "plugin/bin/user-prompt.ts");
@@ -584,6 +585,50 @@ describe("O6 F-G: the pointer on the SYNCHRONOUS recall line; user-prompt prints
       expect(raw).not.toContain("install trust exact"); // no query text
       expect(raw).not.toContain("conclusion note"); // no titles
       expect(raw).not.toContain("relate"); // not even the block's own words
+    } finally {
+      await h.cleanup();
+    }
+  });
+  test("B13 held-row pin (F-V2 clause 3, end to end): the seat's own held row is in NO shown surface; another pointer item is in both", async () => {
+    // The row is claimed and addressed to THIS seat (the mk default) - a
+    // claim pointer for the seat's own held row. The B12 amendment removed
+    // the pointer arm's self-push of shownEntry("pointer", nudgeId); dev-
+    // review verified that only as a diff (R27 "Not verified"), so this runs
+    // the real bin: the block must show, the searched item must be recorded
+    // in BOTH shown surfaces, and the held row's qitem id in neither. The
+    // log line still carries qitem for attribution - that is not a shown
+    // record, so it is asserted separately, not banned from the line.
+    const h = await mk({
+      qitemId: QID,
+      sourceSession: "architect@ws",
+      state: "claimed", // the seat holds this row (served verbatim by the fake daemon)
+      tags: [],
+      summary: SUMMARY,
+      body: "B13: the held row's body still never travels",
+    });
+    try {
+      seedRelated(h.fake, pointerQuery(SUMMARY)); // 1 conclusion (concl-1) + 2 messages
+      const sess = "b13-held-row";
+      const r = await runRecall(h.env(), daemonNudge(sess));
+      expect(r.code).toBe(0);
+      const block = (JSON.parse(r.out) as { hookSpecificOutput?: { additionalContext?: string } })
+        .hookSpecificOutput?.additionalContext ?? "";
+      expect(block).toContain("- concl-1: conclusion note"); // a real item reached the block
+      const lines = h.lines();
+      expect(lines.length).toBe(1);
+      const l = lines[0] as Record<string, unknown>;
+      expect(l.event).toBe("pointer");
+      expect(l.pointer).toBe("shown");
+      expect(l.qitem).toBe(QID); // attribution only; the shown list is checked below
+      const shownLine = l.shown as string[];
+      expect(shownLine).toEqual(["conclusion:concl-1"]); // the other pointer item IS recorded
+      const shownFile = readShown(h.dir, WS, sess);
+      expect(shownFile).toEqual(["conclusion:concl-1"]); // ...in both surfaces
+      // the held row's own id: no pointer: entry, and no bare form either
+      expect(shownLine).not.toContain(`pointer:${QID}`);
+      expect(shownLine.join(" ")).not.toContain(QID);
+      expect(shownFile).not.toContain(`pointer:${QID}`);
+      expect(shownFile.join(" ")).not.toContain(QID);
     } finally {
       await h.cleanup();
     }

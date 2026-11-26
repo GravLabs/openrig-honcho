@@ -8,12 +8,13 @@
 
 import { describe, expect, test } from "bun:test";
 import { makeTempDir } from "../support/tempdir.ts";
-import { readFileSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { Config } from "../../plugin/src/env.ts";
 import { createClient } from "../../plugin/src/honcho.ts";
 import { readSeatState, seatStatePath } from "../../plugin/src/missions.ts";
-import { recordReply, turnAssistantText } from "../../plugin/src/stop.ts";
+import { recordReply, scanUsedIds, scanUsedSplit, transcriptModel, turnAssistantText } from "../../plugin/src/stop.ts";
 import { recordPrompt } from "../../plugin/src/writer.ts";
 import { startFakeHoncho, type FakeHoncho } from "../support/fake-honcho.ts";
 
@@ -95,6 +96,169 @@ describe("turnAssistantText (segment rule)", () => {
     // corrupt lines are skipped, not fatal
     const tp4 = transcript(dir, "t4", [u("p"), "{ not json", a("kept")]);
     expect(turnAssistantText(tp4, undefined)).toBe("kept");
+  });
+});
+
+// ADR-0022 decision 1 (Claude's Stop fallback): the newest assistant entry's
+// message.model, validated; only the id is read, never entry text.
+describe("transcriptModel (ADR-0022 d1)", () => {
+  const aM = (text: string, model: unknown): string =>
+    JSON.stringify({ type: "assistant", message: { role: "assistant", model, content: [{ type: "text", text }] } });
+  test("newest assistant entry's message.model wins; no model key or no assistant entry means undefined", () => {
+    const dir = makeTempDir("stop-txm-");
+    const tp = transcript(dir, "m", [u("p"), aM("old answer", "old-model"), u("p2"), aM("new answer", "new-model-2.0")]);
+    expect(transcriptModel(tp)).toBe("new-model-2.0");
+    expect(transcriptModel(transcript(dir, "m2", [u("p"), a("no model on this one")]))).toBeUndefined();
+    expect(transcriptModel(transcript(dir, "m3", [u("p")]))).toBeUndefined();
+  });
+  test("a rejected value on the NEWEST assistant entry is absent - never the older entry's id", () => {
+    const dir = makeTempDir("stop-txm-");
+    expect(transcriptModel(transcript(dir, "r1", [aM("old", "good-id"), aM("new", "bad model!")]))).toBeUndefined();
+    expect(transcriptModel(transcript(dir, "r2", [aM("old", "good-id"), aM("new", "x".repeat(101))]))).toBeUndefined();
+  });
+  test("missing or unreadable file: undefined, no throw", () => {
+    expect(transcriptModel(undefined)).toBeUndefined();
+    expect(transcriptModel("")).toBeUndefined();
+    expect(transcriptModel("/nonexistent/none.jsonl")).toBeUndefined();
+  });
+});
+
+// ADR-0022 decision 3 (B10): which shown ids appear in the turn the Stop is
+// already reading - text blocks + tool_use inputs + the harness message.
+// Plain substring match; only shown ids can come back; nothing else leaves.
+describe("scanUsedIds (ADR-0022 d3)", () => {
+  const QID = "qitem-20261126033123-b1d597bc0111f573";
+  test("a shown id cited in the turn's assistant text is used; an id not shown is never", () => {
+    const dir = makeTempDir("stop-scan-");
+    const tp = transcript(dir, "s1", [u("close the row"), a(`I applied the decision d-0a0b0c0d as written.`)]);
+    expect(scanUsedIds(["decision:d-0a0b0c0d", "decision:d-11111111"], tp, undefined)).toEqual(["decision:d-0a0b0c0d"]);
+    // cited in the message, but never shown -> cannot be `used`
+    expect(scanUsedIds(["decision:d-99999999"], tp, "cites d-0a0b0c0d")).toEqual([]);
+  });
+  test("an id inside a tool_use input counts: a rig_memory arg and a queue command", () => {
+    const dir = makeTempDir("stop-scan-");
+    const tp = transcript(dir, "s2", [
+      u("work"),
+      JSON.stringify({
+        type: "assistant",
+        message: { role: "assistant", content: [{ type: "tool_use", name: "mcp__rig_memory__retire", input: { id: "d-0a0b0c0d" } }] },
+      }),
+      JSON.stringify({
+        type: "assistant",
+        message: { role: "assistant", content: [{ type: "tool_use", name: "Bash", input: { command: `rig queue close ${QID} --reason done` } }] },
+      }),
+    ]);
+    expect(scanUsedIds([`lesson:${QID}`, "decision:d-0a0b0c0d"], tp, undefined)).toEqual([
+      "decision:d-0a0b0c0d",
+      `lesson:${QID}`,
+    ]);
+  });
+  test("no readable transcript: the harness message alone decides; empty shown = []", () => {
+    expect(scanUsedIds([`pointer:${QID}`], "/nonexistent/none.jsonl", `closed ${QID} per the decision`)).toEqual([`pointer:${QID}`]);
+    expect(scanUsedIds([], undefined, "anything")).toEqual([]);
+  });
+  test("only the current turn is scanned: pre-boundary mentions do not count", () => {
+    const dir = makeTempDir("stop-scan-");
+    const tp = transcript(dir, "s3", [
+      u("older turn"),
+      a("that turn cited d-0a0b0c0d"),
+      u("new turn"),
+      a("this one cites nothing"),
+    ]);
+    expect(scanUsedIds(["decision:d-0a0b0c0d"], tp, undefined)).toEqual([]);
+  });
+  // R27 F-V1: token-boundary match; short or all-letter conclusion ids are
+  // never scanned (they collide with ordinary words).
+  test("F-V1: d-ffff0001 is not found inside d-ffff00011 (token boundary)", () => {
+    expect(scanUsedIds(["decision:d-ffff0001"], undefined, "look at d-ffff00011 instead")).toEqual([]);
+    // the boundary-positive control: the same id alone in the text counts
+    expect(scanUsedIds(["decision:d-ffff0001"], undefined, "used decision d-ffff0001 today")).toEqual([
+      "decision:d-ffff0001",
+    ]);
+  });
+  test("F-V1: conclusion:done is not found in \"The task is done.\"", () => {
+    expect(scanUsedIds(["conclusion:done"], undefined, "The task is done.")).toEqual([]);
+  });
+  test("F-V1: conclusion:LEARNED is not found in \"LEARNED.md\"", () => {
+    expect(scanUsedIds(["conclusion:LEARNED"], undefined, "I updated LEARNED.md.")).toEqual([]);
+  });
+  test("F-V1: a scannable conclusion (>=8 chars, has a digit) matches at boundaries", () => {
+    expect(scanUsedIds(["conclusion:done-2026"], undefined, "note done-2026x, see done-2026 here")).toEqual([
+      "conclusion:done-2026",
+    ]);
+  });
+});
+
+// R27 F-V2 (ADR-0022 d3 amendment): cited = assistant text / last message
+// (an echo lives here); acted = a tool_use input (the v0.6 evidence count).
+describe("scanUsedSplit (ADR-0022 d3 amendment)", () => {
+  test("an echoed digest line is cited, not acted", () => {
+    const dir = makeTempDir("stop-split-");
+    const tp = transcript(dir, "e1", [
+      u("work"),
+      a("memory showed me: d-ffff0001 make a decision, so I restated the digest line d-ffff0001 verbatim."),
+    ]);
+    const { cited, acted } = scanUsedSplit(["decision:d-ffff0001"], tp, undefined);
+    expect(cited).toEqual(["decision:d-ffff0001"]);
+    expect(acted).toEqual([]);
+  });
+  test("a rig_memory supersedes argument is acted, not cited", () => {
+    const dir = makeTempDir("stop-split-");
+    const tp = transcript(dir, "e2", [
+      u("work"),
+      JSON.stringify({
+        type: "assistant",
+        message: {
+          role: "assistant",
+          content: [{ type: "tool_use", name: "mcp__rig_memory__supersede", input: { id: "d-ffff0001", reason: "done-2026 supersedes" } }],
+        },
+      }),
+    ]);
+    const { cited, acted } = scanUsedSplit(["decision:d-ffff0001", "conclusion:done-2026"], tp, undefined);
+    // id only inside the tool input -> acted only; done-2026 is in the same
+    // input JSON -> acted too (tool inputs are the acted haystack).
+    expect(acted).toEqual(["conclusion:done-2026", "decision:d-ffff0001"]);
+    expect(cited).toEqual([]);
+  });
+  test("user text never counts for either list", () => {
+    const dir = makeTempDir("stop-split-");
+    const tp = transcript(dir, "e3", [u("apply d-ffff0001 now"), a("acknowledged")]);
+    const { cited, acted } = scanUsedSplit(["decision:d-ffff0001"], tp, undefined);
+    expect(cited).toEqual([]);
+    expect(acted).toEqual([]);
+  });
+  test("an id in text AND in a tool input lands in acted only; used union is unchanged", () => {
+    const dir = makeTempDir("stop-split-");
+    const tp = transcript(dir, "e4", [
+      u("work"),
+      a("I will use decision d-ffff0001 now"),
+      JSON.stringify({
+        type: "assistant",
+        message: { role: "assistant", content: [{ type: "tool_use", name: "Bash", input: { command: "apply d-ffff0001 per its terms" } }] },
+      }),
+    ]);
+    const { cited, acted } = scanUsedSplit(["decision:d-ffff0001"], tp, undefined);
+    expect(acted).toEqual(["decision:d-ffff0001"]); // acted wins over cited
+    expect(cited).toEqual([]);
+    expect(scanUsedIds(["decision:d-ffff0001"], tp, undefined)).toEqual(["decision:d-ffff0001"]); // union unchanged
+  });
+  test("text-only and input-only ids split cleanly; the compat union is sorted", () => {
+    const dir = makeTempDir("stop-split-");
+    const tp = transcript(dir, "e5", [
+      u("work"),
+      a("cited conclusion done-2026"),
+      JSON.stringify({
+        type: "assistant",
+        message: { role: "assistant", content: [{ type: "tool_use", name: "Bash", input: { command: "rig queue close qitem-20261126033123-b1d597bc0111f573" } }] },
+      }),
+    ]);
+    const { cited, acted } = scanUsedSplit(
+      ["conclusion:done-2026", "pointer:qitem-20261126033123-b1d597bc0111f573"],
+      tp,
+      "closed qitem-20261126033123-b1d597bc0111f573",
+    );
+    expect(cited).toEqual(["conclusion:done-2026"]);
+    expect(acted).toEqual(["pointer:qitem-20261126033123-b1d597bc0111f573"]);
   });
 });
 
@@ -290,8 +454,8 @@ describe("bin/stop.ts as a child process", () => {
   const REPO = join(import.meta.dir, "..", "..");
   const BIN = join(REPO, "plugin/bin/stop.ts");
 
-  const run = async (env: Record<string, string>, stdin: string) => {
-    const p = Bun.spawn([process.execPath, BIN], { env, stdin: "pipe", stdout: "pipe", stderr: "pipe" });
+  const run = async (env: Record<string, string>, stdin: string, args: readonly string[] = []) => {
+    const p = Bun.spawn([process.execPath, BIN, ...args], { env, stdin: "pipe", stdout: "pipe", stderr: "pipe" });
     p.stdin.write(stdin);
     p.stdin.end();
     const [code, out, err] = await Promise.all([
@@ -325,6 +489,86 @@ describe("bin/stop.ts as a child process", () => {
     expect(r.code).toBe(0);
     expect(r.out).toBe("");
     expect(r.err).toBe("");
+  });
+
+  // ADR-0022 decision 1, end to end: a live config and an unreachable server
+  // (port 9 refuses) still write the run's ONE O1 line - that line carries
+  // model exactly when the run can know it.
+  const aM = (text: string, model: unknown): string =>
+    JSON.stringify({ type: "assistant", message: { role: "assistant", model, content: [{ type: "text", text }] } });
+  const liveEnv = (dir: string): Record<string, string> => ({
+    HOME: dir,
+    HONCHO_STATE_DIR: dir,
+    HONCHO_URL: "http://127.0.0.1:9/v3",
+    HONCHO_WORKSPACE: WS,
+    HONCHO_PEER: SELF,
+  });
+  const oneLine = (dir: string): Record<string, unknown> => {
+    const raw = readFileSync(join(dir, "log", `${WS}.log`), "utf8").trim().split("\n");
+    expect(raw).toHaveLength(1); // O1: exactly one line per run
+    return JSON.parse(raw[0]!) as Record<string, unknown>;
+  };
+
+  test("ADR-0022: Claude Stop logs the transcript model on its line", async () => {
+    const dir = makeTempDir("stop-bin-");
+    const tp = transcript(dir, "tx", [uU("prompt", "u1"), aM("the answer", "fixture-model.1")]);
+    const r = await run(liveEnv(dir), JSON.stringify({ transcript_path: tp, session_id: "s1", stop_hook_active: false }));
+    expect(r.code).toBe(0);
+    const line = oneLine(dir);
+    expect([line.hook, line.model]).toEqual(["stop", "fixture-model.1"]);
+  });
+  test("ADR-0022: a rejected transcript model writes no model field", async () => {
+    const dir = makeTempDir("stop-bin-");
+    const tp = transcript(dir, "tx", [uU("prompt", "u1"), aM("the answer", "bad model!")]);
+    const r = await run(liveEnv(dir), JSON.stringify({ transcript_path: tp, session_id: "s1", stop_hook_active: false }));
+    expect(r.code).toBe(0);
+    expect("model" in oneLine(dir)).toBe(false);
+  });
+  test("ADR-0022: Codex Stop takes model from the input; its transcript never speaks", async () => {
+    const dir = makeTempDir("stop-bin-");
+    const tp = transcript(dir, "tx", [aM("x", "transcript-model")]);
+    const r = await run(
+      liveEnv(dir),
+      JSON.stringify({ last_assistant_message: "ok", model: "gpt-fixture-9", transcript_path: tp, session_id: "s", turn_id: "t1" }),
+      ["--harness", "codex"],
+    );
+    expect(r.code).toBe(0);
+    expect(oneLine(dir).model).toBe("gpt-fixture-9");
+  });
+
+  // B10 (ADR-0022 d3), end to end through the real bin: the session's shown
+  // file + this turn decide `used`; ids only, never a byte of turn text.
+  test("B10: a cited shown id rides used on the run's one line; no turn text lands in the log", async () => {
+    const dir = makeTempDir("stop-bin-");
+    const QID = "qitem-20261126033123-b1d597bc0111f573";
+    mkdirSync(join(dir, WS, "shown"), { recursive: true, mode: 0o700 });
+    writeFileSync(
+      join(dir, WS, "shown", `${createHash("sha256").update("s1", "utf8").digest("hex")}.json`),
+      JSON.stringify({ at: new Date().toISOString(), ids: ["decision:d-0a0b0c0d", `lesson:${QID}`, "decision:d-99999999"] }),
+      { mode: 0o600 },
+    );
+    const tp = transcript(dir, "tx", [
+      uU("prompt", "u1"),
+      JSON.stringify({
+        type: "assistant",
+        message: {
+          role: "assistant",
+          model: "fixture-model.1",
+          content: [
+            { type: "text", text: "Applied decision:d-0a0b0c0d, prose nobody logs verbatim." },
+            { type: "tool_use", name: "Bash", input: { command: `rig queue close ${QID} --reason done` } },
+          ],
+        },
+      }),
+    ]);
+    const r = await run(liveEnv(dir), JSON.stringify({ transcript_path: tp, session_id: "s1", stop_hook_active: false }));
+    expect(r.code).toBe(0);
+    const line = oneLine(dir);
+    expect(line.model).toBe("fixture-model.1");
+    expect(line.used).toEqual(["decision:d-0a0b0c0d", `lesson:${QID}`]);
+    expect("shown" in line).toBe(false); // Stop logs used, never shown
+    const raw = readFileSync(join(dir, "log", `${WS}.log`), "utf8");
+    expect(raw).not.toContain("prose nobody logs"); // redaction: ids only
   });
 });
 

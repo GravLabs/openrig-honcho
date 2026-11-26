@@ -21,6 +21,7 @@ import { pointerQuery, sanitizeVisible, searchCall } from "./pointer.ts";
 import type { Harness } from "./harness.ts";
 import { trustTag } from "./trust.ts";
 import { changedLabel } from "./changed.ts";
+import { shownEntry } from "./shown.ts";
 
 export type InjectionSource = "startup" | "resume" | "clear" | "compact";
 
@@ -415,7 +416,7 @@ export function forScopeLabel(d: InjectionDecision, openIds?: Set<string>): stri
  * escape and when there is nothing to say.
  */
 export function renderContinuity(input: ContinuityInput): string {
-  return renderContinuityInner(input, { checkpoint: [], stale: [], staleIds: [], lesson: [] });
+  return renderContinuityInner(input, { checkpoint: [], stale: [], staleIds: [], lesson: [], decisions: [] });
 }
 
 /** v0.5.5: the plugin-authored lines this render built, per part. */
@@ -425,6 +426,11 @@ interface AuthoredLines {
   /** R20 F-P3: the proposal id behind each stale line, same order */
   staleIds: string[];
   lesson: string[];
+  /** B10 (ADR-0022 d3): the ledger id behind each decisions/approvals line
+   * this render built (status entries never enter), with the first line. */
+  decisions: { id: string; kind: "decision" | "approval"; line: string }[];
+  /** B10: the queue id behind the lesson line, when one was built. */
+  lessonId?: string;
 }
 
 /**
@@ -438,18 +444,33 @@ export function renderContinuityShown(input: ContinuityInput): {
   shown: { n_checkpoint: number; n_stale: number; n_lesson: number };
   /** R20 F-P3: the stale proposal ids whose line the seat was shown */
   staleShownIds: string[];
+  /** B10 (ADR-0022 d3): kind:id entries (decision, approval, lesson) for
+   * what the seat was shown - ids only, line survival as with the counts. */
+  shownIds: string[];
 } {
-  const authored: AuthoredLines = { checkpoint: [], stale: [], staleIds: [], lesson: [] };
+  const authored: AuthoredLines = { checkpoint: [], stale: [], staleIds: [], lesson: [], decisions: [] };
   const text = renderContinuityInner(input, authored);
   const out = text.split("\n");
   // each authored line counts once, and only if the output has it as a whole
   // line; a quoted copy of the same bytes is indistinguishable and harmless
   const count = (ls: string[]): number => ls.filter((l) => out.includes(l)).length;
   const staleShownIds = authored.stale.flatMap((l, i) => (out.includes(l) ? [authored.staleIds[i]] : []));
+  const shownIds: string[] = [];
+  for (const d of authored.decisions) {
+    if (!out.includes(d.line)) continue;
+    const e = shownEntry(d.kind, d.id);
+    if (e !== undefined) shownIds.push(e);
+  }
+  if (authored.lessonId !== undefined && authored.lesson.length > 0 && out.includes(authored.lesson[0])) {
+    const e = shownEntry("lesson", authored.lessonId);
+    if (e !== undefined) shownIds.push(e);
+  }
   return {
     text,
     shown: { n_checkpoint: count(authored.checkpoint), n_stale: count(authored.stale), n_lesson: count(authored.lesson) },
     staleShownIds,
+    // canonical form (the parseShownList contract): deduped, sorted
+    shownIds: [...new Set(shownIds)].sort(),
   };
 }
 
@@ -532,6 +553,7 @@ function renderContinuityInner(input: ContinuityInput, authored: AuthoredLines):
     if (ls && isText(ls.qitemId) && isText(ls.reason) && isText(ls.seat)) {
       const lsl = `Lesson worth writing? ${ls.qitemId} needed rework (${ls.reason}). If something would have prevented it, write it as seats/${ls.seat}/lore/<slug>.md (the OpenRig lore template)${trustTag("outcome")}`;
       authored.lesson.push(lsl);
+      authored.lessonId = ls.qitemId;
       sections.push(lsl);
     }
 
@@ -562,7 +584,13 @@ function renderContinuityInner(input: ContinuityInput, authored: AuthoredLines):
           [
             ...dec
               .slice(0, DECISIONS_MAX)
-              .flatMap((d) => item(decisionLabel(now, d, forScopeLabel(d, openIdSet)), d.content)),
+              .flatMap((d) => {
+                const ls = item(decisionLabel(now, d, forScopeLabel(d, openIdSet)), d.content);
+                if (d.kind !== "status" && isText(d.id) && ls.length > 0) {
+                  authored.decisions.push({ id: d.id, kind: d.kind === "approval" ? "approval" : "decision", line: ls[0] });
+                }
+                return ls;
+              }),
             // T24: the fixed line accompanies the ledger wherever it shows;
             // with no approvals section here, it lands here instead.
             ...(ap.length === 0 ? [LEDGER_NOTE] : []),
@@ -578,7 +606,15 @@ function renderContinuityInner(input: ContinuityInput, authored: AuthoredLines):
       sections.push(
         // v0.5.5: the heading's class is the section's weakest - any
         // unstamped approval makes it [recorded]; each item says which.
-        section(`Approvals you hold${trustTag(ap.every((d) => d.ownerChecked !== false) ? "approval" : "uncheckedApproval")}`, [...ap.flatMap((d) => item(decisionLabel(now, d), d.content)), LEDGER_NOTE]),
+        section(`Approvals you hold${trustTag(ap.every((d) => d.ownerChecked !== false) ? "approval" : "uncheckedApproval")}`, [
+          ...ap.flatMap((d) => {
+            const ls = item(decisionLabel(now, d), d.content);
+            // status entries never count as shown ids (B10, ADR-0022 d3)
+            if (d.kind !== "status" && isText(d.id) && ls.length > 0) authored.decisions.push({ id: d.id, kind: "approval", line: ls[0] });
+            return ls;
+          }),
+          LEDGER_NOTE,
+        ]),
       );
     }
 

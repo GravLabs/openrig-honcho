@@ -16,6 +16,7 @@ import {
   extractQitemIds,
   followOnIds,
   memoryWindow,
+  modelsWindow,
   outcomesFile,
   recordKey,
   serializeRecord,
@@ -321,6 +322,62 @@ describe("memoryWindow", () => {
     expect(memoryWindow(lines, SEAT, null, null).search).toBe(0);
     expect(memoryWindow(lines, SEAT, null, "2026-11-10T02:00:00.000Z").digestShown).toBe(0);
   });
+  test("B10: shown/used counts per kind inside the window; other seats and out-of-window lines excluded", () => {
+    const Q = "qitem-20261110000500-cccccccccccccccc";
+    const l = [
+      logLine({ ts: "2026-11-10T00:20:00.000Z", hook: "recall", event: "pointer", pointer: "shown", qitem: Q, shown: [`pointer:${Q}`, "decision:d-0a0b0c0d"] }),
+      logLine({ ts: "2026-11-10T00:40:00.000Z", hook: "session-start", event: "startup", moment: "continuity", shown: ["decision:d-deadbeef", "lesson:qitem-20261110000500-dddddddddddddddd"] }),
+      logLine({ ts: "2026-11-10T01:00:00.000Z", hook: "stop", event: "sent", used: ["decision:d-0a0b0c0d"] }), // pre-split line: folds into cited
+      logLine({ ts: "2026-11-10T01:10:00.000Z", hook: "stop", event: "sent", cited: ["conclusion:cx1234567"], acted: ["lesson:qitem-20261110000500-eeeeeeeeeeeeeeee"], used: ["conclusion:cx1234567", "lesson:qitem-20261110000500-eeeeeeeeeeeeeeee"] }), // B12 split line
+      logLine({ ts: "2026-11-10T01:30:00.000Z", peer: "other@fixture-rig", hook: "stop", event: "sent", used: ["decision:d-99999999"] }), // other seat - OUT
+      logLine({ ts: "2026-11-10T03:00:00.000Z", hook: "stop", event: "sent", used: ["decision:d-88888888"] }), // after close - OUT
+    ];
+    const m = memoryWindow(l, SEAT, "2026-11-10T00:30:00.000Z", "2026-11-10T02:00:00.000Z", "2026-11-10T00:05:00.000Z", Q);
+    expect(m.shownIds).toEqual({ decision: 2, lesson: 1, pointer: 1 });
+    expect(m.usedIds).toEqual({ decision: 1, conclusion: 1, lesson: 1 });
+    expect(m.citedIds).toEqual({ decision: 1, conclusion: 1 }); // decision 1 = the fold
+    expect(m.actedIds).toEqual({ lesson: 1 });
+  });
+  test("B10: a shown-less log stays byte-identical; once live, a never-claimed row counts {}", () => {
+    const m0 = memoryWindow(lines, SEAT, "2026-11-10T00:30:00.000Z", "2026-11-10T02:00:00.000Z");
+    expect("shownIds" in m0).toBe(false);
+    expect("usedIds" in m0).toBe(false);
+    expect("citedIds" in m0).toBe(false);
+    expect("actedIds" in m0).toBe(false);
+    const live = [logLine({ ts: "2026-11-10T01:00:00.000Z", hook: "stop", event: "sent", used: ["decision:d-0a0b0c0d"] })];
+    const never = memoryWindow(live, SEAT, null, "2026-11-10T02:00:00.000Z");
+    expect(never.shownIds).toEqual({});
+    expect(never.usedIds).toEqual({});
+    expect(never.citedIds).toEqual({}); // window-less row: initialized, not folded
+    expect(never.actedIds).toEqual({});
+  });
+  test("B12 fold: a pre-split used-only line lands in citedIds, never actedIds; serializeRecord carries both", () => {
+    const m = memoryWindow(
+      [logLine({ ts: "2026-11-10T01:00:00.000Z", hook: "stop", event: "sent", used: ["decision:d-0a0b0c0d"] })],
+      SEAT,
+      "2026-11-10T00:30:00.000Z",
+      null,
+    );
+    expect(m.citedIds).toEqual({ decision: 1 });
+    expect(m.actedIds).toEqual({});
+    const line = serializeRecord({ qitemId: "q", source: null, destination: SEAT, tags: [], created: null, claimed: null, closed: null, closeTransitionId: null, closureReason: null, closureTarget: null, handoffFrom: null, handoffTo: null, reopenCount: 0, followOn: [], memory: { ...m } } as never);
+    const rec = JSON.parse(line) as { memory: Record<string, unknown> };
+    expect(rec.memory.citedIds).toEqual({ decision: 1 });
+    expect(rec.memory.actedIds).toEqual({});
+  });
+  test("B10: hand-edited junk entries never count and cannot make a log live; serializeRecord carries the fields", () => {
+    const junk = [logLine({ ts: "2026-11-10T01:00:00.000Z", hook: "stop", event: "sent", used: ["status:d-0a0b0c0d", "garbage"] })];
+    expect("usedIds" in memoryWindow(junk, SEAT, "2026-11-10T00:30:00.000Z", null)).toBe(false);
+    const m = memoryWindow(
+      [...junk, logLine({ ts: "2026-11-10T01:00:00.000Z", hook: "stop", event: "sent", used: ["decision:d-0a0b0c0d"] })],
+      SEAT,
+      "2026-11-10T00:30:00.000Z",
+      null,
+    );
+    expect(m.usedIds).toEqual({ decision: 1 }); // the junk line added nothing
+    const line = serializeRecord({ qitemId: "q", source: null, destination: SEAT, tags: [], created: null, claimed: null, closed: null, closeTransitionId: null, closureReason: null, closureTarget: null, handoffFrom: null, handoffTo: null, reopenCount: 0, followOn: [], memory: { ...m } } as never);
+    expect(JSON.parse(line).memory.usedIds).toEqual({ decision: 1 });
+  });
   test("F-G (ruling 08:18Z): the pointer counts from the RECALL line; old user-prompt lines still count; none is not an arm", () => {
     const m = memoryWindow(
       [
@@ -405,6 +462,66 @@ async function withRunner(
     d.close();
   }
 }
+
+// ADR-0022 decision 2: OutcomeRecord.models - sorted distinct model ids on
+// the destination seat's lines in the row's window. Absent while the whole
+// log carries no model (old records and every rebuild over a model-less log
+// stay byte-identical); [] once the log is model-live but the window had none.
+describe("models (ADR-0022 d2)", () => {
+  const MA = "fixture-model-a.1";
+  const MB = "zeta-model.2";
+  test("modelsWindow: sorted distinct ids; seat, window and L-A rules as memoryWindow", () => {
+    const l = [
+      logLine({ ts: "2026-11-10T01:00:00.000Z", hook: "stop", event: "sent", model: MB }),
+      logLine({ ts: "2026-11-10T00:30:00.000Z", hook: "session-start", event: "startup", model: MA }), // at claim - IN
+      logLine({ ts: "2026-11-10T01:30:00.000Z", hook: "stop", event: "sent", model: MB }), // distinct dedupe
+      logLine({ ts: "2026-11-10T00:29:59.000Z", hook: "stop", event: "sent", model: "out-of-window" }), // before claim - OUT
+      logLine({ ts: "2026-11-10T01:10:00.000Z", hook: "stop", event: "sent", model: "other-seat-model", peer: "other@fixture-rig" }), // other seat - OUT
+      logLine({ ts: "2026-11-10T01:11:00.000Z", hook: "mcp", event: "tool:search", model: "foreign-session", session: "x@other-rig" }), // L-A - OUT
+      logLine({ ts: "2026-11-10T01:12:00.000Z", hook: "stop", event: "sent", model: "bad model!" }), // fails the grammar - ignored
+    ];
+    expect(modelsWindow(l, SEAT, "2026-11-10T00:30:00.000Z", "2026-11-10T02:00:00.000Z")).toEqual([MA, MB]);
+    // never claimed = no window (bottom rule shared with memoryWindow), but a live log still answers []
+    expect(modelsWindow(l, SEAT, null, null)).toEqual([]);
+  });
+  test("absent while NO line in the log carries a model; [] once one does", () => {
+    expect(modelsWindow([], SEAT, "2026-11-10T00:30:00.000Z", null)).toBeUndefined();
+    // a "model" of its own that fails the grammar is not a model line either
+    // (the writer cannot produce one; a hand-edited log must not flip records)
+    expect(modelsWindow([logLine({ model: "bad model!" })], SEAT, "2026-11-10T00:30:00.000Z", null)).toBeUndefined();
+    // a valid model line ANYWHERE (other seat, far outside the window) makes
+    // new records carry the field: [] for a window that showed none
+    expect(
+      modelsWindow([logLine({ ts: "2020-01-01T00:00:00.000Z", peer: "other@fixture-rig", model: MA })], SEAT, "2026-11-10T00:30:00.000Z", "2026-11-10T02:00:00.000Z"),
+    ).toEqual([]);
+  });
+  test("collector: records carry sorted models; rebuild idempotent; a model-less log keeps old bytes", async () => {
+    await withRunner(async (dir, url) => {
+      fixtureLog(dir, "fixture-rig", [
+        logLine({ ts: "2026-11-10T01:00:00.000Z", hook: "stop", event: "sent", model: MB }),
+        logLine({ ts: "2026-11-10T01:00:00.000Z", hook: "session-start", event: "startup", model: MA }),
+      ]);
+      const r = await collectOutcomes({ daemonUrl: url, rig: "fixture-rig", stateDir: dir });
+      if ("error" in r) throw new Error(r.error);
+      expect(r.records).toHaveLength(3);
+      // the two dev-build rows collect both ids; the dev-review row (ID_C,
+      // its own destination seat) sees none in a live log: []
+      for (const rec of r.records) {
+        expect(rec.models).toEqual(rec.destination === SEAT ? [MA, MB] : []);
+      }
+      await collectOutcomes({ daemonUrl: url, rig: "fixture-rig", stateDir: dir, rebuild: true });
+      const bytes = readFileSync(outcomesFile(dir, "fixture-rig"), "utf8");
+      expect(JSON.parse(bytes.split("\n")[0]!).models).toEqual([MA, MB]);
+      await collectOutcomes({ daemonUrl: url, rig: "fixture-rig", stateDir: dir, rebuild: true });
+      expect(readFileSync(outcomesFile(dir, "fixture-rig"), "utf8")).toBe(bytes); // rebuild idempotency pin
+    });
+    await withRunner(async (dir, url) => {
+      // no fixtureLog at all: no model line anywhere - the field is absent
+      await collectOutcomes({ daemonUrl: url, rig: "fixture-rig", stateDir: dir });
+      expect(readFileSync(outcomesFile(dir, "fixture-rig"), "utf8")).not.toContain("models");
+    });
+  });
+});
 
 describe("collectOutcomes", () => {
   test("first run adds every closed row of THIS rig only", async () => {

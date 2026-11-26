@@ -5,7 +5,17 @@
 import { describe, expect, test } from "bun:test";
 import { formatEntry, formatRetire, toEntries } from "../../plugin/src/ledger.ts";
 import { memoryWindow, summarize, type OutcomeRecord } from "../../plugin/src/outcomes.ts";
-import { ledgerNodes, outcomeGroups, renderReport, usage, usageOf, type ReportInput } from "../../plugin/src/report.ts";
+import {
+  costsContext,
+  ledgerNodes,
+  modelFamily,
+  outcomeGroups,
+  renderReport,
+  shownUsed,
+  usage,
+  usageOf,
+  type ReportInput,
+} from "../../plugin/src/report.ts";
 
 const NOW = "2026-11-24T12:00:00.000Z";
 const line = (o: Record<string, unknown>) => ({ ts: "2026-11-24T10:00:00.000Z", ok: true, ms: 10, peer: "build", ...o });
@@ -253,5 +263,178 @@ describe("renderReport", () => {
   test("unreachable parts render as missing, never throw", () => {
     const html = renderReport(input({ ledger: null, stored: null, stale: null, outcomes: [], logLines: [] }));
     expect(html).toContain("The ledger could not be read.");
+  });
+});
+
+describe("shown against used (B11, ADR-0022 d4)", () => {
+  const sl = (o: Record<string, unknown>) => line({ hook: "stop", event: "sent", ...o });
+  test("modelFamily: claude ids, local engine ids, other, unknown", () => {
+    expect(modelFamily("claude-haiku-4-5-20251001")).toBe("claude");
+    expect(modelFamily("qwen3.8-flash-next")).toBe("local");
+    expect(modelFamily("Local-Engine-2.2-Q6")).toBe("local");
+    expect(modelFamily("gpt-5-codex")).toBe("other");
+    expect(modelFamily(undefined)).toBe("unknown");
+    expect(modelFamily("")).toBe("unknown");
+    // F-V4 (R27): validate with modelFromInput first - an invalid id is
+    // "unknown" (no valid model), never "other" (a wrong family label).
+    expect(modelFamily("hand-edited\njunk")).toBe("unknown");
+    expect(modelFamily("bad model!")).toBe("unknown");
+    expect(modelFamily("x".repeat(101))).toBe("unknown");
+  });
+  test("shownUsed: per family and kind over the window; window, junk and model-less lines", () => {
+    const lines = [
+      sl({ model: "claude-haiku-4-5", shown: ["decision:d-00000001", "approval:d-cafe0001", "junk:xx"] }),
+      sl({ model: "qwen3-next", used: ["decision:d-00000001"] }),
+      sl({ model: "gpt-5-codex", shown: ["pointer:qitem-20261126033123-fa23880114985030"] }),
+      sl({ peer: "lead", shown: ["lesson:qitem-20261126033123-b1d597bc0111f573"] }), // no model id, no model line at that seat -> unknown
+      sl({ model: "claude-haiku-4-5", shown: ["decision:d-00000002"], ts: "2026-11-01T00:00:00.000Z" }), // outside 7 d
+      sl({ model: "gpt-5-codex", cited: ["decision:d-00000003"], acted: ["decision:d-00000004"], used: ["decision:d-00000003", "decision:d-00000004"] }), // B12 split line
+      sl({ shown: "not-an-array" }),
+      null,
+    ];
+    const su = shownUsed(lines, NOW, 7);
+    expect(su.live).toBe(true);
+    expect(su.cells.claude.decision.shown).toBe(1);
+    expect(su.cells.claude.approval.shown).toBe(1);
+    // B12 fold: a pre-split line (used only) counts as cited, never acted.
+    expect(su.cells.local.decision.used).toBe(1);
+    expect(su.cells.local.decision.cited).toBe(1);
+    expect(su.cells.local.decision.acted).toBe(0);
+    expect(su.cells.other.pointer.shown).toBe(1);
+    expect(su.cells.unknown.lesson.shown).toBe(1);
+    expect(su.cells.local.decision.shown).toBe(0);
+    expect(su.cells.claude.decision.used).toBe(0);
+    // a split line keeps its own cited/acted (own model only, no borrow);
+    // used = the union field
+    expect(su.cells.other.decision.cited).toBe(1);
+    expect(su.cells.other.decision.acted).toBe(1);
+    expect(su.cells.other.decision.used).toBe(2);
+    expect(su.entries.get("decision:d-00000001")).toEqual({ kind: "decision", shown: 1, cited: 1, acted: 0 });
+    expect(su.entries.get("decision:d-00000004")).toEqual({ kind: "decision", shown: 0, cited: 0, acted: 1 });
+    expect(shownUsed([line({ hook: "session-start", moment: "continuity" })], NOW, 7).live).toBe(false);
+  });
+  test("F-V2 fold: a used-only line feeds cited and the used compat, never acted; a cited/acted-only line builds its own union", () => {
+    const split = shownUsed([sl({ model: "qwen3-next", cited: ["conclusion:c-abc12345"], acted: ["conclusion:c-def45678"] })], NOW, 7);
+    expect(split.cells.local.conclusion.cited).toBe(1);
+    expect(split.cells.local.conclusion.acted).toBe(1);
+    expect(split.cells.local.conclusion.used).toBe(2); // usedRaw ?? union
+    expect(split.live).toBe(true);
+    const fold = shownUsed([sl({ model: "qwen3-next", used: ["conclusion:c-abc12345"] })], NOW, 7);
+    expect(fold.cells.local.conclusion.cited).toBe(1);
+    expect(fold.cells.local.conclusion.acted).toBe(0);
+    expect(fold.cells.local.conclusion.used).toBe(1);
+  });
+  test("costsContext (b98ef14): shown at least 5 and never cited AND never acted; any cited or acted entry is out", () => {
+    const lines: unknown[] = [];
+    for (let i = 0; i < 5; i++) lines.push(sl({ model: "claude-haiku", shown: ["decision:d-0000000a", "conclusion:c-never1", "conclusion:c-cited1", "conclusion:c-acted1"] }));
+    // cited once: out (Codex entries would otherwise be listed forever)
+    lines.push(sl({ model: "claude-haiku", shown: ["conclusion:c-cited1"], cited: ["conclusion:c-cited1"] }));
+    // acted once: out
+    lines.push(sl({ model: "claude-haiku", shown: ["conclusion:c-acted1"], acted: ["conclusion:c-acted1"] }));
+    for (let i = 0; i < 4; i++) lines.push(sl({ model: "claude-haiku", shown: ["decision:d-0000000b"] }));
+    expect(costsContext(shownUsed(lines, NOW, 7))).toEqual([
+      { entry: "conclusion:c-never1", kind: "conclusion", shown: 5 },
+      { entry: "decision:d-0000000a", kind: "decision", shown: 5 },
+    ]);
+  });
+  test("costsContext (N-F24, B13): a non-scannable conclusion is never listed; a scannable one at the same count still is", () => {
+    // "conclusion:done" (all letters) and "conclusion:c-ne" (7 chars) are the
+    // ids scannableEntry refuses in stop.ts, so no cited/acted evidence can
+    // ever exist for them - listing them would call "never looked for"
+    // "never cited or acted". They still count in Shown.
+    const lines: unknown[] = [];
+    for (let i = 0; i < 9; i++) lines.push(sl({ model: "claude-haiku", shown: ["conclusion:done", "conclusion:c-ne", "conclusion:c-abc12345"] }));
+    const su = shownUsed(lines, NOW, 7);
+    expect(costsContext(su)).toEqual([
+      { entry: "conclusion:c-abc12345", kind: "conclusion", shown: 9 },
+    ]);
+    // the Shown column is unaffected: all three counted, 27 total
+    expect(su.cells.claude.conclusion.shown).toBe(27);
+    expect(su.entries.get("conclusion:done")).toEqual({ kind: "conclusion", shown: 9, cited: 0, acted: 0 });
+    expect(su.entries.get("conclusion:c-ne")).toEqual({ kind: "conclusion", shown: 9, cited: 0, acted: 0 });
+  });
+  test("costsContext fold interaction: a pre-split used-only line counts as evidence (cited), clearing the entry", () => {
+    const lines: unknown[] = [];
+    for (let i = 0; i < 5; i++) lines.push(sl({ model: "claude-haiku", shown: ["decision:d-0000000c"] }));
+    lines.push(sl({ model: "claude-haiku", used: ["decision:d-0000000c"] })); // old shape: folds to cited
+    expect(costsContext(shownUsed(lines, NOW, 7))).toEqual([]);
+  });
+  test("borrow (architect 2026-11-26): model-less shown lines take their seat's next model line", () => {
+    const lines = [
+      line({ hook: "session-start", moment: "continuity", peer: "build", ts: "2026-11-24T10:00:00.000Z", shown: ["decision:d-0000000e"] }),
+      line({ hook: "recall", event: "injected", arm: "shown", peer: "build", ts: "2026-11-24T10:02:00.000Z", shown: ["conclusion:cx"] }),
+      line({ hook: "stop", event: "sent", peer: "build", model: "claude-haiku-4-5-20251001", ts: "2026-11-24T10:05:00.000Z", used: ["decision:d-0000000e"] }),
+    ];
+    const su = shownUsed(lines, NOW, 7);
+    expect(su.cells.claude.decision.shown).toBe(1);
+    expect(su.cells.claude.conclusion.shown).toBe(1);
+    expect(su.cells.claude.decision.used).toBe(1);
+    expect(su.cells.unknown.decision.shown).toBe(0);
+  });
+  test("borrow limits: past 60 min, another seat's model, or only an earlier line - stays unknown", () => {
+    const late = shownUsed(
+      [
+        line({ hook: "session-start", moment: "continuity", peer: "build", ts: "2026-11-24T10:00:00.000Z", shown: ["decision:d-0000000f"] }),
+        line({ hook: "stop", event: "sent", peer: "build", model: "claude-haiku", ts: "2026-11-24T11:30:00.000Z" }),
+      ],
+      NOW,
+      7,
+    );
+    expect(late.cells.unknown.decision.shown).toBe(1);
+    expect(late.cells.claude.decision.shown).toBe(0);
+    const other = shownUsed(
+      [
+        line({ hook: "session-start", moment: "continuity", peer: "build", ts: "2026-11-24T10:00:00.000Z", shown: ["decision:d-0000000f"] }),
+        line({ hook: "stop", event: "sent", peer: "review", model: "claude-haiku", ts: "2026-11-24T10:05:00.000Z" }),
+      ],
+      NOW,
+      7,
+    );
+    expect(other.cells.unknown.decision.shown).toBe(1);
+    expect(other.cells.claude.decision.shown).toBe(0);
+    const before = shownUsed(
+      [
+        line({ hook: "stop", event: "sent", peer: "build", model: "claude-haiku", ts: "2026-11-24T09:00:00.000Z" }),
+        line({ hook: "session-start", moment: "continuity", peer: "build", ts: "2026-11-24T10:00:00.000Z", shown: ["decision:d-0000000f"] }),
+      ],
+      NOW,
+      7,
+    );
+    expect(before.cells.unknown.decision.shown).toBe(1);
+  });
+  test("the page: family table, the Codex note, the costs list; a shown-less log says so", () => {
+    const lines: unknown[] = [line({ hook: "session-start", moment: "continuity", model: "claude-haiku", shown: ["decision:d-0000000c"] })];
+    // c-heavy1, not c-heavy: a 7-char conclusion is non-scannable (N-F24) and
+    // would correctly never reach the costs list.
+    for (let i = 0; i < 5; i++) lines.push(line({ hook: "stop", event: "sent", model: "qwen3-next", shown: ["conclusion:c-heavy1"] }));
+    const html = renderReport(input({ logLines: lines }));
+    expect(html).toContain("Shown against used");
+    expect(html).toContain("<td>claude</td><td>decisions</td><td>1</td><td>0</td><td>0</td>");
+    expect(html).toContain("Model family</th><th>Entry kind</th><th>Shown</th><th>Cited</th><th>Acted</th>");
+    expect(html).toContain("Codex acted counts are not measured");
+    expect(html).toContain("Codex entries show cited only");
+    expect(html).not.toContain("Codex used counts come from the final message only");
+    expect(html).toContain("Claude shown counts take the model of the seat's next Stop line within the hour");
+    expect(html).toContain("never cited or acted - ids and counts only");
+    expect(html).toContain("Costs context, no evidence");
+    expect(html).toContain("<td>conclusion:c-heavy1</td><td>conclusion</td><td>5</td>");
+    expect(html).toContain("local model");
+    const off = renderReport(input());
+    expect(off).toContain("No shown ids in this log window yet");
+    expect(off).not.toContain("Costs context");
+  });
+  test("privacy: the table is counts only; ids appear only in the costs list; counts-only too", () => {
+    // a single shown entry contributes counts, never its id (ids reach the
+    // page only via the costs list, where the row allows them)
+    const one = renderReport(input({ logLines: [line({ hook: "stop", event: "sent", model: "claude-haiku", shown: ["decision:d-0000000d"] })] }));
+    expect(one).toContain("Shown against used");
+    expect(one).not.toContain("decision:d-0000000d");
+    const heavy: unknown[] = [];
+    for (let i = 0; i < 5; i++) heavy.push(line({ hook: "stop", event: "sent", model: "claude-haiku", shown: ["decision:d-0000000d"] }));
+    for (const countsOnly of [false, true]) {
+      const html = renderReport(input({ logLines: heavy, countsOnly }));
+      expect(html).toContain("decision:d-0000000d");
+      expect(html).not.toMatch(/<script/);
+    }
   });
 });

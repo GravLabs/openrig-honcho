@@ -44,6 +44,9 @@ export interface ContinuityStats {
   n_checkpoint: number;
   n_stale: number;
   n_lesson: number;
+  /** B10 (ADR-0022 d3): kind:id entries the digest showed (ids only, never
+   * text); absent when nothing qualified. */
+  shown?: string[];
 }
 
 export interface ReaderDeps {
@@ -590,7 +593,7 @@ async function buildContinuity(a: {
     (a.source === "startup" || a.source === "compact" || a.source === "resume") && config.sessionName !== undefined
       ? maybeLessonSuggestion(config.stateDir, config.workspace, config.sessionName, config.peer, now, false)
       : undefined;
-  const { text, shown, staleShownIds } = renderContinuityShown({
+  const { text, shown, staleShownIds, shownIds } = renderContinuityShown({
     now,
     ...(checkpoint !== null ? { checkpoint } : {}),
     ...(openItems.length > 0 ? { openWork: openItems } : {}),
@@ -626,6 +629,7 @@ async function buildContinuity(a: {
     n_away: away.length,
     has_pointer: pointer !== undefined,
     ...(cappedTotal !== undefined ? { ledger_capped: cappedTotal } : {}),
+    ...(shownIds.length > 0 ? { shown: shownIds } : {}),
     ...shown,
   });
   return text;

@@ -28,6 +28,36 @@ export interface LogEvent {
    */
   qitem?: string;
   /**
+   * ADR-0022 decision 1: the model id this run knows it ran on - taken from
+   * the hook input (Codex carries `model` on all three events; the Claude
+   * probe 2026-11-26 found none) or, on Claude's Stop, from the newest
+   * assistant entry of the transcript the Stop already reads. Only a
+   * validated id rides (modelFromInput: at most 100 chars of
+   * [A-Za-z0-9._:/@-]); no other input or transcript text is kept. Absent
+   * on every line that cannot know it, so old lines stay byte-identical.
+   */
+  model?: string;
+  /**
+   * ADR-0022 decision 3 (B10): the ids this run SHOWED the seat (injection
+   * lines) or found USED in the turn's own text (Stop line). Only validated
+   * kind:id entries ride (shown.ts: fixed kinds, ledger/queue/server id
+   * grammars) - ids only, never content, the pointer-count precedent. Absent
+   * on every line that shows or matched nothing, so old lines stay
+   * byte-identical. `used` may also ride through bindEventFields (the Stop
+   * run's one line, like model); `shown` always rides its own line.
+   */
+  shown?: string[];
+  used?: string[];
+  /**
+   * B12 (ADR-0022 d3 amendment, review R27 F-V2): `used` splits into
+   * `cited` (id in the seat's text or final message) and `acted` (id in a
+   * tool_use input - the v0.6 evidence count). `used` stays as cited + acted
+   * for compatibility. Like `used`, both may ride through bindEventFields
+   * (the Stop run's one line).
+   */
+  cited?: string[];
+  acted?: string[];
+  /**
    * O2 (ruling 3): the claim-time pointer's outcome on a nudge run. The
    * run KEEPS its ordinary event (sent/spooled) so existing event counts
    * stay comparable; this field carries shown|held|none.
@@ -166,11 +196,24 @@ export function errorClassFrom(kind: string, status?: number): string {
  * process logs - including the ones library code emits - carries the field.
  * Merging, never replacing; a process binds at most twice.
  */
-const boundFields: Partial<Pick<LogEvent, "harness_unknown" | "no_turn_id">> = {};
-export function bindEventFields(fields: Partial<Pick<LogEvent, "harness_unknown" | "no_turn_id">>): void {
+const boundFields: Partial<Pick<LogEvent, "harness_unknown" | "no_turn_id" | "model" | "used" | "cited" | "acted">> = {};
+export function bindEventFields(fields: Partial<Pick<LogEvent, "harness_unknown" | "no_turn_id" | "model" | "used" | "cited" | "acted">>): void {
   for (const [k, v] of Object.entries(fields)) {
-    if (v !== undefined) (boundFields as Record<string, number>)[k] = v;
+    if (v !== undefined) (boundFields as Record<string, number | string>)[k] = v;
   }
+}
+
+/**
+ * ADR-0022 decision 1: the ONLY accepted shape of a model id - at most 100
+ * characters of [A-Za-z0-9._:/@-], otherwise dropped (undefined). Input
+ * values come from the harness, transcript values from a file we re-read:
+ * both pass here, so no other text can ever enter the log through this
+ * field (X1).
+ */
+export function modelFromInput(v: unknown): string | undefined {
+  return typeof v === "string" && v.length > 0 && v.length <= 100 && /^[A-Za-z0-9._:/@-]+$/.test(v)
+    ? v
+    : undefined;
 }
 
 export function logEvent(config: LogTarget, e: LogEvent): void {
@@ -193,6 +236,17 @@ export function logEvent(config: LogTarget, e: LogEvent): void {
     };
     if (e.session !== undefined) line.session = e.session;
     if (e.qitem !== undefined) line.qitem = e.qitem;
+    const boundModel = e.model ?? boundFields.model;
+    if (boundModel !== undefined) line.model = boundModel;
+    // ADR-0022 d3: ids only, validated by the callers (shown.ts); an empty
+    // array serializes as absent so non-use lines stay byte-identical.
+    if (e.shown !== undefined && e.shown.length > 0) line.shown = e.shown;
+    const boundUsed = e.used ?? boundFields.used;
+    if (boundUsed !== undefined && boundUsed.length > 0) line.used = boundUsed;
+    const boundCited = e.cited ?? (boundFields.cited as string[] | undefined);
+    if (boundCited !== undefined && boundCited.length > 0) line.cited = boundCited;
+    const boundActed = e.acted ?? (boundFields.acted as string[] | undefined);
+    if (boundActed !== undefined && boundActed.length > 0) line.acted = boundActed;
     if (e.pointer !== undefined) line.pointer = e.pointer;
     if (e.pointer_skip !== undefined) line.pointer_skip = e.pointer_skip;
     if (e.n_msgs !== undefined) line.n_msgs = e.n_msgs;

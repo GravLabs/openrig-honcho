@@ -14,6 +14,9 @@ import { redact } from "./redact.ts";
 import { sanitizeVisible } from "./pointer.ts";
 import { currentLedger, usedApproval, type LedgerEntry } from "./ledger.ts";
 import { hasRealFollowOn, isMachineryRow, type OutcomeRecord } from "./outcomes.ts";
+import { parseShownList, SHOWN_KINDS, type ShownKind } from "./shown.ts";
+import { scannableEntry } from "./stop.ts";
+import { modelFromInput } from "./log.ts";
 
 export const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -144,6 +147,169 @@ export function usage(logLines: unknown[], now: string, days: number): Usage {
     hooks[h] = { n: s.length, p50: pct(s, 0.5), p95: pct(s, 0.95), failures: failures[h] ?? 0 };
   }
   return { days: dayKeys, byDay, bySeat, totals, hooks };
+}
+
+// ------------------------------------------------------ shown against used
+// B11 (ADR-0022 d4), amended by B12 (review R27): shown ids against cited
+// and acted ids, per entry kind and model family, plus the entries that
+// cost context with no evidence. Counts and ids from the log lines
+// themselves, same window as the usage table. Codex caveat carried on the
+// page (b98ef14): the Stop hook sees no Codex tool-call input, so Codex
+// acted counts are NOT MEASURED (not zero) - Codex lines show cited only,
+// and the costs list needs cited OR acted to clear an entry.
+
+export const MODEL_FAMILIES = ["claude", "local", "other", "unknown"] as const;
+export type ModelFamily = (typeof MODEL_FAMILIES)[number];
+export const FAMILY_LABEL: Record<ModelFamily, string> = {
+  claude: "claude",
+  local: "local model",
+  other: "other",
+  unknown: "unknown",
+};
+
+/** Model id -> family (ADR-0022 d4, amended at b98ef14). Claude ids are
+ * claude-*; ids of hosted vendor models (gpt-, o1/o3/o4-style, gemini,
+ * grok) are other; any other valid id is a local model, as a rig's own
+ * engine serves it. unknown means NO VALID MODEL ID: the line never
+ * carried one (pre-v0.5.13 logs, Claude session-start and recall lines),
+ * or the value failed the modelFromInput check. */
+export function modelFamily(id: unknown): ModelFamily {
+  if (typeof id !== "string" || id === "") return "unknown";
+  // F-V4 (review R27): validate with the same gate every writer uses
+  // (modelFromInput, log.ts). A hand-edited value is "unknown" - unknown
+  // means "no valid model id", so a hostile string never becomes a family
+  // label. Nothing prints here: only the four fixed labels ever leave.
+  if (modelFromInput(id) === undefined) return "unknown";
+  const s = id.toLowerCase();
+  if (s.startsWith("claude")) return "claude";
+  if (/^(gpt|chatgpt|o[0-9]|gemini|grok)/.test(s)) return "other";
+  return "local";
+}
+
+/** How far a model-less shown line looks for its seat's next
+ * model-carrying line (architect 2026-11-26: normally the Stop of that
+ * turn). Beyond this it stays unknown; the log gains no new field. */
+const MODEL_LOOKAHEAD_MS = 60 * 60_000;
+
+/** Entries shown at least this many times and never used are listed. */
+export const COSTS_MIN = 5;
+
+export interface ShownUsedCell {
+  shown: number;
+  cited: number;
+  acted: number;
+  /** cited + acted, kept for compatibility (ADR-0022 d3 amendment); the
+   * table never prints it on its own. */
+  used: number;
+}
+
+export interface ShownUsed {
+  /** family -> kind -> counts over the window */
+  cells: Record<ModelFamily, Record<ShownKind, ShownUsedCell>>;
+  /** entry (kind:id) -> counts over the window */
+  entries: Map<string, { kind: ShownKind; shown: number; cited: number; acted: number }>;
+  /** false when no line in the window carried a valid shown/used/cited/acted list */
+  live: boolean;
+}
+
+/** Shown vs used over the same `days` window as the usage table. Kinds come
+ * from the entry prefix (entries are grammar-validated by parseShownList). */
+export function shownUsed(logLines: unknown[], now: string, days: number): ShownUsed {
+  const end = Date.parse(now);
+  const first = new Date(end - (days - 1) * DAY_MS).toISOString().slice(0, 10);
+  const cells = Object.fromEntries(
+    MODEL_FAMILIES.map((f) => [f, Object.fromEntries(SHOWN_KINDS.map((k) => [k, { shown: 0, cited: 0, acted: 0, used: 0 }]))]),
+  ) as Record<ModelFamily, Record<ShownKind, ShownUsedCell>>;
+  const entries = new Map<string, { kind: ShownKind; shown: number; cited: number; acted: number }>();
+  let live = false;
+  // Per-seat model timeline (architect 2026-11-26): a shown line with no
+  // model id borrows the model of the SAME seat's next model-carrying line
+  // within MODEL_LOOKAHEAD_MS (normally the Stop of that turn - Claude
+  // session-start and recall lines carry no model). Used lines keep their
+  // own model: only Stop logs used, and Stop carries the model. A line with
+  // no peer, no later model line, or one beyond the hour stays unknown.
+  const timeline = new Map<string, { ts: number; model: string }[]>();
+  for (const raw of logLines) {
+    if (raw === null || typeof raw !== "object") continue;
+    const o = raw as Record<string, unknown>;
+    if (typeof o.model !== "string" || o.model === "") continue;
+    if (typeof o.peer !== "string" || o.peer === "") continue;
+    const t = Date.parse(typeof o.ts === "string" ? o.ts : "");
+    if (Number.isNaN(t)) continue;
+    let list = timeline.get(o.peer);
+    if (list === undefined) {
+      list = [];
+      timeline.set(o.peer, list);
+    }
+    list.push({ ts: t, model: o.model });
+  }
+  for (const list of timeline.values()) list.sort((a, b) => a.ts - b.ts);
+  const borrow = (peer: unknown, t: number): ModelFamily => {
+    if (typeof peer !== "string" || peer === "") return "unknown";
+    const list = timeline.get(peer);
+    if (list === undefined || list.length === 0) return "unknown";
+    let lo = 0;
+    let hi = list.length;
+    while (lo < hi) {
+      const mid = (lo + hi) >> 1;
+      if ((list[mid] as { ts: number }).ts < t) lo = mid + 1;
+      else hi = mid;
+    }
+    const hit = list[lo];
+    return hit !== undefined && hit.ts - t <= MODEL_LOOKAHEAD_MS ? modelFamily(hit.model) : "unknown";
+  };
+  const bump = (list: string[] | undefined, field: "shown" | "cited" | "acted" | "used", fam: ModelFamily): void => {
+    if (list === undefined) return;
+    for (const e of list) {
+      const kind = e.slice(0, e.indexOf(":")) as ShownKind;
+      const cell = cells[fam][kind];
+      if (cell !== undefined) cell[field] += 1;
+      const ent = entries.get(e) ?? { kind, shown: 0, cited: 0, acted: 0 };
+      if (field !== "used") ent[field] += 1; // entries carry the split; used is the compat union
+      entries.set(e, ent);
+    }
+  };
+  for (const raw of logLines) {
+    if (raw === null || typeof raw !== "object") continue;
+    const o = raw as Record<string, unknown>;
+    const ts = typeof o.ts === "string" ? o.ts : "";
+    const day = ts.slice(0, 10);
+    if (day === "" || day < first || Date.parse(ts) > end) continue;
+    const shownList = parseShownList(o.shown);
+    const usedRaw = parseShownList(o.used);
+    const citedRaw = parseShownList(o.cited);
+    const actedRaw = parseShownList(o.acted);
+    if (shownList === undefined && usedRaw === undefined && citedRaw === undefined && actedRaw === undefined) continue;
+    live = true;
+    // B12 (R27 amendment): lines from before the split carry only `used` -
+    // those were substring matches, the weakest evidence, so they fold into
+    // cited and never into acted (v0.6 evidence reads acted). New lines use
+    // their own lists; used = usedRaw ?? cited + acted union.
+    const cited = citedRaw ?? usedRaw ?? [];
+    const acted = actedRaw ?? [];
+    const used = usedRaw ?? [...new Set([...cited, ...acted])].sort();
+    const ownFam = modelFamily(o.model);
+    bump(shownList, "shown", ownFam === "unknown" ? borrow(o.peer, Date.parse(ts)) : ownFam);
+    bump(cited, "cited", ownFam);
+    bump(acted, "acted", ownFam);
+    bump(used, "used", ownFam);
+  }
+  return { cells, entries, live };
+}
+
+/** Entries shown at least COSTS_MIN times and NEVER CITED AND NEVER ACTED,
+ * worst first (b98ef14: Codex seats have no measured acted counts, so a
+ * never-acted rule would list every Codex entry forever - any evidence,
+ * cited or acted, takes an entry off the list).
+ * N-F24 (B13): skip entries the scanner refuses to scan (short or all-letter
+ * conclusion ids) - their use is never looked for, so calling them "never
+ * cited or acted" would be dishonest. No new label; the Shown column is
+ * unaffected, they simply never appear here. */
+export function costsContext(su: ShownUsed): { entry: string; kind: ShownKind; shown: number }[] {
+  return [...su.entries.entries()]
+    .filter(([entry, v]) => scannableEntry(entry) && v.shown >= COSTS_MIN && v.cited === 0 && v.acted === 0)
+    .map(([entry, v]) => ({ entry, kind: v.kind, shown: v.shown }))
+    .sort((a, b) => b.shown - a.shown || a.entry.localeCompare(b.entry));
 }
 
 // --------------------------------------------------------------- outcomes
@@ -412,6 +578,7 @@ export function renderReport(input: ReportInput): string {
     (nodes ?? []).filter((n) => n.kind === k && (s === undefined || n.state === s)).length;
   const tile = (v: string, label: string): string => `<div class="tile"><b>${v}</b><span>${esc(label)}</span></div>`;
   const st = input.stored;
+  const su = shownUsed(input.logLines, input.now, input.days);
   const parts: string[] = [];
   parts.push(
     `<h1>Memory report: ${esc(input.rig)}</h1><p class="muted">Workspace ${esc(input.workspace)} · ${esc(input.now.slice(0, 16).replace("T", " "))}Z · usage over the last ${input.days} days${input.countsOnly ? " · counts only, no memory text" : ""}</p>`,
@@ -459,6 +626,35 @@ export function renderReport(input: ReportInput): string {
         .map((s) => [esc(sanitizeVisible(s)), ...USAGE_KINDS.map((k) => fmtNum((u.bySeat[s] as Record<UsageKind, number>)[k]))]),
     ),
   );
+  parts.push(`<h2>Shown against used</h2>`);
+  if (!su.live) {
+    parts.push(`<p class="muted">No shown ids in this log window yet - the shown/used measurement lands with v0.5.13.</p>`);
+  } else {
+    const suRows: string[][] = [];
+    for (const f of MODEL_FAMILIES) {
+      for (const k of SHOWN_KINDS) {
+        const c = su.cells[f][k] as ShownUsedCell;
+        if (c.shown === 0 && c.cited === 0 && c.acted === 0) continue;
+        suRows.push([FAMILY_LABEL[f], `${k}s`, fmtNum(c.shown), fmtNum(c.cited), fmtNum(c.acted)]);
+      }
+    }
+    parts.push(table(["Model family", "Entry kind", "Shown", "Cited", "Acted"], suRows));
+    parts.push(
+      `<p class="muted">Shown: the entry's line reached the prompt. Cited: the id appeared in the seat's own text or final message - an echo counts here. Acted: the id appeared in a tool_use input - a rig_memory call or a queue command. v0.6 evidence counts acted only; Codex acted counts are not measured (Codex transcripts carry no tool-call input), so Codex entries show cited only. Claude shown counts take the model of the seat's next Stop line within the hour; with none in time they stay unknown.</p>`,
+    );
+    const costs = costsContext(su);
+    parts.push(
+      `<h3>Costs context, no evidence</h3><p class="muted">Entries shown at least ${COSTS_MIN} times in this window and never cited or acted - ids and counts only.</p>`,
+    );
+    parts.push(
+      costs.length === 0
+        ? `<p class="muted">None in this window.</p>`
+        : table(
+            ["Entry", "Kind", "Times shown"],
+            costs.map((c) => [esc(c.entry), esc(c.kind), fmtNum(c.shown)]),
+          ),
+    );
+  }
   parts.push(`<h2>Does work go better with memory?</h2><p class="muted">From the outcome log: ${fmtNum(og.closedRows)} closed ${og.closedRows === 1 ? "row" : "rows"}, ${fmtNum(og.compared)} compared below${og.housekeeping > 0 ? `; left out: ${fmtNum(og.housekeeping)} OpenRig housekeeping` : ""}${og.unclaimed > 0 ? `${og.housekeeping > 0 ? "," : "; left out:"} ${fmtNum(og.unclaimed)} never claimed` : ""}${og.withCommits > 0 ? `; ${fmtNum(og.withCommits)} of the compared ${og.withCommits === 1 ? "carries its" : "carry their"} commits` : ""}. Rework is a follow-on row or a reopen. The claim pointer's holdout is assigned by a hash, so it is the fair comparison; the second table is a trend only - busier work sees more memory.</p>`);
   const ogRows = (gs: OutcomeGroup[]): string[][] => gs.map((g) => [esc(g.label), fmtNum(g.rows), fmtPct(g.reworkShare), fmtH(g.medianHours)]);
   parts.push(table(["Holdout", "Rows", "Rework", "Median claim to close"], ogRows(og.holdout)));

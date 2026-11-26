@@ -241,6 +241,8 @@ describe("T19b digest build", () => {
       expect(
         text.endsWith('\nStart the open item with memory: mcp__rig_memory__search {"query": "Wire radio driver"}'),
       ).toBe(true);
+      // B10 (ADR-0022 d3) pin flip: the shown ids ride the same stats object -
+      // the decision and the approval whose lines the seat was shown.
       expect(stats).toEqual({
         moment: "continuity",
         n_open: 2,
@@ -251,6 +253,7 @@ describe("T19b digest build", () => {
         n_checkpoint: 0,
         n_stale: 0,
         n_lesson: 0,
+        shown: ["approval:d-cafe0001", "decision:d-deadbeef"],
       });
     } finally {
       daemon.stop();
@@ -590,6 +593,7 @@ describe("T20c item-scoped approvals and labels", () => {
       expect(text).not.toContain("d-57a1e001");
       expect(text).not.toContain("## Approvals you hold");
       expect(text).toContain("d-9b170002"); // mission decisions unaffected
+      // B10 (ADR-0022 d3) pin flip: only the shown mission decision rides shown.
       expect(stats).toEqual({
         moment: "continuity",
         n_open: 2,
@@ -600,6 +604,7 @@ describe("T20c item-scoped approvals and labels", () => {
         n_checkpoint: 0,
         n_stale: 0,
         n_lesson: 0,
+        shown: ["decision:d-9b170002"],
       });
     } finally {
       daemon.stop();
@@ -966,6 +971,47 @@ describe("v0.5.5 renderContinuityShown", () => {
     });
     expect(r.text).toContain("Possibly stale");
     expect(r.shown).toEqual({ n_checkpoint: 0, n_stale: 0, n_lesson: 0 });
+  });
+});
+
+// B10 (ADR-0022 d3): the kind:id entries the digest showed - counted with
+// the same line-survival rule as the v0.5.5 counts above.
+describe("B10 renderContinuityShown shownIds", () => {
+  const NOW3 = "2026-11-14T12:00:00.000Z";
+  test("decision, approval and lesson ids ride shownIds, sorted; status never enters", () => {
+    const r = renderContinuityShown({
+      now: NOW3,
+      decisions: [
+        { content: "Keep 868.", at: NOW3, id: "d-deadbeef", kind: "decision" },
+        { content: "released", at: NOW3, id: "d-5fa4e501", kind: "status" }, // row B10: status is never recorded
+      ],
+      approvals: [{ content: "Ship it", at: NOW3, id: "d-cafe0001", kind: "approval", ownerChecked: true }],
+      lesson: { qitemId: "qitem-20261114000000-aaaaaaaaaaaaaaaa", reason: "reopened", seat: "build" },
+    });
+    expect(r.shownIds).toEqual([
+      "approval:d-cafe0001",
+      "decision:d-deadbeef",
+      "lesson:qitem-20261114000000-aaaaaaaaaaaaaaaa",
+    ]);
+  });
+  test("a section cut by the fill budget contributes nothing; idless and junk ids never enter", () => {
+    const r = renderContinuityShown({
+      now: NOW3,
+      lesson: { qitemId: "qitem-20261114000000-aaaaaaaaaaaaaaaa", reason: "reopened", seat: "build" },
+      decisions: [{ content: `Long station. ${"x".repeat(2800)}`, at: NOW3, id: "d-12345678", kind: "decision" }],
+    });
+    // the fill cut the line to "d-12345678, just now…" - the authored line
+    // no longer stands as a whole line, so the decision was NOT shown
+    expect(r.text).toContain("d-12345678, just now…");
+    expect(r.shownIds).toEqual(["lesson:qitem-20261114000000-aaaaaaaaaaaaaaaa"]);
+    const r2 = renderContinuityShown({
+      now: NOW3,
+      decisions: [
+        { content: "no id at all", at: NOW3 },
+        { content: "junk id", at: NOW3, id: "not-an-id", kind: "decision" },
+      ],
+    });
+    expect(r2.shownIds).toEqual([]);
   });
 });
 

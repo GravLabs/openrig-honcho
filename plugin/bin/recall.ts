@@ -39,9 +39,11 @@ import {
   pointerItems,
   pointerQuery,
 } from "../src/pointer.ts";
-import { bindEventFields, errorClassFrom, logConfigProblem, logEvent } from "../src/log.ts";
+import { bindEventFields, errorClassFrom, logConfigProblem, logEvent, modelFromInput } from "../src/log.ts";
 import { normalizeMission, readRigMission, readSeatState, seatStatePath } from "../src/missions.ts";
 import { takeOnce } from "../src/once.ts";
+import { parseEntry } from "../src/ledger.ts";
+import { recordShown, shownEntry } from "../src/shown.ts";
 import { saveTurn, turnFrom } from "../src/turn.ts";
 import {
   isTerseBody,
@@ -151,6 +153,8 @@ async function pointerSearchExit(
   logP: (over: Record<string, unknown>) => void,
   silentExit: boolean,
   harness: Harness = "claude",
+  /** B10 (ADR-0022 d3): the hook session, for the shown-state file. */
+  session: string = "",
 ): Promise<void> {
   // V5: lesson lines ride this run (shown arm only). Local IO only - any
   // failure inside pointerLessons is a silent empty block.
@@ -204,7 +208,8 @@ async function pointerSearchExit(
       );
       for (const [k, v] of marks) changed.set(Number(k), v);
     }
-    const text = pointerBlock(pQuery, count, pointerItems(snap, changed), harness);
+    const items = pointerItems(snap, changed);
+    const text = pointerBlock(pQuery, count, items, harness);
     // V5: the lesson lines ride beside the block (or alone when the block
     // is empty - the DECISION in the header). With no lessons the bytes and
     // the event line are today's, byte for byte.
@@ -213,6 +218,34 @@ async function pointerSearchExit(
       logP({ n_items: count, ...lessonFields });
       process.exit(0);
     }
+    // B10 (ADR-0022 d3, amended after review R27): the ids this pointer
+    // showed - the ids of items whose title made it into the block. The
+    // claimed row's OWN qitem id is excluded by design: the seat already
+    // holds that row, so recording it would let every pointer hand-off
+    // self-credit as used (amendment: never record the id of the row the
+    // seat currently holds as shown). Ledger items classify by their entry
+    // header (decision/approval; a status entry is never recorded); message
+    // items never count; derived and pre-v0.5.5 items are conclusions under
+    // their server id. Ids only.
+    const shownEntries: string[] = [];
+    if (text !== "") {
+      for (const it of items) {
+        const iid = typeof it.id === "string" ? it.id : "";
+        if (iid === "" || !text.includes(iid) || it.kind === "message") continue;
+        if (it.trust === "authoritative" || it.trust === "recorded") {
+          const p = parseEntry(String(it.content ?? ""));
+          if (p.kind === "decision" || p.kind === "approval") {
+            const e = shownEntry(p.kind, p.id);
+            if (e !== undefined) shownEntries.push(e);
+          }
+        } else {
+          const e = shownEntry("conclusion", iid);
+          if (e !== undefined) shownEntries.push(e);
+        }
+      }
+    }
+    const shownList = [...new Set(shownEntries)];
+    await recordShown(c.stateDir, c.workspace, session, shownList);
     writeHookJson("UserPromptSubmit", composed);
     logEvent(c, {
       hook: "recall",
@@ -223,6 +256,7 @@ async function pointerSearchExit(
       n_items: count,
       qitem: nudgeId,
       ...lessonFields,
+      ...(shownList.length > 0 ? { shown: shownList } : {}),
     });
     process.exit(0);
   } catch {
@@ -318,12 +352,19 @@ async function main(): Promise<void> {
     // event (two installs, byte-identical stdin) leaves silently. The
     // HONCHO_RECALL flag and the kill switch above are checked first: off
     // means off, unlogged, exactly as before.
-    let input: { prompt?: unknown; session_id?: unknown; transcript_path?: unknown; cwd?: unknown } = {};
+    let input: { prompt?: unknown; session_id?: unknown; transcript_path?: unknown; cwd?: unknown; model?: unknown } = {};
     let parsed = true;
     try {
       input = JSON.parse(raw) as typeof input;
     } catch {
       parsed = false;
+    }
+    // ADR-0022 decision 1: Codex's UserPromptSubmit input carries the model
+    // id (probe 2026-11-26); Claude's does not - absent on its lines. Bound
+    // before the once-guard so every line this run can write knows it.
+    if (parsed) {
+      const model = modelFromInput(input.model);
+      if (model !== undefined) bindEventFields({ model });
     }
     // v0.5.9 (R22 F-S2): changed-since marks read the seat's own folder, the
     // hook payload's cwd (as the digest does); the process folder only when absent
@@ -470,7 +511,7 @@ async function main(): Promise<void> {
               // every gate + shown: the pointer owns this run, shown or
               // silent. There is no recall here to fall back to, so even a
               // thrown search ends with this run's one pointer line.
-              await pointerSearchExit(c, nudgeId, r, tN, t0, logSkipPointer, true, harness);
+              await pointerSearchExit(c, nudgeId, r, tN, t0, logSkipPointer, true, harness, pSession);
               process.exit(0); // pointerSearchExit always exits; TS signpost
             }
           }
@@ -585,7 +626,7 @@ async function main(): Promise<void> {
           // exit). A thrown search logs its none line and RETURNS: today's
           // recall, if it answered, still renders (the pointer must never
           // silence memory).
-          await pointerSearchExit(c, nudgeId, winner.r, tN, t0, logP, false, harness);
+          await pointerSearchExit(c, nudgeId, winner.r, tN, t0, logP, false, harness, pSession);
         }
       }
       // row unreadable, absent, answered for another seat, or the pointer
@@ -741,6 +782,17 @@ async function main(): Promise<void> {
     } catch {
       // worst case without the seen file: a conclusion shows again later
     }
+    // B10 (ADR-0022 d3): the conclusion ids the block showed, shown arm
+    // only - a held block was never seen, so nothing counts as shown.
+    const injectedShown = new Set<string>();
+    if (arm === "shown") {
+      for (const id of view.ids) {
+        const e = shownEntry("conclusion", id);
+        if (e !== undefined) injectedShown.add(e);
+      }
+    }
+    const injectedList = [...injectedShown];
+    await recordShown(cfg.stateDir, cfg.workspace, session, injectedList);
     logEvent(cfg, {
       hook: "recall",
       event: "injected",
@@ -751,6 +803,7 @@ async function main(): Promise<void> {
       ...counts,
       ...(holdout > 0 ? { arm } : {}),
       ...(heldMarker ? { pointer: "held" } : {}),
+      ...(injectedList.length > 0 ? { shown: injectedList } : {}),
     });
   } catch {
     if (cfg !== null) {

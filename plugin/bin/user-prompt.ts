@@ -6,7 +6,7 @@
 import type { Config } from "../src/env.ts";
 import { isKillSwitch, loadConfig } from "../src/env.ts";
 import { createClient } from "../src/honcho.ts";
-import { bindEventFields, errorClassFrom, logConfigProblem, logEvent } from "../src/log.ts";
+import { bindEventFields, errorClassFrom, logConfigProblem, logEvent, modelFromInput } from "../src/log.ts";
 // F-G (O6, R15 Part 2): the claim-time pointer MOVED to the synchronous
 // recall.ts - async stdout cannot reach the turn (ADR-0001's I/O table;
 // Codex aborts async hook tasks at shutdown). This hook writes and logs
@@ -63,13 +63,19 @@ async function main(): Promise<void> {
       logEvent(cfg, { hook: "user-prompt", event: "duplicate-run", ok: true, ms: Date.now() - t0 });
       process.exit(0);
     }
-    let input: { prompt?: unknown; session_id?: unknown } = {};
+    let input: { prompt?: unknown; session_id?: unknown; model?: unknown } = {};
     try {
       input = JSON.parse(raw) as typeof input;
     } catch {
       // garbage stdin: nothing to record, nothing to say
       logEvent(cfg, { hook: "user-prompt", event: "stdin-invalid", ok: false, ms: Date.now() - t0, error_class: "parse" });
       process.exit(0);
+    }
+    // ADR-0022 decision 1: Codex's input carries the model id; Claude's does
+    // not, and this hook reads no transcript - absent on Claude's line.
+    {
+      const model = modelFromInput(input.model);
+      if (model !== undefined) bindEventFields({ model });
     }
     if (typeof input.prompt !== "string" || input.prompt === "") {
       logEvent(cfg, { hook: "user-prompt", event: "empty", ok: true, ms: Date.now() - t0 });

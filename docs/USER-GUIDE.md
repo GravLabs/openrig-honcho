@@ -191,6 +191,11 @@ Keep the plugin in the same folder, so the hooks keep pointing at it:
    read their code from disk on every run, but the `rig_memory` server is a
    long-running process and picks up new tools only on restart.
 
+To move the plugin folder, uninstall from the old path first; install refuses a
+folder recorded with a different plugin path, and writes nothing. Uninstall refuses
+the same way, so if the folder has already moved, put it back, uninstall, then move it
+and install again.
+
 See [CHANGELOG.md](../CHANGELOG.md) for what each version changes.
 
 ## Uninstall

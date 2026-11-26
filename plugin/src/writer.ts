@@ -67,6 +67,9 @@ export interface WriterDeps {
    * subprocess in plugin/, ADR-0006 X5.
    */
   queueHintRun?: (cmd: string, args: string[], timeoutMs: number) => Promise<{ code: number; stdout: string }>;
+  /** B10 (architect note): transcript lines the Stop bin already read; the
+   * segment scan uses them instead of opening the file again. */
+  lines?: string[];
 }
 
 export type WriterOutcome =

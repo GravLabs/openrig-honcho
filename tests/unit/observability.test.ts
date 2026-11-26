@@ -128,14 +128,21 @@ const runBin = async (
 // hooks cover the folder it runs in. These bin fixtures are config-only
 // seats, so the healthy pins plant a hooks file in the seat folder and run
 // the bin from there (the same shape review-t8c's healthy test adopted).
-const OUR_HOOKS_OBS = {
-  hooks: {
-    SessionStart: [{ hooks: [{ type: "command", command: `bun run "${join(REPO, "bin", "session-start.ts")}"` }] }],
-  },
-};
+// B8: the T15b identity needs an openrig-honcho path segment, and the
+// matcher reads the command string only (repo/bin never existed), so a DECOY
+// folder named openrig-honcho under temp carries the identity. Naming the
+// real REPO here broke these pins in any clone under another folder name -
+// status-hook-coverage.test.ts uses the same decoy shape.
 const giveHooks = (dir: string): void => {
+  const clone = join(makeTempDir("obs-clone-"), "openrig-honcho");
+  mkdirSync(join(clone, "bin"), { recursive: true });
   mkdirSync(join(dir, ".claude"), { recursive: true });
-  writeFileSync(join(dir, ".claude", "settings.local.json"), `${JSON.stringify(OUR_HOOKS_OBS, null, 2)}\n`);
+  const hooks = {
+    hooks: {
+      SessionStart: [{ hooks: [{ type: "command", command: `bun run "${join(clone, "bin", "session-start.ts")}"` }] }],
+    },
+  };
+  writeFileSync(join(dir, ".claude", "settings.local.json"), `${JSON.stringify(hooks, null, 2)}\n`);
 };
 
 describe("log.ts logEvent (O1)", () => {

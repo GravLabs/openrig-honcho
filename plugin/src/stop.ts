@@ -29,8 +29,9 @@ import { existsSync, readFileSync } from "node:fs";
 import { saveCheckpoint } from "./checkpoint.ts";
 import type { Config } from "./env.ts";
 import { withLock, writeJsonAtomic } from "./lock.ts";
-import { logEvent } from "./log.ts";
+import { logEvent, modelFromInput } from "./log.ts";
 import { readSeatState, seatLockDir, seatStatePath } from "./missions.ts";
+import { shownId } from "./shown.ts";
 import { recordBody, type WriterDeps, type WriterOutcome } from "./writer.ts";
 
 export interface StopInput {
@@ -55,7 +56,7 @@ interface TEntry {
   isMeta?: boolean;
   promptSource?: string;
   origin?: { kind?: string };
-  message?: { role?: string; content?: unknown };
+  message?: { role?: string; content?: unknown; model?: unknown };
   content?: unknown;
 }
 
@@ -104,21 +105,30 @@ interface Segment {
   ts: string | undefined;
 }
 
+/** B10 (architect note 2026-11-26): the transcript is read ONCE per Stop
+ * run; the bin loads the lines here and shares them between segment,
+ * transcriptModel and scanUsedIds. undefined = no readable transcript. */
+export function readTranscriptLines(transcriptPath: string | undefined): string[] | undefined {
+  if (transcriptPath === undefined || transcriptPath === "" || !existsSync(transcriptPath)) return undefined;
+  try {
+    return readFileSync(transcriptPath, "utf8").split("\n");
+  } catch {
+    return undefined;
+  }
+}
+
 /** The current turn: assistant text ("" when there is none) + turn id. */
 function segment(
   transcriptPath: string | undefined,
   lastAssistantMessage: string | undefined,
+  preLines?: string[],
 ): Segment {
   const blocks: string[] = [];
   let turnId: string | undefined;
   let lastBlockTs: string | undefined;
-  if (transcriptPath !== undefined && transcriptPath !== "" && existsSync(transcriptPath)) {
-    let lines: string[];
-    try {
-      lines = readFileSync(transcriptPath, "utf8").split("\n").filter((l) => l.trim() !== "");
-    } catch {
-      lines = [];
-    }
+  const loaded = preLines ?? readTranscriptLines(transcriptPath);
+  if (loaded !== undefined) {
+    const lines = loaded.filter((l) => l.trim() !== "");
     let lastBoundary = -1;
     let lastBoundaryEntry: TEntry | undefined;
     for (let i = lines.length - 1; i >= 0; i--) {
@@ -161,6 +171,152 @@ function segment(
   return { text: blocks.join("\n\n"), turnId, ts: lastBlockTs };
 }
 
+/**
+ * ADR-0022 decision 1 (Claude's Stop fallback — the probe of 2026-11-26
+ * found no model key in ANY Claude hook input, while the transcript's newest
+ * assistant entry carries `message.model`). Backwards scan: the NEWEST
+ * assistant entry decides - its validated message.model or nothing (a
+ * rejected or missing value is absent, never an older entry's). Reads the
+ * same file the segment scan already reads; corrupt lines are skipped, a
+ * missing or unreadable file is simply "cannot know". Only the one validated
+ * id leaves - no entry text (X1).
+ */
+export function transcriptModel(transcriptPath: string | undefined, preLines?: string[]): string | undefined {
+  const lines = preLines ?? readTranscriptLines(transcriptPath);
+  if (lines === undefined) return undefined;
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const line = lines[i]!;
+    if (line.trim() === "") continue;
+    let e: TEntry;
+    try {
+      e = JSON.parse(line) as TEntry;
+    } catch {
+      continue;
+    }
+    if (entryKind(e) !== "assistant") continue;
+    return modelFromInput(e.message?.model);
+  }
+  return undefined;
+}
+
+/**
+ * ADR-0022 decision 3 (B10, amended after review R27): which of this
+ * session's shown ids appear in the turn the Stop hook is already reading,
+ * split CITED / ACTED (the amendment's two counts). Cited: the segment's
+ * assistant text blocks plus the harness's last_assistant_message - an id in
+ * text can be a plain echo of the injected block. Acted: the JSON of every
+ * tool_use input (an id passed to a rig_memory tool or a queue command) -
+ * only acted counts as use in v0.6 evidence. Codex transcripts have no
+ * Claude-shaped assistant entries, so there the message alone decides and
+ * Codex has cited counts only.
+ * Matching (R27 F-V1): an id matches only at token boundaries - no
+ * [A-Za-z0-9_-] immediately before or after it, so d-ffff0001 never matches
+ * inside d-ffff00011. Conclusion ids are free tokens, so ones shorter than
+ * 8 characters or made only of letters (done, LEARNED) are never scanned.
+ * Plain in-process match - no model, no network, no text leaves (X1).
+ */
+export interface UsedSplit {
+  cited: string[];
+  acted: string[];
+}
+
+/** R27 F-V1: is this shown entry ever scannable? Conclusion ids are free
+ * text; short or all-letter ones collide with ordinary words. */
+export function scannableEntry(e: string): boolean {
+  const i = e.indexOf(":");
+  if (i < 0) return false;
+  if (e.slice(0, i) !== "conclusion") return true;
+  const body = e.slice(i + 1);
+  return body.length >= 8 && !/^[A-Za-z]+$/.test(body);
+}
+
+const regexEsc = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+/** R27 F-V1: token-boundary presence. Ids only ever carry [A-Za-z0-9._:@-];
+ * a word char, extra letter-run or hyphen on either side means the match is
+ * a substring of a longer token, not a use of this id. */
+function idPresent(haystack: string, id: string): boolean {
+  if (id === "") return false;
+  return new RegExp(`(?<![A-Za-z0-9_-])${regexEsc(id)}(?![A-Za-z0-9_-])`).test(haystack);
+}
+
+/** The cited/acted split for this turn (ADR-0022 d3, amended). */
+export function scanUsedSplit(
+  shown: string[],
+  transcriptPath: string | undefined,
+  lastAssistantMessage: string | undefined,
+  preLines?: string[],
+): UsedSplit {
+  const cited: string[] = [];
+  const acted: string[] = [];
+  if (shown.length === 0) return { cited, acted };
+  const textParts: string[] = [];
+  const inputParts: string[] = [];
+  const loaded = preLines ?? readTranscriptLines(transcriptPath);
+  if (loaded !== undefined) {
+    const lines = loaded.filter((l) => l.trim() !== "");
+    let lastBoundary = -1;
+    for (let i = lines.length - 1; i >= 0; i--) {
+      try {
+        if (isBoundary(JSON.parse(lines[i]) as TEntry)) {
+          lastBoundary = i;
+          break;
+        }
+      } catch {
+        continue; // corrupt line: skipped (S2-like)
+      }
+    }
+    if (lastBoundary >= 0) {
+      for (let i = lastBoundary + 1; i < lines.length; i++) {
+        try {
+          const e = JSON.parse(lines[i]) as TEntry;
+          if (entryKind(e) !== "assistant") continue;
+          const t = textOf(e);
+          if (t.trim() !== "") textParts.push(t);
+          const c = e.message?.content ?? e.content;
+          if (Array.isArray(c)) {
+            for (const b of c as Array<{ type?: string; input?: unknown }>) {
+              if (b !== null && typeof b === "object" && b.type === "tool_use") {
+                try {
+                  inputParts.push(JSON.stringify(b.input ?? ""));
+                } catch {
+                  // unserializable input: this block adds nothing
+                }
+              }
+            }
+          }
+        } catch {
+          continue;
+        }
+      }
+    }
+  }
+  const last = lastAssistantMessage?.trim();
+  if (last !== undefined && last !== "") textParts.push(last);
+  const citedHay = textParts.join("\n");
+  const actedHay = inputParts.join("\n");
+  for (const e of shown) {
+    if (!scannableEntry(e)) continue;
+    const id = shownId(e);
+    // acted first: a tool-call use is the stronger evidence, and an id in
+    // both text and input lands in acted only - the union is unchanged.
+    if (idPresent(actedHay, id)) acted.push(e);
+    else if (idPresent(citedHay, id)) cited.push(e);
+  }
+  return { cited: cited.sort(), acted: acted.sort() };
+}
+
+/** used = cited plus acted, for compatibility (ADR-0022 d3 amendment). */
+export function scanUsedIds(
+  shown: string[],
+  transcriptPath: string | undefined,
+  lastAssistantMessage: string | undefined,
+  preLines?: string[],
+): string[] {
+  const { cited, acted } = scanUsedSplit(shown, transcriptPath, lastAssistantMessage, preLines);
+  return [...new Set([...cited, ...acted])].sort();
+}
+
 /** The current segment's assistant text, "" when there is none. */
 export function turnAssistantText(
   transcriptPath: string | undefined,
@@ -176,7 +332,7 @@ async function innerReply(
 ): Promise<WriterOutcome> {
   if (input.stop_hook_active === true) return { action: "skipped" };
 
-  const { text, turnId, ts } = segment(input.transcript_path, input.last_assistant_message);
+  const { text, turnId, ts } = segment(input.transcript_path, input.last_assistant_message, deps.lines);
   if (text.trim() === "") return { action: "skipped" };
 
   // E3 (T6b-fix): the same TURN with the same text -> nothing to do. A

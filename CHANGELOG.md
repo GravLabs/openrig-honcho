@@ -1,5 +1,34 @@
 # Changelog
 
+## v0.5.13 (2026-11-26)
+
+Measurement only. Nothing a seat sees changes. The release records which model consumed
+memory, and whether what was shown was used.
+
+- **A model id on the log.** Each hook line carries the model id when the hook can know it,
+  and each outcome record lists the models behind its row. For Codex the id comes from the
+  hook input, and it is the configured id. Claude's hook input carries no model, so the Stop
+  hook reads it from the session transcript. Only a checked id is kept: at most 100
+  characters of letters, digits and `._:/@-`.
+- **Shown, cited and acted.** Each injection records the ids of the entries it showed:
+  decisions, approvals, lessons, pointer items and recall conclusions. The Stop hook then
+  looks for those ids in the turn:
+  - **cited** means the id appears in the seat's own text, so an echo of injected text
+    counts here;
+  - **acted** means it appears in a tool call, such as a `rig_memory` argument or a queue
+    command.
+
+  Ids match only as whole tokens. Conclusion ids shorter than 8 characters, or made only of
+  letters, are never scanned: they count as shown and never appear in the costs list. A
+  seat's own held row is never counted as shown. Codex
+  hooks see no tool calls, so Codex has cited counts only.
+- **The memory report shows shown against cited and acted,** by model family and kind of
+  entry. It also lists the entries shown at least five times and never cited or acted on,
+  as "costs context, no evidence". Ids and counts only. Claude's shown lines take the model
+  of the same seat's next Stop line within the hour.
+- **Cost:** a Stop hook on a 51 MB transcript takes the same time as before, about 1.5 s.
+  The transcript is read once.
+
 ## v0.5.12 (2026-11-26)
 
 - **Every seat gets its hooks.** The installer no longer assumes a parent folder's hooks

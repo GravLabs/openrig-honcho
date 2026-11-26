@@ -11,9 +11,10 @@
 import type { Config } from "../src/env.ts";
 import { isKillSwitch, loadConfig } from "../src/env.ts";
 import { createClient } from "../src/honcho.ts";
-import { bindEventFields, logConfigProblem, logEvent } from "../src/log.ts";
+import { bindEventFields, logConfigProblem, logEvent, modelFromInput } from "../src/log.ts";
 import { readSeatState, seatStatePath, setContextStart } from "../src/missions.ts";
 import { takeOnce } from "../src/once.ts";
+import { parseShownList, recordShown } from "../src/shown.ts";
 import { buildInjection, type ContinuityStats } from "../src/reader.ts";
 import type { InjectionSource } from "../src/inject.ts";
 // C2 (ADR-0016): stdin, harness and output shape come from the shared seam.
@@ -66,13 +67,20 @@ async function main(): Promise<void> {
       logEvent(cfg, { hook: "session-start", event: "duplicate-run", ok: true, ms: Date.now() - t0 });
       process.exit(0);
     }
-    let input: { session_id?: unknown; source?: unknown; cwd?: unknown } = {};
+    let input: { session_id?: unknown; source?: unknown; cwd?: unknown; model?: unknown } = {};
     try {
       input = JSON.parse(raw) as typeof input;
     } catch {
       // garbage stdin: nothing to inject
       logEvent(cfg, { hook: "session-start", event: "stdin-invalid", ok: false, ms: Date.now() - t0, error_class: "parse" });
       process.exit(0);
+    }
+    // ADR-0022 decision 1: Codex's SessionStart input carries model (probe
+    // 2026-11-26); Claude's does not and Claude has no transcript yet - the
+    // id simply stays absent on this line.
+    {
+      const model = modelFromInput(input.model);
+      if (model !== undefined) bindEventFields({ model });
     }
     // C2 (ADR-0016): Codex "fork" is treated as "resume" before the check;
     // every Claude source passes through unchanged.
@@ -134,6 +142,13 @@ async function main(): Promise<void> {
     // fix 19:50Z #3: the HONCHO session name (as the writer logs it), not the
     // Claude session id - buildInjection's resolveSession just set it.
     const honchoSession = readSeatState(seatStatePath(cfg.stateDir, cfg.workspace, cfg.peer))?.session;
+    // B10 (ADR-0022 d3): the ids the digest showed ride this one line, and
+    // the same validated entries seed the session's shown file for the Stop
+    // hook's used-scan (ids only; recordShown never throws).
+    const shownEntries = continuity?.shown !== undefined ? parseShownList(continuity.shown) : undefined;
+    if (typeof input.session_id === "string" && shownEntries !== undefined && shownEntries.length > 0) {
+      await recordShown(cfg.stateDir, cfg.workspace, input.session_id, shownEntries);
+    }
     logEvent(cfg, {
       hook: "session-start",
       event: source, // validated against SOURCES above
@@ -154,6 +169,7 @@ async function main(): Promise<void> {
             n_lesson: continuity.n_lesson,
           }
         : {}),
+      ...(shownEntries !== undefined ? { shown: shownEntries } : {}),
       bytes: text.length,
     });
   } catch {

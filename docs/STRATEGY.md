@@ -369,6 +369,58 @@ flowchart LR
   Not borrowed: model judges or auditors, trust weights, cryptographic provenance, a
   grader that changes itself, automatic retires or edits. Reports:
   the architect's `paper-evals-2026-11/` scratch folder.
+  A research pass on self-improving harnesses (owner, 2026-11-26: "research recent
+  advancements in recursive self improving harness", then "yes, do both") confirms the
+  shape above. Greedy "the score went up" gates accepted inferior updates 45.59% of the
+  time, against 2.78% under statistical control (2611.10787). Evaluators belong outside
+  the loop and read-only, small itemized edits beat rewrites, and self-written skills
+  give no average gain. It adjusts six things, all still behind the v0.6 hold:
+  - **R1, the gate in two parts.** The ~10 owner-labelled cases become a floor that must
+    not break, never evidence of improvement. Improvement is shown only by outcomes from
+    a window other than the one a lesson was proposed from, under an owner-set budget of
+    false promotions, controlled in plain code by online FDR. The test: 1,000 seeds of
+    zero-effect lessons at real queue volumes stay within the budget. The power of a
+    planted effect gives the volume needed before anything can be promoted (2611.10787,
+    2606.28374, 2610.18813, 2610.14216).
+  - **R2, every lesson carries `scope` and `expected_effect`.** A lesson is shown only where
+    its scope matches. A hash that widens the scope of an existing body is a new lesson
+    and needs its own evidence. This defends against stripping the conditions that limit
+    a lesson, an attack that passed verification 95.71% of the time (2611.14326,
+    2610.07645, 2605.18930).
+  - **R3, scores per consumer model.** The score is kept per lesson and model family, a
+    lesson can be promoted for one family only, and a seat's score restarts from the prior
+    when its model changes; the old evidence is kept and labelled. The same skills gave
+    +31.1 points on one model and -8.8 on another (2610.33024, 2605.30621, 2611.18856).
+  - **R4, used, not just shown.** A lesson that is shown but never used earns no evidence
+    either way and goes to the owner as "costs context, no evidence", never to an
+    automatic retire. What is injected at session start gets a size cap. Weak models often
+    fail to act on help they are given; a skill offered on every turn was opened in 0.5% of
+    runs, and our own T21 lead wrote private auto-memory instead of the ledger
+    (2610.14216, 2605.30621, docs/tool-choice-eval-2026-11.md). "Used" means acted (the id
+    appears in a tool call), not merely cited. Codex hooks see no tool calls, so a Codex seat
+    needs a source for acted read from its session log, and until then its evidence is cited,
+    labelled as such (ADR-0022 decision 3, after review R27).
+  - **R5, an append-only change record per lesson group.** It holds each version's
+    rationale, predicted effect, observed outcome, model id and data window, and rejected
+    versions with their reasons. The owning seat reads it before proposing. The gate reads
+    only observed outcomes and hashes, never the prediction: proposers predicted their own
+    regressions at about twice random (2604.25850, 2611.18856). Re-proposing a rejected
+    hash within N windows is refused in code.
+  - **R6, three more attack fixtures:**
+    - a poisoned outcome stream: accepted rows that share an unsafe shortcut must not
+      promote it, and the floor must catch one that slips through (needs one more
+      owner-labelled case);
+    - scope stripping, as in R2;
+    - lineage revocation: revoking a hash revokes what was derived from it on every
+      surface, and rollback restores the last pre-contamination list by hash.
+    Poisoning through correct-looking experience persisted through later clean evolution
+    (2609.17817, 2610.00093).
+  The measurement half of R3 and R4 ships before the hold lifts, as v0.5.13 (ADR-0022):
+  the model id on each outcome, and shown-versus-used counts in the memory report. They
+  are the usage data the hold waits for. Not borrowed from this pass: model-written skills,
+  an improver or gate that edits itself, model selectors, judges or allocators in the gate,
+  gateless online curation, and search over agent code. Report:
+  `~/review-scratch/openrig-honcho/research-rsi-2026-11/REPORT.md`.
   Store test result (2026-11-13, docs/store-test-2026-11.md): Graphiti is not
   the store for what is in force, so the rig stays on Honcho with no second store;
   the ledger's own supersedes links carry TreeAgent idea 3. Kept from the test: a

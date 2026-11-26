@@ -15,7 +15,9 @@
 import { mkdirSync, readFileSync, renameSync, writeFileSync, appendFileSync, existsSync, chmodSync, lstatSync } from "node:fs";
 import { join } from "node:path";
 import { fetchQueueListAll, fetchQueueListByState, fetchTransitions } from "./daemon.ts";
+import { modelFromInput } from "./log.ts";
 import { redact } from "./redact.ts";
+import { parseShownList } from "./shown.ts";
 import { sanitizeVisible } from "./pointer.ts";
 import { makeGit, type GitRunner } from "./changed.ts";
 
@@ -79,6 +81,20 @@ export interface SeatMemory {
    * up to the close - the direct measure of whether the pointer leads to a
    * search. Absent on records built before v0.5.6. */
   searchAfterPointer?: number;
+  /** B10 (ADR-0022 d3): per-kind counts of the shown ids on the destination
+   * seat's lines inside this row's window (kinds with count 0 omitted).
+   * Absent while the log is shown-less - old records and rebuilds over a
+   * shown-less log stay byte-identical, exactly like `models`. */
+  shownIds?: Record<string, number>;
+  /** B10: same, for the ids the Stop hook logged as `used`. */
+  usedIds?: Record<string, number>;
+  /** B12 (ADR-0022 d3 amendment): the same per-kind counts split - cited
+   * (id in assistant text / last message) and acted (id in a tool_use
+   * input; the only count v0.6 evidence will use). Absent on records built
+   * before v0.5.13, like shownIds. */
+  citedIds?: Record<string, number>;
+  /** B12: same, for acted. */
+  actedIds?: Record<string, number>;
 }
 
 export interface OutcomeRecord {
@@ -99,6 +115,16 @@ export interface OutcomeRecord {
   reopenCount: number;
   followOn: string[];
   memory: SeatMemory;
+  /**
+   * v0.5.13 (ADR-0022 decision 2): the sorted distinct model ids on the
+   * destination seat's log lines inside this row's window (memoryWindow's
+   * seat matching and window, claim-based like the other counts - which
+   * model consumed memory for this row). Absent on records built before
+   * v0.5.13 AND on every rebuild whose log carries no model line at all
+   * (the row: --rebuild byte-identical for records with no model lines);
+   * empty once the log is v0.5.13-live but no line in the window carried one.
+   */
+  models?: string[];
   /** v0.5.9 (ADR-0019 amended 2026-11-23): only with `--repo` - the commit
    * HEAD was at when the row was claimed and when it closed, and how many
    * files differ between them. Null parts are unknown (no claim time, or the
@@ -153,7 +179,14 @@ export function serializeRecord(r: OutcomeRecord): string {
       pointerShown: r.memory.pointerShown,
       pointerHeld: r.memory.pointerHeld,
       ...(r.memory.searchAfterPointer !== undefined ? { searchAfterPointer: r.memory.searchAfterPointer } : {}),
+      ...(r.memory.shownIds !== undefined ? { shownIds: r.memory.shownIds } : {}),
+      ...(r.memory.usedIds !== undefined ? { usedIds: r.memory.usedIds } : {}),
+      ...(r.memory.citedIds !== undefined ? { citedIds: r.memory.citedIds } : {}),
+      ...(r.memory.actedIds !== undefined ? { actedIds: r.memory.actedIds } : {}),
     },
+    // v0.5.13 (ADR-0022 d2): only when the log is model-live - records built
+    // before then, and every rebuild over a model-less log, stay byte-identical
+    ...(r.models !== undefined ? { models: r.models } : {}),
     // v0.5.9: last, and only when collected - files without it stay byte-identical
     ...(r.commits !== undefined ? { commits: { start: r.commits.start, end: r.commits.end, files: r.commits.files } } : {}),
   });
@@ -290,6 +323,26 @@ export function memoryWindow(
     pointerShown: 0,
     pointerHeld: 0,
   };
+  // B10 (ADR-0022 d3): shownIds/usedIds are present only while the log is
+  // shown-live - ANY line with a grammar-valid list flips it (the
+  // modelsWindow rule, so hand-edited junk cannot flip records) - and then
+  // on EVERY path: {} on a never-claimed row, counts inside the window.
+  // Shown-less logs keep today's records byte-identical.
+  let shownLive = false;
+  for (const raw of logLines) {
+    if (typeof raw !== "object" || raw === null) continue;
+    const l = raw as Record<string, unknown>;
+    if (parseShownList(l.shown) !== undefined || parseShownList(l.used) !== undefined) {
+      shownLive = true;
+      break;
+    }
+  }
+  if (shownLive) {
+    m.shownIds = {};
+    m.usedIds = {};
+    m.citedIds = {};
+    m.actedIds = {};
+  }
   // No claim = no window. A row closed without ever being claimed has no
   // evidence of when work started; opening the bottom to the beginning of
   // time would credit it every tool call in the log (found on the real
@@ -344,6 +397,26 @@ export function memoryWindow(
     }
     const ts = typeof l.ts === "string" ? Date.parse(l.ts) : Number.NaN;
     if (!Number.isFinite(ts) || ts < from || ts > to) continue;
+    // B10: per-kind counts of the shown/used ids on this line (entries go
+    // through parseShownList, so only grammar-valid kinds are ever kept).
+    if (shownLive) {
+      const bump = (field: "shownIds" | "usedIds" | "citedIds" | "actedIds", v: unknown): void => {
+        const es = parseShownList(v);
+        if (es === undefined) return;
+        const c = m[field] as Record<string, number>;
+        for (const e of es) {
+          const k = e.slice(0, e.indexOf(":"));
+          c[k] = (c[k] ?? 0) + 1;
+        }
+      };
+      bump("shownIds", l.shown);
+      bump("usedIds", l.used);
+      // B12 fold (same rule as report.shownUsed): a line from before the
+      // split carries only `used` - those matches were text-only, so they
+      // fold into cited and never into acted.
+      bump("citedIds", l.cited ?? l.used);
+      bump("actedIds", l.acted);
+    }
     // Architect 09:55Z: a held hand-off gets ordinary recall, and its OWN
     // line (injected, empty or timeout) carries pointer=held. Counted here,
     // apart from the event chain: an injected+arm=held line credits
@@ -385,6 +458,59 @@ export function memoryWindow(
     }
   }
   return m;
+}
+
+/**
+ * ADR-0022 decision 2: the models field for one row. The sorted distinct
+ * validated model ids on the destination seat's log lines inside the SAME
+ * window memoryWindow uses (its seat matching incl. the L-A mcp rule, the
+ * claim-based bottom with the created extension, closed open-ended).
+ * Absent (undefined) when NO line in the whole log carries a model: the log
+ * predates v0.5.13 and every such record - old or rebuilt - stays
+ * byte-identical (the row's rebuild pin). Once model lines exist anywhere,
+ * new records always carry the field: [] when no window line carried one.
+ * A model value that fails modelFromInput (a hand-edited log line) is
+ * ignored, never copied into a record.
+ */
+export function modelsWindow(
+  logLines: unknown[],
+  seat: string,
+  claimed: string | null,
+  closed: string | null,
+  created: string | null = null,
+): string[] | undefined {
+  let modelLive = false;
+  for (const raw of logLines) {
+    // only a GRAMMAR-VALID model makes the log live: the writer can only
+    // produce such values, so a hand-edited junk value cannot flip records
+    if (typeof raw === "object" && raw !== null && modelFromInput((raw as Record<string, unknown>).model) !== undefined) {
+      modelLive = true;
+      break;
+    }
+  }
+  if (!modelLive) return undefined;
+  const ids = new Set<string>();
+  if (claimed === null) return []; // no window, same bottom rule as memoryWindow
+  const claimedMs = Date.parse(claimed);
+  const createdMs = created !== null ? Date.parse(created) : Number.NaN;
+  const from = Number.isFinite(createdMs) && createdMs < claimedMs ? createdMs : claimedMs;
+  if (!Number.isFinite(from)) return [];
+  const to = closed !== null ? Date.parse(closed) : Number.POSITIVE_INFINITY;
+  const local = seat.includes("@") ? seat.slice(0, seat.indexOf("@")) : seat;
+  for (const raw of logLines) {
+    if (typeof raw !== "object" || raw === null) continue;
+    const l = raw as Record<string, unknown>;
+    if (l.hook === "mcp" && typeof l.session === "string") {
+      if (l.session !== seat) continue;
+    } else if (l.peer !== seat && l.peer !== local) {
+      continue;
+    }
+    const ts = typeof l.ts === "string" ? Date.parse(l.ts) : Number.NaN;
+    if (!Number.isFinite(ts) || ts < from || ts > to) continue;
+    const m = modelFromInput(l.model);
+    if (m !== undefined) ids.add(m);
+  }
+  return [...ids].sort();
 }
 
 // ---------------------------------------------------------------------------
@@ -652,6 +778,7 @@ export async function collectOutcomes(deps: CollectDeps): Promise<CollectResult 
     }
     if (rec.destination !== null) {
       rec.memory = memoryWindow(logLines, rec.destination, rec.claimed, rec.closed, rec.created, rec.qitemId);
+      rec.models = modelsWindow(logLines, rec.destination, rec.claimed, rec.closed, rec.created);
     } // F-D: no destination seat -> no memory can be attributed, all zeros
     if (deps.repo !== undefined) rec.commits = commitsFor(deps.repo, rec.claimed, rec.closed, git, shaCache);
     records.push(rec);
